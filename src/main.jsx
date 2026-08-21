@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  AlertCircle, Bell, Check, ChevronDown, CircleGauge, Clock3, Eye, LayoutGrid,
+  AlertCircle, Bell, Check, ChevronDown, ChevronRight, CircleGauge, Clock3, Eye, LayoutGrid,
   KeyRound, Monitor, Plus, RefreshCw, Rows3, Settings2, ShieldCheck, SlidersHorizontal,
   Pencil, Pin, Sparkles, Tag, Trash2, UploadCloud, X, Zap,
 } from 'lucide-react';
@@ -95,19 +95,19 @@ function MeterBar({ meter, compact = false }) {
   return <div className={`meter-line ${compact ? 'compact' : ''} ${meter.available === false ? 'unavailable' : ''}`}>
     <div className="meter-line-head">
       <span className="meter-name">{label}</span>
-      <span className="meter-reading">{formatAmount(meter)}{formatQuotaDetail(meter) && <small>{formatQuotaDetail(meter)}</small>}</span>
+      <span className="meter-reading">{formatAmount(meter)}{formatQuotaDetail(meter) && <small title={formatQuotaDetail(meter)}>{formatQuotaDetail(meter)}</small>}</span>
     </div>
     <div className="meter-track" role="progressbar" aria-valuenow={meter.remaining} aria-valuemin="0" aria-valuemax={meter.total}>
       <span className="meter-fill" style={{ width: `${Math.max(0, Math.min(100, meter.remaining))}%` }} />
     </div>
     <div className="meter-line-foot">
       <span className="meter-state">{meter.available === false ? <><AlertCircle size={12} /> {meter.error || '不可用'}</> : meter.key === 'balance' ? '可用余额' : '剩余额度'}</span>
-      <span className="reset-meta"><Clock3 size={12} /> {formatReset(meter.resetAt)}</span>
+      <span className="reset-meta" title={formatReset(meter.resetAt)}><Clock3 size={12} /> {formatReset(meter.resetAt)}</span>
     </div>
   </div>;
 }
 
-function TagPill({ children, tone = '' }) { return <span className={`tag-pill ${tone}`}>{children}</span>; }
+function TagPill({ children, tone = '', title }) { return <span className={`tag-pill ${tone}`} title={title}>{children}</span>; }
 
 function AccountIdentity({ account, provider }) {
   return <div className="account-identity">
@@ -119,9 +119,14 @@ function AccountIdentity({ account, provider }) {
   </div>;
 }
 
+function AccountRuleMarks({ account, rules = [] }) {
+  const texts = [...new Set((account.windows || []).flatMap((meter) => rules.filter((rule) => ruleMatches(meter, rule)).map((rule) => rule.label || `${rule.beforeMinutes} 分钟内刷新 · ≥${rule.minRemaining}%`)))];
+  return texts.length ? <span className="rule-marks account-rule-marks">{texts.map((text) => <TagPill key={text} tone="warm" title={text}>{text}</TagPill>)}</span> : null;
+}
+
 function RuleMarks({ meter, rules = [] }) {
   const matched = rules.filter((rule) => ruleMatches(meter, rule));
-  return matched.length ? <span className="rule-marks">{matched.map((rule) => <TagPill key={rule.id} tone="warm">{rule.label || `${rule.beforeMinutes} 分钟内刷新 · ≥${rule.minRemaining}%`}</TagPill>)}</span> : null;
+  return matched.length ? <span className="rule-marks">{matched.map((rule) => { const text = rule.label || `${rule.beforeMinutes} 分钟内刷新 · ≥${rule.minRemaining}%`; return <TagPill key={rule.id} tone="warm" title={text}>{text}</TagPill>; })}</span> : null;
 }
 
 const durationOrder = { five_hour: 1, weekly: 2, monthly: 3, balance: 4 };
@@ -137,7 +142,101 @@ function ConcentricRings({ account }) {
   </div>;
 }
 
+function ResetTimeline({ accounts, providers }) {
+  const scrollRef = useRef(null);
+  const dragRef = useRef(null);
+  const [active, setActive] = useState(null);
+  const points = useMemo(() => accounts.flatMap((account) => (account.windows || [])
+    .filter((meter) => meter.key !== 'balance' && meter.resetAt)
+    .map((meter) => ({ account, meter, at: new Date(meter.resetAt).getTime() }))
+    .filter((point) => !Number.isNaN(point.at))), [accounts]);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return undefined;
+    const onWheel = (event) => {
+      const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+      if (!delta) return;
+      el.scrollLeft += delta;
+      event.preventDefault();
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [points.length]);
+  if (!points.length) return null;
+  const now = Date.now();
+  const NEAR_HOURS = 24;
+  const NEAR_PX = 30;
+  const FAR_PX = 4;
+  const NEAR_WIDTH = NEAR_HOURS * NEAR_PX;
+  const toX = (at) => {
+    const hours = Math.max(0, (at - now) / 3600e3);
+    return hours <= NEAR_HOURS ? hours * NEAR_PX : NEAR_WIDTH + (hours - NEAR_HOURS) * FAR_PX;
+  };
+  const pad = (n) => String(n).padStart(2, '0');
+  const maxAt = Math.max(...points.map((point) => point.at), now + 6 * 3600e3);
+  const width = Math.max(460, Math.round(toX(maxAt)) + 70);
+  const hourStart = new Date(now);
+  hourStart.setMinutes(0, 0, 0);
+  const nearTicks = [];
+  for (let t = hourStart.getTime() + 3600e3; t <= now + NEAR_HOURS * 3600e3; t += 4 * 3600e3) {
+    const d = new Date(t);
+    nearTicks.push({ at: t, label: pad(d.getHours()) + ':' + pad(d.getMinutes()) });
+  }
+  const midnight = new Date(now);
+  midnight.setHours(0, 0, 0, 0);
+  const dayTicks = [];
+  for (let t = midnight.getTime() + 2 * 864e5; t <= maxAt + 3600e3; t += 864e5) {
+    const d = new Date(t);
+    dayTicks.push({ at: t, label: (d.getMonth() + 1) + '/' + d.getDate() });
+  }
+  let lastLabelX = -50;
+  const startDrag = (event) => {
+    dragRef.current = { x: event.clientX, left: scrollRef.current ? scrollRef.current.scrollLeft : 0 };
+    if (event.currentTarget.setPointerCapture) event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const moveDrag = (event) => {
+    if (dragRef.current && scrollRef.current) scrollRef.current.scrollLeft = dragRef.current.left - (event.clientX - dragRef.current.x);
+  };
+  const endDrag = () => { dragRef.current = null; };
+  return <section className="surface-section timeline-section">
+    <div className="section-heading"><div><h2>重置时间轴</h2></div><span className="section-count">{points.length} 个重置点 · 滚轮或拖动查看</span></div>
+    <div className="timeline-detail">{active
+      ? <><b>{active.name}</b><em>{active.providerName} · {active.label}</em><strong>{active.amount}</strong><small>{active.absolute} · {active.relative}</small></>
+      : <span className="timeline-detail-hint">悬停圆点查看账号详情</span>}</div>
+    <div className="reset-timeline" ref={scrollRef} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerLeave={endDrag} onPointerCancel={endDrag}>
+      <div className="timeline-track" style={{ width }}>
+        <div className="timeline-axis" />
+        <div className="timeline-now"><span>现在</span></div>
+        {nearTicks.map((tick) => Math.round(toX(tick.at)) < 34 ? null : <div className="timeline-tick near" key={tick.at} style={{ left: Math.round(toX(tick.at)) }}><span>{tick.label}</span></div>)}
+        {dayTicks.map((tick) => <div className="timeline-tick" key={tick.at} style={{ left: Math.round(toX(tick.at)) }}><span>{tick.label}</span></div>)}
+        {[...points].sort((a, b) => a.at - b.at).map((point) => {
+          const provider = providers.find((item) => item.id === point.account.providerId);
+          const x = Math.max(10, Math.round(toX(point.at)));
+          const showLabel = x - lastLabelX >= 72;
+          if (showLabel) lastLabelX = x;
+          const label = windowCatalog[point.meter.key]?.label || point.meter.key;
+          const d = new Date(point.at);
+          const near = point.at - now <= NEAR_HOURS * 3600e3;
+          const timeLabel = near ? pad(d.getHours()) + ':' + pad(d.getMinutes()) : (d.getMonth() + 1) + '/' + d.getDate() + ' ' + pad(d.getHours()) + '时';
+          const detail = {
+            name: point.account.name,
+            providerName: provider?.name || '',
+            label,
+            amount: formatAmount(point.meter),
+            absolute: (d.getMonth() + 1) + '/' + d.getDate() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()),
+            relative: formatReset(point.meter.resetAt),
+          };
+          return <div key={point.account.id + '-' + point.meter.key} className="timeline-point" style={{ left: x }} onMouseEnter={() => setActive(detail)} onMouseLeave={() => setActive(null)}>
+            <i className={provider?.tone || 'slate'} />{showLabel && <span><b>{point.account.name}</b><em>{label + ' · ' + timeLabel}</em></span>}
+          </div>;
+        })}
+      </div>
+    </div>
+  </section>;
+}
+
 function PriorityView({ accounts, providers, reminderRules }) {
+  const [collapsed, setCollapsed] = useState({});
   const grouped = useMemo(() => {
     const byWindow = new Map();
     accounts.flatMap((account) => account.windows.map((meter) => ({ account, meter }))).forEach((row) => {
@@ -147,17 +246,17 @@ function PriorityView({ accounts, providers, reminderRules }) {
     return [...byWindow.entries()].map(([key, rows]) => [key, rows.sort((a, b) => new Date(a.meter.resetAt || '9999').getTime() - new Date(b.meter.resetAt || '9999').getTime())]);
   }, [accounts]);
   return <div className="view-stack">
+    <ResetTimeline accounts={accounts} providers={providers} />
     {grouped.map(([key, rows]) => <section className="surface-section" key={key}>
-      <div className="section-heading"><div><span className="eyebrow">{windowCatalog[key]?.group || '额度'}</span><h2>{windowCatalog[key]?.label || key}</h2></div><span className="section-count">{rows.length} 个账号</span></div>
-      <div className="priority-list">{rows.map(({ account, meter }) => {
+      <div className="section-heading"><div><h2>{windowCatalog[key]?.label || key}</h2></div><span className="section-count">{rows.length} 个账号</span><button type="button" className="icon-button faint section-toggle" title={collapsed[key] ? '展开' : '收起'} onClick={() => setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }))}>{collapsed[key] ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</button></div>
+      {!collapsed[key] && <div className="priority-list">{rows.map(({ account, meter }) => {
         const provider = providers.find((item) => item.id === account.providerId);
         return <div className="priority-row" key={`${account.id}-${meter.key}`}>
           <AccountIdentity account={account} provider={provider} />
           <div className="priority-meter"><div className="meter-track"><span className="meter-fill" style={{ width: `${meter.remaining}%` }} /></div><b>{formatAmount(meter)}</b></div>
           <div className="priority-reset"><Clock3 size={13} /><span>{formatReset(meter.resetAt)}</span><RuleMarks meter={meter} rules={reminderRules} /></div>
-          <button className="icon-button faint" aria-label="查看账号"><ChevronDown size={16} /></button>
         </div>;
-      })}</div>
+      })}</div>}
     </section>)}
   </div>;
 }
@@ -175,9 +274,8 @@ function WindowsView({ accounts, providers, reminderRules, embedded = false }) {
       <div className="windows-list">{sorted.map((account) => {
         const provider = providers.find((item) => item.id === account.providerId);
         return <div className="account-window-row" key={account.id}>
-          <AccountIdentity account={account} provider={provider} />
-          <div className="account-meters">{account.windows.map((meter) => <div key={meter.key}><MeterBar meter={meter} /><RuleMarks meter={meter} rules={reminderRules} /></div>)}</div>
-          <div className={`account-status ${account.status}`}><span className="status-dot" />{account.status === 'warning' ? '需处理' : '正常'}<small>{formatChecked(account.lastChecked)}</small></div>
+          <div className="account-side"><AccountIdentity account={account} provider={provider} /><div className={`account-status ${account.status}`}><span className="status-dot" />{account.status === 'warning' ? '需处理' : '正常'}<small>{formatChecked(account.lastChecked)}</small></div><AccountRuleMarks account={account} rules={reminderRules} /></div>
+          <div className="account-meters">{account.windows.map((meter) => <MeterBar key={meter.key} meter={meter} />)}</div>
         </div>;
       })}</div>
     </section>
@@ -666,7 +764,7 @@ function App() {
   const editProvider = (provider) => setModal({ type: 'provider-edit', provider });
 
   return <div className="app-shell">
-    {bridge && <header className="titlebar"><span className="titlebar-drag"><img src="./quota-desk.svg" alt="" /><b>Quota Desk</b></span><div className="titlebar-controls"><span className="last-checked" title="最后一次额度检查时间"><Clock3 size={11} />{formatChecked(lastSync)}</span><button className="control-solo" onClick={refreshAll} disabled={refreshing} title="立即刷新全部账号" aria-label="立即刷新全部账号"><RefreshCw size={13} className={refreshing ? 'spinning' : ''} /></button><div className="overview-controls" aria-label="账号总览展示方式"><button className={overviewMode === 'rings' ? 'active' : ''} onClick={() => setOverviewMode('rings')} title="同心圆总览" aria-label="同心圆总览"><CircleGauge size={13} /></button><button className={overviewMode === 'rows' ? 'active' : ''} onClick={() => setOverviewMode('rows')} title="按账号行展示" aria-label="按账号行展示"><Rows3 size={13} /></button><button className={overviewMode === 'periods' ? 'active' : ''} onClick={() => setOverviewMode('periods')} title="按时间周期展示" aria-label="按时间周期展示"><Clock3 size={13} /></button></div></div><div className="titlebar-actions"><button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={13} /></button><button className={pinned ? 'active' : ''} title={pinned ? '取消固定' : '固定在桌面最前面'} aria-label="固定在桌面最前面" onClick={async () => setPinned(await bridge.togglePin())}><Pin size={13} /></button><button title="关闭到托盘" aria-label="关闭到托盘" onClick={() => bridge.closeMainWindow()}><X size={14} /></button></div></header>}
+    {bridge && <header className="titlebar"><span className="titlebar-drag"><img src="./quota-desk.svg" alt="" /><b>Quota Desk</b></span><div className="titlebar-controls"><span className="last-checked" title="最后一次额度检查时间"><Clock3 size={11} />{formatChecked(lastSync)}</span><button className="control-solo" onClick={refreshAll} disabled={refreshing} title="立即刷新全部账号" aria-label="立即刷新全部账号"><RefreshCw size={13} className={refreshing ? 'spinning' : ''} /></button><div className="overview-controls" aria-label="账号总览展示方式"><button className={overviewMode === 'rings' ? 'active' : ''} onClick={() => setOverviewMode('rings')} title="账号总览" aria-label="账号总览"><CircleGauge size={13} /></button><button className={overviewMode === 'rows' ? 'active' : ''} onClick={() => setOverviewMode('rows')} title="行式明细" aria-label="行式明细"><Rows3 size={13} /></button><button className={overviewMode === 'periods' ? 'active' : ''} onClick={() => setOverviewMode('periods')} title="周期明细" aria-label="周期明细"><Clock3 size={13} /></button></div></div><div className="titlebar-actions"><button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={13} /></button><button className={pinned ? 'active' : ''} title={pinned ? '取消固定' : '固定在桌面最前面'} aria-label="固定在桌面最前面" onClick={async () => setPinned(await bridge.togglePin())}><Pin size={13} /></button><button title="关闭到托盘" aria-label="关闭到托盘" onClick={() => bridge.closeMainWindow()}><X size={14} /></button></div></header>}
     {toast && <div className={`toast ${toast.ok ? 'ok' : 'fail'}`} role="status">{toast.ok ? <Check size={13} /> : <AlertCircle size={13} />}<span>{toast.message}</span></div>}
     <main className="main-shell">
       <div className="content-area">{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{accounts.length === 0 ? <section className="empty-workspace"><div className="empty-mark"><CircleGauge size={22} /></div><div><span className="eyebrow">从一个账号开始</span><h2>把第一份 Coding Plan 接进来</h2><p>凭据将由 Windows 加密保存，额度请求只在本机发出。</p></div><button className="primary-button" onClick={() => setModal('account')}><Plus size={15} /> 添加账号</button><button className="outline-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> 设置</button></section> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} />}</div>

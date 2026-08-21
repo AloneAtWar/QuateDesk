@@ -299,3 +299,139 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .variable-row-head small { display: block; margin-top: 1px; color: #b6bfbb; font-size: 8px; }
 .variable-row-tail { display: inline-flex; align-items: center; gap: 4px; justify-self: end; }
 .variable-system-badge { padding: 1px 4px; border-radius: 4px; color: #6b7d77; background: #e8efe9; font-size: 8px; white-space: nowrap; }
+
+/* compact rows/periods views, consistent with the overview cards */
+.view-stack { gap: 10px; }
+.surface-section { border-radius: 10px; }
+.section-heading { padding: 9px 12px 7px; }
+.section-heading h2 { margin-top: 3px; font-size: 13px; }
+.section-count { font-size: 10px; }
+.priority-row { min-height: 0; padding: 8px 12px; gap: 8px; }
+.priority-meter { gap: 8px; }
+.priority-meter b { min-width: 32px; font-size: 11px; }
+.meter-track { height: 6px; }
+.priority-reset { font-size: 10px; gap: 4px; }
+.account-identity { gap: 8px; }
+.account-title-line strong { font-size: 12px; }
+.account-copy > span, .settings-account small { font-size: 10px; margin-top: 2px; }
+.account-window-row { padding: 10px 12px; }
+.account-window-row .account-status { margin-top: 8px; font-size: 10px; }
+.account-meters { margin-top: 8px; gap: 8px; }
+.meter-line-head { margin-bottom: 4px; }
+.meter-line-foot { margin-top: 4px; font-size: 9px; }
+.provider-logo { width: 30px; height: 30px; border-radius: 9px; font-size: 12px; }
+.priority-row .icon-button, .icon-button.faint { width: 24px; height: 24px; }
+
+/* one compact line per quota window: name | bar | reading | reset */
+.meter-line { display: grid; grid-template-columns: 40px 1fr auto auto; align-items: center; gap: 6px; }
+.meter-line-head, .meter-line-foot { display: contents; }
+.meter-name { grid-column: 1; font-size: 10px; }
+.meter-line .meter-track { grid-column: 2; }
+.meter-reading { grid-column: 3; font-size: 10px; white-space: nowrap; }
+.meter-reading small { font-size: 8px; color: #9aa7a1; margin-left: 3px; }
+.meter-state { display: none; }
+.reset-meta { grid-column: 4; font-size: 9px; }
+/* rows view: identity on the left, meters on the right of it */
+.account-window-row { display: grid; grid-template-columns: minmax(112px, .72fr) 1.5fr auto; gap: 10px; padding: 9px 12px; }
+.account-window-row .account-status { margin-top: 0; font-size: 10px; gap: 3px 4px; }
+.account-window-row .account-status small { font-size: 8px; margin-left: 0; }
+.account-meters { margin-top: 0; gap: 5px; }
+/* periods view: single-line rows too */
+.priority-row { grid-template-columns: minmax(112px, .85fr) 1.25fr auto 20px; gap: 8px; padding: 7px 12px; }
+.priority-meter { grid-column: auto; }
+.priority-reset { grid-column: auto; }
+.priority-row .icon-button { grid-column: auto; grid-row: auto; }
+/* settings drawer: shrink account rows so action buttons always fit */
+.settings-account { gap: 4px; padding: 6px 0; }
+.settings-account .provider-logo { width: 22px; height: 22px; border-radius: 7px; font-size: 9px; }
+.settings-account b { font-size: 10px; }
+.settings-account small { font-size: 8px; }
+.row-icon-button { width: 20px; height: 20px; }
+
+/* fix meter-line wrapping: sparse auto-flow pushed the track onto a second row */
+.meter-line { grid-auto-flow: dense; }
+.meter-line .meter-name, .meter-line .meter-track, .meter-line .meter-reading, .meter-line .reset-meta { grid-row: 1; }
+/* periods view: the reminder pill must not break the fixed 40px row */
+.priority-row { overflow: hidden; }
+.priority-reset { min-width: 0; overflow: hidden; }
+.priority-reset .rule-marks { margin-left: 4px; min-width: 0; overflow: hidden; display: inline-flex; }
+.priority-reset .rule-marks .tag-pill { max-width: 96px; overflow: hidden; text-overflow: ellipsis; font-size: 8px; padding: 1px 5px; }
+
+/* rows view: reminder pills live under the account identity, not under each meter */
+.account-rule-marks { display: flex; flex-wrap: wrap; gap: 3px; margin-left: 0; }
+.account-rule-marks .tag-pill { max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+/* periods view: collapsible sections */
+.section-heading { gap: 8px; }
+.section-heading .section-count { margin-left: auto; }
+.section-toggle { width: 20px; height: 20px; flex: 0 0 auto; }
+
+/* periods view: taller rows and a fixed reset column so bars never shift */
+.priority-row { grid-template-columns: minmax(112px, .85fr) 1.25fr 118px; height: 52px; }
+.priority-reset { justify-content: flex-end; }
+.priority-reset .rule-marks .tag-pill { max-width: 42px; }
+/* reset timeline at the top of the periods view */
+.timeline-section .section-heading { padding-bottom: 4px; }
+.reset-timeline { overflow-x: auto; overflow-y: hidden; cursor: grab; padding: 2px 12px 8px; user-select: none; }
+.reset-timeline:active { cursor: grabbing; }
+.timeline-track { position: relative; height: 62px; }
+.timeline-axis { position: absolute; left: 0; right: 0; top: 28px; height: 2px; border-radius: 2px; background: #dde5df; }
+.timeline-now { position: absolute; top: 20px; left: 0; width: 2px; height: 18px; background: var(--coral); }
+.timeline-now span { position: absolute; top: -12px; left: 0; color: var(--coral); font-size: 8px; white-space: nowrap; }
+.timeline-tick { position: absolute; top: 24px; width: 1px; height: 10px; background: #c9d3cc; }
+.timeline-tick span { position: absolute; top: -13px; left: -15px; width: 32px; text-align: center; color: #9aa7a1; font-size: 8px; }
+.timeline-point { position: absolute; top: 25px; margin-left: -4px; }
+.timeline-point i { display: block; width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 0 2px #fff; }
+.timeline-point i.sky { background: #4099d9; }
+.timeline-point i.violet { background: #7668d1; }
+.timeline-point i.blue { background: #4389c8; }
+.timeline-point i.coral { background: #d97961; }
+.timeline-point i.mint { background: #7fc79b; }
+.timeline-point i.slate { background: #67777b; }
+.timeline-point span { position: absolute; top: 13px; left: -22px; width: 52px; text-align: center; color: #7d8a86; font-size: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.reset-timeline::-webkit-scrollbar { height: 4px; }
+.reset-timeline::-webkit-scrollbar-thumb { border-radius: 3px; background: #ccd6d0; }
+.reset-timeline::-webkit-scrollbar-track { background: transparent; }
+
+/* rows view: status under the identity, every account row the same fixed height */
+.account-window-row { grid-template-columns: minmax(120px, .8fr) 1.5fr; height: 88px; align-items: center; overflow: hidden; }
+.account-side { display: grid; gap: 3px; align-content: center; min-width: 0; }
+.account-side .account-status { margin-top: 0; font-size: 9px; gap: 4px; }
+.account-side .account-status small { font-size: 8px; margin-left: 4px; }
+.account-meters { overflow: hidden; align-content: center; }
+.account-meters .rule-marks .tag-pill { font-size: 8px; padding: 1px 5px; }
+/* periods view: fixed single-line rows, no trailing button column */
+.priority-row { grid-template-columns: minmax(112px, .85fr) 1.25fr auto; height: 40px; }
+.section-heading h2 { margin-top: 0; }
+
+/* periods view final override: taller rows, fixed reset column so bars never drift */
+.priority-row { grid-template-columns: minmax(112px, .85fr) 1.25fr 118px; height: 62px; }
+.priority-reset { justify-content: flex-end; }
+.priority-reset .rule-marks .tag-pill { max-width: 42px; }
+/* timeline: hover detail strip (no floating tooltip, avoids scroll clipping) */
+.timeline-detail { display: flex; align-items: baseline; gap: 8px; min-height: 20px; padding: 0 12px 2px; font-size: 9px; color: #7d8a86; }
+.timeline-detail b { font-size: 10px; color: var(--ink); }
+.timeline-detail em { font-style: normal; }
+.timeline-detail strong { color: var(--green); font-size: 10px; }
+.timeline-detail small { color: #9aa7a1; }
+.timeline-detail-hint { color: #b3bdb8; font-size: 8px; }
+.timeline-tick.near span { color: #6f7d78; font-weight: 700; }
+.priority-meter b { width: 46px; min-width: 46px; flex: 0 0 46px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* periods view: give the identity a fixed track so names never collapse to ellipses */
+.priority-row { grid-template-columns: 132px 1fr 118px; }
+.priority-row .account-title-line .tag-pill { max-width: 52px; overflow: hidden; text-overflow: ellipsis; }
+
+/* rows view: every part has a reserved size so bars keep one consistent length */
+.account-window-row { grid-template-columns: 124px 1fr; }
+.meter-line { grid-template-columns: 36px 1fr 112px 88px; gap: 5px; }
+.meter-line .meter-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meter-line .meter-reading { overflow: hidden; white-space: nowrap; }
+.meter-line .meter-reading small { overflow: hidden; text-overflow: ellipsis; }
+.meter-line .reset-meta { overflow: hidden; text-overflow: ellipsis; }
+/* periods view: identity track wide enough for five characters plus a tag */
+.priority-row { grid-template-columns: 140px 1fr 118px; }
+/* timeline: two-line point labels (account name + window and time) */
+.timeline-track { height: 72px; }
+.timeline-point span { top: 12px; left: -28px; width: 64px; display: grid; gap: 1px; text-align: center; }
+.timeline-point span b { font-size: 8px; font-weight: 700; color: #5f6d68; overflow: hidden; text-overflow: ellipsis; }
+.timeline-point span em { font-style: normal; font-size: 8px; color: #9aa7a1; overflow: hidden; text-overflow: ellipsis; }
