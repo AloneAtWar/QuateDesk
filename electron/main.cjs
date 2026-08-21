@@ -133,8 +133,14 @@ function schedulePolling() {
 }
 
 function createMainWindow() {
+  const area = screen.getPrimaryDisplay().workArea;
+  const width = 620;
+  const height = 540;
   mainWindow = new BrowserWindow({
-    width: 1240, height: 840, minWidth: 720, minHeight: 560, show: false,
+    width, height, minWidth: 480, minHeight: 420, show: false,
+    x: Math.max(area.x, area.x + area.width - width - 10),
+    y: Math.max(area.y, area.y + area.height - height - 10),
+    skipTaskbar: true,
     backgroundColor: '#f3f5f1', title: 'Quota Desk', icon: loadAppIcon(), autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: preloadPath },
   });
@@ -209,7 +215,8 @@ function registerIpc() {
   });
   ipcMain.handle('credential:save', (_event, { accountId, credential = '', variables }) => {
     const hasVariables = variables && Object.values(variables).some((value) => String(value || '').trim());
-    if (!accountId || (!String(credential).trim() && !hasVariables && !store.getCredential(accountId))) throw new Error('凭据或敏感变量不能为空');
+    if (!accountId) throw new Error('缺少账号 ID');
+    if (!String(credential).trim() && !hasVariables) return true;
     return store.saveCredential(accountId, String(credential).trim(), variables);
   });
   ipcMain.handle('credential:delete', (_event, accountId) => store.deleteCredential(accountId));
