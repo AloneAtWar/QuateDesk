@@ -2,7 +2,7 @@
   "name": "quota-desk",
   "productName": "Quota Desk",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "一个运行在桌面上的 Coding Plan 额度监控小工具",
   "author": "AloneAtWar",
   "type": "module",
@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
+    "electron-updater": "^6.8.9",
     "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",
@@ -42,7 +43,10 @@
       "package.json"
     ],
     "win": {
-      "target": ["nsis", "portable"],
+      "target": [
+        "nsis",
+        "portable"
+      ],
       "icon": "build/icon.png"
     },
     "nsis": {
@@ -51,12 +55,17 @@
       "shortcutName": "Quota Desk"
     },
     "mac": {
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "icon": "build/icon.png",
       "category": "public.app-category.utilities"
     },
     "linux": {
-      "target": ["AppImage"],
+      "target": [
+        "AppImage"
+      ],
       "icon": "build/icon.png",
       "category": "Utility"
     },

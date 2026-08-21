@@ -435,3 +435,14 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .timeline-point span { top: 12px; left: -28px; width: 64px; display: grid; gap: 1px; text-align: center; }
 .timeline-point span b { font-size: 8px; font-weight: 700; color: #5f6d68; overflow: hidden; text-overflow: ellipsis; }
 .timeline-point span em { font-style: normal; font-size: 8px; color: #9aa7a1; overflow: hidden; text-overflow: ellipsis; }
+
+/* 版本更新:标题栏升级徽章与更新弹窗 */
+.update-badge { display: inline-flex; align-items: center; gap: 4px; border: 0; border-radius: 9px; padding: 3px 8px; font-size: 10px; font-weight: 700; background: var(--coral); color: #fff; }
+.update-badge:hover { filter: brightness(1.06); }
+.update-badge.downloading { background: #5b7569; }
+.update-badge.downloaded { background: #2e7756; }
+.update-badge.error { background: #b4552f; }
+.update-modal .release-notes { white-space: pre-wrap; max-height: 220px; overflow-y: auto; margin: 12px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: #f4f7f2; font-size: 12px; line-height: 1.65; }
+.update-modal .update-error { color: #a44a24; }
+.update-progress { height: 6px; margin: 12px 0; border-radius: 4px; background: #e3e9e3; overflow: hidden; }
+.update-progress i { display: block; height: 100%; border-radius: 4px; background: var(--coral); transition: width .2s ease; }

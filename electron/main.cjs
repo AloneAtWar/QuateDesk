@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, nativeImage, net, Notification, screen, Tray } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, nativeImage, net, Notification, screen, shell, Tray } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { DesktopStore } = require('./storage.cjs');
@@ -23,10 +23,66 @@ const sentReminders = new Set();
 // 换算误差把窗口越拖越大，所以拖动时也必须用固定宽高走 setBounds。
 const WIDGET_WIDTH = 280;
 const WIDGET_HEIGHT = 52;
+const RELEASES_URL = 'https://github.com/AloneAtWar/QuateDesk/releases';
 const distPath = path.join(__dirname, '..', 'dist', 'index.html');
 const preloadPath = path.join(__dirname, 'preload.cjs');
 const appIconPngPath = path.join(__dirname, '..', 'dist', 'logo.png');
 const appIconSvgPath = path.join(__dirname, '..', 'dist', 'quota-desk.svg');
+
+// 开机自启由操作系统的登录项管理,作为唯一事实来源,不写入应用状态
+const getAutoLaunch = () => app.getLoginItemSettings().openAtLogin;
+const setAutoLaunch = (enabled) => {
+  app.setLoginItemSettings({ openAtLogin: Boolean(enabled) });
+  return getAutoLaunch();
+};
+
+// 自动更新:仅在打包后的应用里加载 electron-updater;开发模式没有 app-update.yml,检查必失败
+let autoUpdater = null;
+let updateStatus = { status: 'idle' };
+if (app.isPackaged) {
+  try {
+    ({ autoUpdater } = require('electron-updater'));
+    autoUpdater.autoDownload = false; // 由用户看过更新说明后手动触发下载
+    autoUpdater.autoInstallOnAppQuit = true;
+  } catch (error) {
+    console.error('[Quota Desk] updater unavailable', error.message);
+  }
+}
+
+const normalizeReleaseNotes = (notes) => Array.isArray(notes)
+  ? notes.map((item) => item?.note || '').filter(Boolean).join('\n\n')
+  : (typeof notes === 'string' ? notes : '');
+
+const sendUpdateStatus = (patch) => {
+  updateStatus = { ...updateStatus, ...patch };
+  for (const window of [mainWindow, widgetWindow]) {
+    if (window && !window.isDestroyed()) window.webContents.send('update:status', updateStatus);
+  }
+};
+
+function setupAutoUpdater() {
+  if (!autoUpdater) return;
+  autoUpdater.on('checking-for-update', () => sendUpdateStatus({ status: 'checking' }));
+  autoUpdater.on('update-available', (info) => sendUpdateStatus({ status: 'available', version: info.version, releaseNotes: normalizeReleaseNotes(info.releaseNotes), percent: 0, message: '' }));
+  autoUpdater.on('update-not-available', () => sendUpdateStatus({ status: 'none' }));
+  autoUpdater.on('download-progress', (progress) => sendUpdateStatus({ status: 'downloading', percent: Math.round(progress.percent || 0) }));
+  autoUpdater.on('update-downloaded', (info) => sendUpdateStatus({ status: 'downloaded', version: info.version || updateStatus.version, percent: 100 }));
+  autoUpdater.on('error', (error) => sendUpdateStatus({ status: 'error', message: error?.message || '检查更新失败' }));
+}
+
+function checkForUpdates() {
+  if (!autoUpdater) return false;
+  autoUpdater.checkForUpdates().catch(() => {});
+  return true;
+}
+
+function setAutoUpdateEnabled(enabled) {
+  const state = store.loadState() || {};
+  const saved = store.saveState(cleanState({ ...state, settings: { ...(state.settings || {}), autoUpdate: Boolean(enabled) } }));
+  sendState(saved);
+  refreshTray();
+  if (enabled) checkForUpdates();
+}
 
 const runtimeStatus = () => ({
   running: Boolean(pollTimer),
@@ -194,16 +250,29 @@ function loadAppIcon() {
   return nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`);
 }
 
-function createTray() {
-  tray = new Tray(createTrayIcon());
-  tray.setToolTip('Quota Desk');
-  tray.setContextMenu(Menu.buildFromTemplate([
+function buildTrayMenu() {
+  const autoUpdate = store?.loadState()?.settings?.autoUpdate !== false;
+  return Menu.buildFromTemplate([
     { label: '打开 Quota Desk', click: () => { mainWindow?.show(); mainWindow?.focus(); } },
     { label: '立即刷新额度', click: () => pollState().catch(() => {}) },
     { label: '显示 / 隐藏小空间', click: () => setWidgetVisible(!widgetWindow?.isVisible()) },
     { type: 'separator' },
+    { label: '开机自启', type: 'checkbox', checked: getAutoLaunch(), click: (item) => { setAutoLaunch(item.checked); refreshTray(); } },
+    { label: '自动检查更新', type: 'checkbox', checked: autoUpdate, click: (item) => setAutoUpdateEnabled(item.checked) },
+    { label: '检查更新', click: () => checkForUpdates() },
+    { type: 'separator' },
     { label: '退出', click: () => { quitting = true; app.quit(); } },
-  ]));
+  ]);
+}
+
+function refreshTray() {
+  if (tray) tray.setContextMenu(buildTrayMenu());
+}
+
+function createTray() {
+  tray = new Tray(createTrayIcon());
+  tray.setToolTip('Quota Desk');
+  refreshTray();
   tray.on('double-click', () => { mainWindow?.show(); mainWindow?.focus(); });
 }
 
@@ -222,6 +291,9 @@ function registerIpc() {
     const saved = store.saveState(cleanState(state));
     schedulePolling();
     sendState(saved);
+    refreshTray();
+    // 渲染进程里重新打开“自动检查更新”时立即检查一次
+    if (saved?.settings?.autoUpdate && ['idle', 'none', 'error'].includes(updateStatus.status)) checkForUpdates();
     return saved;
   });
   ipcMain.handle('credential:save', (_event, { accountId, credential = '', variables }) => {
@@ -250,6 +322,23 @@ function registerIpc() {
   ipcMain.handle('window:toggle-pin', () => { if (!mainWindow) return false; const next = !mainWindow.isAlwaysOnTop(); mainWindow.setAlwaysOnTop(next); return next; });
   ipcMain.handle('window:get-pin', () => Boolean(mainWindow?.isAlwaysOnTop()));
   ipcMain.handle('window:close-main', () => { mainWindow?.hide(); return true; });
+  ipcMain.handle('app:get-version', () => app.getVersion());
+  ipcMain.handle('app:get-auto-launch', () => getAutoLaunch());
+  ipcMain.handle('app:set-auto-launch', (_event, enabled) => { const result = setAutoLaunch(enabled); refreshTray(); return result; });
+  ipcMain.handle('app:set-auto-update', (_event, enabled) => { setAutoUpdateEnabled(Boolean(enabled)); return true; });
+  ipcMain.handle('update:get-status', () => updateStatus);
+  ipcMain.handle('update:check', () => checkForUpdates());
+  ipcMain.handle('update:download', () => {
+    if (process.platform === 'darwin') {
+      // macOS 未签名无法静默替换 .app,直接引导到 Release 页手动下载
+      shell.openExternal(RELEASES_URL);
+      return true;
+    }
+    if (!autoUpdater) return false;
+    autoUpdater.downloadUpdate().catch((error) => sendUpdateStatus({ status: 'error', message: error?.message || '下载失败' }));
+    return true;
+  });
+  ipcMain.handle('update:install', () => { autoUpdater?.quitAndInstall(true, true); return true; });
   ipcMain.on('widget:move', (_event, { deltaX, deltaY }) => {
     if (!widgetWindow || widgetWindow.isDestroyed()) return;
     const dx = Math.round(Number(deltaX) || 0);
@@ -274,6 +363,8 @@ else {
     if (state?.settings?.widget !== false) createWidgetWindow();
     createTray();
     schedulePolling();
+    setupAutoUpdater();
+    if (state?.settings?.autoUpdate !== false) checkForUpdates();
     pollState().catch((error) => console.error('[Quota Desk] initial poll failed', error.message));
     app.on('activate', () => mainWindow?.show());
   });

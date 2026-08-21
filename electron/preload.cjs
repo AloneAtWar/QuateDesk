@@ -16,6 +16,18 @@ contextBridge.exposeInMainWorld('quotaDesk', {
   getPin: () => ipcRenderer.invoke('window:get-pin'),
   closeMainWindow: () => ipcRenderer.invoke('window:close-main'),
   moveWidget: (deltaX, deltaY) => ipcRenderer.send('widget:move', { deltaX, deltaY }),
+  getVersion: () => ipcRenderer.invoke('app:get-version'),
+  getAutoLaunch: () => ipcRenderer.invoke('app:get-auto-launch'),
+  setAutoLaunch: (enabled) => ipcRenderer.invoke('app:set-auto-launch', enabled),
+  checkForUpdates: () => ipcRenderer.invoke('update:check'),
+  getUpdateStatus: () => ipcRenderer.invoke('update:get-status'),
+  downloadUpdate: () => ipcRenderer.invoke('update:download'),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
+  onUpdateStatus: (callback) => {
+    const listener = (_event, status) => callback(status);
+    ipcRenderer.on('update:status', listener);
+    return () => ipcRenderer.removeListener('update:status', listener);
+  },
   onStateUpdated: (callback) => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on('state:updated', listener);
