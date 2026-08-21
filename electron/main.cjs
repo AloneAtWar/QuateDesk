@@ -19,6 +19,10 @@ let nextPollAt = null;
 let pollStartedAt = null;
 let pollInProgress = false;
 const sentReminders = new Set();
+// 小控件固定尺寸。Windows 显示缩放非 100% 时，反复 setPosition 会因 DIP/物理像素
+// 换算误差把窗口越拖越大，所以拖动时也必须用固定宽高走 setBounds。
+const WIDGET_WIDTH = 280;
+const WIDGET_HEIGHT = 52;
 const distPath = path.join(__dirname, '..', 'dist', 'index.html');
 const preloadPath = path.join(__dirname, 'preload.cjs');
 const appIconPngPath = path.join(__dirname, '..', 'dist', 'logo.png');
@@ -158,8 +162,8 @@ function createWidgetWindow() {
   const display = screen.getPrimaryDisplay();
   const { width, height } = display.workAreaSize;
   widgetWindow = new BrowserWindow({
-    width: 280, height: 52, x: Math.max(0, width - 296), y: Math.max(0, height - 66),
-    minWidth: 220, maxWidth: 400, minHeight: 52, maxHeight: 52,
+    width: WIDGET_WIDTH, height: WIDGET_HEIGHT, x: Math.max(0, width - WIDGET_WIDTH - 16), y: Math.max(0, height - WIDGET_HEIGHT - 14),
+    minWidth: WIDGET_WIDTH, maxWidth: WIDGET_WIDTH, minHeight: WIDGET_HEIGHT, maxHeight: WIDGET_HEIGHT,
     frame: false, resizable: false, movable: true, skipTaskbar: true, alwaysOnTop: true, show: false,
     backgroundColor: '#202c2e', title: 'Quota Desk 小空间',
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: preloadPath },
@@ -253,9 +257,9 @@ function registerIpc() {
     if (!dx && !dy) return;
     const bounds = widgetWindow.getBounds();
     const area = screen.getDisplayMatching(bounds).workArea;
-    const x = Math.max(area.x, Math.min(area.x + area.width - bounds.width, bounds.x + dx));
-    const y = Math.max(area.y, Math.min(area.y + area.height - bounds.height, bounds.y + dy));
-    widgetWindow.setPosition(x, y, false);
+    const x = Math.max(area.x, Math.min(area.x + area.width - WIDGET_WIDTH, bounds.x + dx));
+    const y = Math.max(area.y, Math.min(area.y + area.height - WIDGET_HEIGHT, bounds.y + dy));
+    widgetWindow.setBounds({ x, y, width: WIDGET_WIDTH, height: WIDGET_HEIGHT });
   });
 }
 
