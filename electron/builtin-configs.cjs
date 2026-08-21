@@ -40,6 +40,35 @@ const builtinConfigs = {
     endpoint: 'https://codex.wlbclub.com/v1/usage', windows: ['weekly'], adapterMode: 'standard', method: 'GET', auth: 'bearer', authHeader: 'Authorization', authPrefix: 'Bearer ', builtinMigration: 'wlb-standard-v1',
     responseRules: [{ listPath: 'rate_limits', collectionMode: 'array', filterPath: 'window', filterOperator: 'equals', filterValue: '7d', defaultWindow: 'weekly', totalPath: 'limit', remainingPath: 'remaining', usedPath: 'used', resetPath: 'reset_at|resetAt|resetTime', availablePath: '$root.status', unavailableValues: 'inactive|invalid|false|0', unit: '%' }],
   },
+  // Grok 订阅走专属适配（poller.cjs queryGrokSubscription）：读本机 grok CLI 凭据查 grok.com 计费端点，无需用户填任何凭据
+  grok: { windows: ['weekly', 'monthly'], adapterMode: 'grok', auth: 'none', credentialRequired: false },
+  // MiniMax Coding Plan（规则移植自 cc-switch coding_plan.rs）：model_remains 里 model_name=general 的 5 小时/周剩余百分比
+  minimax: {
+    endpoint: 'https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains',
+    windows: ['five_hour', 'weekly'], adapterMode: 'script',
+    script: `({
+    request: { url: "{{endpoint}}", method: "GET", headers: { Authorization: "Bearer {{apiKey}}" } },
+    extractor(response) {
+      if (response?.base_resp?.status_code && response.base_resp.status_code !== 0) throw new Error(response.base_resp.status_msg || "MiniMax 接口返回错误");
+      const item = (response?.model_remains || []).find((row) => row.model_name === "general");
+      if (!item) throw new Error("MiniMax 响应中没有 general 套餐额度");
+      const rows = [];
+      if (Number.isFinite(Number(item.current_interval_remaining_percent))) {
+        rows.push({ key: "five_hour", remaining: Number(item.current_interval_remaining_percent), total: 100, unit: "%", resetAt: item.end_time ? new Date(Number(item.end_time)).toISOString() : null });
+      }
+      if (Number(item.current_weekly_status) === 1 && Number.isFinite(Number(item.current_weekly_remaining_percent))) {
+        rows.push({ key: "weekly", remaining: Number(item.current_weekly_remaining_percent), total: 100, unit: "%" });
+      }
+      if (!rows.length) throw new Error("MiniMax 响应中没有可识别的额度窗口");
+      return rows;
+    }
+  })`,
+    variables: scriptVariables('https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains'),
+  },
+  // Claude / Codex / Gemini 官方订阅：专属适配（cli-quota.cjs），复用本机 CLI 登录态
+  claude: { windows: ['five_hour', 'weekly'], adapterMode: 'claude', auth: 'none', credentialRequired: false },
+  codex: { windows: ['five_hour', 'weekly', 'monthly'], adapterMode: 'codex', auth: 'none', credentialRequired: false },
+  gemini: { windows: ['gemini_pro', 'gemini_flash', 'gemini_flash_lite'], adapterMode: 'gemini', auth: 'none', credentialRequired: false },
 };
 
 module.exports = { builtinConfigs };

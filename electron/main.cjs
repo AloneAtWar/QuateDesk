@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const { DesktopStore } = require('./storage.cjs');
 const { queryAccount } = require('./poller.cjs');
 const { builtinConfigs } = require('./builtin-configs.cjs');
+const { scanCcswitch } = require('./ccswitch.cjs');
 
 app.setName('Quota Desk');
 app.setAppUserModelId('com.quotadesk.app');
@@ -19,15 +20,23 @@ let nextPollAt = null;
 let pollStartedAt = null;
 let pollInProgress = false;
 const sentReminders = new Set();
-// 小控件固定尺寸档位（渲染端按 zoom 缩放内容）。Windows 显示缩放非 100% 时，反复 setPosition
-// 会因 DIP/物理像素换算误差把窗口越拖越大，所以拖动时也必须用固定宽高走 setBounds。
-const WIDGET_SIZES = {
-  small: { width: 240, height: 46 },
-  medium: { width: 280, height: 52 },
-  large: { width: 336, height: 62 },
+// 小控件整体等比缩放：一个比例因子同时决定窗口像素尺寸和内容缩放（渲染端 transform）。
+// Windows 显示缩放非 100% 时，反复 setPosition 会因 DIP/物理像素换算误差把窗口
+// 越拖越大，所以拖动时也必须用固定宽高走 setBounds。
+const WIDGET_BASE_SIZE = { width: 280, height: 52 };
+const clampWidgetScale = (value) => {
+  const scale = Math.round(Number(value) * 20) / 20;
+  return Number.isFinite(scale) ? Math.min(3, Math.max(0.8, scale)) : 1;
 };
-let widgetSize = 'medium';
-const widgetSizeSpec = () => WIDGET_SIZES[widgetSize] || WIDGET_SIZES.medium;
+const widgetWindowSize = (scale) => ({ width: Math.round(WIDGET_BASE_SIZE.width * scale), height: Math.round(WIDGET_BASE_SIZE.height * scale) });
+// 兼容旧设置：小/中/大档位与像素宽高都折算成比例
+const savedWidgetScale = () => {
+  const settings = store?.loadState()?.settings || {};
+  const legacyWidth = { small: 240, medium: 280, large: 336 }[settings.widgetSize];
+  const byWidth = Number(settings.widgetWidth) ? Number(settings.widgetWidth) / WIDGET_BASE_SIZE.width : undefined;
+  return clampWidgetScale(settings.widgetScale ?? byWidth ?? (legacyWidth ? legacyWidth / WIDGET_BASE_SIZE.width : undefined));
+};
+let widgetScale = 1;
 // 界面主题：默认暗色，主窗口与浮窗的底色保持一致避免闪白/闪黑
 const themeColors = (theme) => (theme === 'light'
   ? { main: '#f3f5f1', widget: '#eef1ec' }
@@ -129,6 +138,11 @@ const builtinLogos = {
   kimi: './logos/kimi.png',
   zai: './logos/zai.svg',
   deepseek: './logos/deepseek.png',
+  grok: './logos/grok.png',
+  minimax: './logos/minimax.svg',
+  claude: './logos/claude.jpg',
+  codex: './logos/codex.svg',
+  gemini: './logos/gemini.svg',
 };
 // 内置厂商的默认官网；仅在厂商从未设置过官网时补齐，用户清空后不再强制回填
 const builtinWebsites = {
@@ -136,10 +150,31 @@ const builtinWebsites = {
   zai: 'https://bigmodel.cn/',
   deepseek: 'https://www.deepseek.com/',
   wlb: 'https://www.wlbclub.com/',
+  grok: 'https://grok.com/',
+  minimax: 'https://platform.minimaxi.com',
+  claude: 'https://claude.com/claude-code',
+  codex: 'https://developers.openai.com/codex/',
+  gemini: 'https://gemini.google.com/',
+};
+// 专属适配类内置厂商（凭据来自本机 CLI / 官方接口），历史 state 里没有的加载/保存时补齐
+const ensureCliProviders = (providers) => {
+  const cliProviders = [
+    { id: 'grok', name: 'Grok', legalName: 'xAI Grok', monogram: 'G', tone: 'slate', adapter: 'grok', logo: './logos/grok.png' },
+    { id: 'minimax', name: 'MiniMax', legalName: 'MiniMax Coding Plan', monogram: 'M', tone: 'mint', adapter: 'minimax', logo: './logos/minimax.svg' },
+    { id: 'claude', name: 'Claude', legalName: 'Claude Code', monogram: 'C', tone: 'coral', adapter: 'claude', logo: './logos/claude.jpg' },
+    { id: 'codex', name: 'Codex', legalName: 'OpenAI Codex', monogram: 'O', tone: 'mint', adapter: 'codex', logo: './logos/codex.svg' },
+    { id: 'gemini', name: 'Gemini', legalName: 'Gemini CLI', monogram: 'G', tone: 'sky', adapter: 'gemini', logo: './logos/gemini.svg' },
+  ];
+  const existing = new Set(providers.map((item) => item.id));
+  const additions = cliProviders
+    .filter((item) => !existing.has(item.id))
+    .map((item) => ({ ...item, website: builtinWebsites[item.id], requestConfig: builtinConfigs[item.id] }));
+  return additions.length ? [...providers, ...additions] : providers;
 };
 const migrateProvider = (provider) => {
   if (!provider) return provider;
-  const legacyLogo = !provider.logo || /^https?:\/\//i.test(provider.logo) || /\.\/logos\/(kimi|deepseek)\.svg$/i.test(provider.logo);
+  // 旧版 logo 引用（含已删除的 png/旧文件名）视为 legacy，重新指向当前内置图标
+  const legacyLogo = !provider.logo || /^https?:\/\//i.test(provider.logo) || /\.\/logos\/(kimi\.(png|svg)|zai\.svg|zhipu\.svg|deepseek\.(png|svg)|grok\.svg|anthropic\.svg|openai\.svg|claude\.(png|svg))$/i.test(provider.logo);
   const logo = legacyLogo && builtinLogos[provider.id] ? builtinLogos[provider.id] : provider.logo;
   const builtinConfig = builtinConfigs[provider.id];
   const needsWlbMigration = provider.id === 'wlb' && builtinConfig?.builtinMigration && provider.requestConfig?.builtinMigration !== builtinConfig.builtinMigration;
@@ -157,12 +192,12 @@ const migrateProvider = (provider) => {
 const migrateState = (state) => state ? {
   ...state,
   accounts: (state.accounts || []).map(({ baseUrl, ...account }) => account).filter((account) => account.providerId !== 'mimo'),
-  providers: (state.providers || []).map(migrateProvider).filter((provider) => provider.id !== 'mimo'),
+  providers: ensureCliProviders((state.providers || []).map(migrateProvider).filter((provider) => provider.id !== 'mimo')),
 } : state;
 
 const cleanState = (state) => ({
   accounts: (state?.accounts || []).map(({ credential, baseUrl, ...account }) => account).filter((account) => account.providerId !== 'mimo'),
-  providers: (state?.providers || []).map(({ baseUrl, domain, ...provider }) => migrateProvider(provider)).filter((provider) => provider.id !== 'mimo'),
+  providers: ensureCliProviders((state?.providers || []).map(({ baseUrl, domain, ...provider }) => migrateProvider(provider)).filter((provider) => provider.id !== 'mimo')),
   settings: state?.settings || {},
   lastSync: state?.lastSync || new Date().toISOString(),
 });
@@ -252,12 +287,11 @@ function createMainWindow() {
 function createWidgetWindow() {
   const display = screen.getPrimaryDisplay();
   const { width, height } = display.workAreaSize;
-  const settings = store?.loadState()?.settings || {};
-  widgetSize = WIDGET_SIZES[settings.widgetSize] ? settings.widgetSize : 'medium';
-  const spec = widgetSizeSpec();
+  widgetScale = savedWidgetScale();
+  const size = widgetWindowSize(widgetScale);
   widgetWindow = new BrowserWindow({
-    width: spec.width, height: spec.height, x: Math.max(0, width - spec.width - 16), y: Math.max(0, height - spec.height - 14),
-    minWidth: spec.width, maxWidth: spec.width, minHeight: spec.height, maxHeight: spec.height,
+    width: size.width, height: size.height, x: Math.max(0, width - size.width - 16), y: Math.max(0, height - size.height - 14),
+    minWidth: widgetWindowSize(0.8).width, maxWidth: widgetWindowSize(3).width, minHeight: widgetWindowSize(0.8).height, maxHeight: widgetWindowSize(1.5).height,
     frame: false, resizable: false, movable: true, skipTaskbar: true, alwaysOnTop: true, show: false,
     backgroundColor: themeColors(savedTheme()).widget, title: 'Quota Desk 浮窗',
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: preloadPath },
@@ -267,17 +301,17 @@ function createWidgetWindow() {
   widgetWindow.on('closed', () => { widgetWindow = null; });
 }
 
-// 浮窗大小切换：窗口尺寸跟着档位走，右下角保持不动，内容由渲染端按 zoom 缩放
-function applyWidgetSize(size) {
-  widgetSize = WIDGET_SIZES[size] ? size : 'medium';
-  if (!widgetWindow || widgetWindow.isDestroyed()) return widgetSize;
-  const spec = widgetSizeSpec();
+// 浮窗大小调整：接收缩放比例，窗口像素尺寸按基准尺寸换算，右下角保持不动
+function applyWidgetSize(scale) {
+  widgetScale = clampWidgetScale(scale);
+  const size = widgetWindowSize(widgetScale);
+  if (!widgetWindow || widgetWindow.isDestroyed()) return widgetScale;
   const bounds = widgetWindow.getBounds();
   const area = screen.getPrimaryDisplay().workArea;
-  const x = Math.max(area.x, Math.min(area.x + area.width - spec.width, bounds.x + bounds.width - spec.width));
-  const y = Math.max(area.y, Math.min(area.y + area.height - spec.height, bounds.y + bounds.height - spec.height));
-  widgetWindow.setBounds({ x, y, width: spec.width, height: spec.height });
-  return widgetSize;
+  const x = Math.max(area.x, Math.min(area.x + area.width - size.width, bounds.x + bounds.width - size.width));
+  const y = Math.max(area.y, Math.min(area.y + area.height - size.height, bounds.y + bounds.height - size.height));
+  widgetWindow.setBounds({ x, y, width: size.width, height: size.height });
+  return widgetScale;
 }
 
 function applyTheme(theme) {
@@ -384,6 +418,66 @@ function registerIpc() {
   ipcMain.handle('app:get-auto-launch', () => getAutoLaunch());
   ipcMain.handle('app:set-auto-launch', (_event, enabled) => { const result = setAutoLaunch(enabled); refreshTray(); return result; });
   ipcMain.handle('app:set-auto-update', (_event, enabled) => { setAutoUpdateEnabled(Boolean(enabled)); return true; });
+  // 从 cc-switch 导入：扫描结果不含 API key，应用时主进程重新提取并写凭据
+  ipcMain.handle('import:scan-ccswitch', () => {
+    const state = migrateState(store.loadState());
+    const providers = state?.providers || [];
+    const result = scanCcswitch(providers);
+    if (result.error) return result;
+    for (const candidate of result.candidates) {
+      candidate.providerName = providers.find((item) => item.id === candidate.providerId)?.name || candidate.providerId;
+    }
+    // 已有账号凭据去重：同一把 key 已存在于任一账号时标记「已存在」
+    const existingKeys = new Set();
+    for (const account of state.accounts || []) {
+      const credential = store.getCredential(account.id);
+      if (credential) existingKeys.add(credential);
+    }
+    for (const candidate of result.candidates) {
+      candidate.duplicateOfExisting = existingKeys.has(candidate.apiKey);
+      delete candidate.apiKey;
+    }
+    return result;
+  });
+  ipcMain.handle('import:apply-ccswitch', async (_event, selectedIds) => {
+    const state = migrateState(store.loadState());
+    const providers = state?.providers || [];
+    const scan = scanCcswitch(providers);
+    if (scan.error) throw new Error(scan.error);
+    const selected = new Set(selectedIds || []);
+    const usedKeys = new Set();
+    for (const account of state.accounts || []) {
+      const credential = store.getCredential(account.id);
+      if (credential) usedKeys.add(credential);
+    }
+    const nextAccounts = [...(state.accounts || [])];
+    const importedIds = [];
+    for (const candidate of scan.candidates) {
+      if (!selected.has(candidate.key) || usedKeys.has(candidate.apiKey)) continue;
+      usedKeys.add(candidate.apiKey);
+      const provider = providers.find((item) => item.id === candidate.providerId);
+      const windows = provider?.requestConfig?.windows?.length ? provider.requestConfig.windows : ['five_hour', 'weekly', 'monthly', 'balance'];
+      const id = `ccs-${Date.now().toString(36)}-${importedIds.length}-${Math.random().toString(36).slice(2, 7)}`;
+      store.saveCredential(id, candidate.apiKey);
+      importedIds.push(id);
+      nextAccounts.push({
+        id,
+        providerId: candidate.providerId,
+        name: candidate.name,
+        identity: '',
+        tags: ['cc-switch'],
+        windowKeys: windows,
+        windows: [],
+        status: 'active',
+        lastError: null,
+        lastChecked: null,
+      });
+    }
+    const saved = store.saveState(cleanState({ ...state, accounts: nextAccounts }));
+    sendState(saved);
+    if (importedIds.length) await pollState(importedIds).catch(() => {});
+    return { imported: importedIds.length, state: migrateState(store.loadState()) };
+  });
   ipcMain.handle('update:get-status', () => updateStatus);
   ipcMain.handle('update:check', () => checkForUpdates());
   ipcMain.handle('update:download', () => {
@@ -411,12 +505,12 @@ function registerIpc() {
     const dx = Math.round(Number(deltaX) || 0);
     const dy = Math.round(Number(deltaY) || 0);
     if (!dx && !dy) return;
-    const spec = widgetSizeSpec();
+    const size = widgetWindowSize(widgetScale);
     const bounds = widgetWindow.getBounds();
     const area = screen.getDisplayMatching(bounds).workArea;
-    const x = Math.max(area.x, Math.min(area.x + area.width - spec.width, bounds.x + dx));
-    const y = Math.max(area.y, Math.min(area.y + area.height - spec.height, bounds.y + dy));
-    widgetWindow.setBounds({ x, y, width: spec.width, height: spec.height });
+    const x = Math.max(area.x, Math.min(area.x + area.width - size.width, bounds.x + dx));
+    const y = Math.max(area.y, Math.min(area.y + area.height - size.height, bounds.y + dy));
+    widgetWindow.setBounds({ x, y, width: size.width, height: size.height });
   });
 }
 

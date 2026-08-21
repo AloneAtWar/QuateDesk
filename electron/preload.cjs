@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('quotaDesk', {
   setWidgetSize: (size) => ipcRenderer.invoke('widget:set-size', size),
   setTheme: (theme) => ipcRenderer.invoke('app:set-theme', theme),
   openExternal: (url) => ipcRenderer.invoke('app:open-external', url),
+  scanCcswitchImport: () => ipcRenderer.invoke('import:scan-ccswitch'),
+  applyCcswitchImport: (selectedIds) => ipcRenderer.invoke('import:apply-ccswitch', selectedIds),
   openMainWindow: () => ipcRenderer.invoke('window:open-main'),
   togglePin: () => ipcRenderer.invoke('window:toggle-pin'),
   getPin: () => ipcRenderer.invoke('window:get-pin'),

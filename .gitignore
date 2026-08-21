@@ -5,3 +5,4 @@ release/
 work/
 *.log
 .DS_Store
+release-new/

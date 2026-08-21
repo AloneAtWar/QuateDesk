@@ -60,6 +60,16 @@ export const adapterDefinitions = {
       return [windowResult('weekly', percentage(remaining, total), 100, '%', quota.resetAt, { available: payload?.isValid ?? payload?.status === 'active' })];
     },
   },
+  // Grok 订阅额度由主进程专属适配（读取本机 grok CLI 凭据）提供，网页演示模式无数据
+  grok: {
+    ...adapterRegistry.grok,
+    normalize() { return []; },
+  },
+  // 以下厂商同样由主进程专属适配（官方 CLI 登录态 / 官方 Coding Plan 接口），网页演示模式无数据
+  minimax: { ...adapterRegistry.minimax, normalize() { return []; } },
+  claude: { ...adapterRegistry.claude, normalize() { return []; } },
+  codex: { ...adapterRegistry.codex, normalize() { return []; } },
+  gemini: { ...adapterRegistry.gemini, normalize() { return []; } },
 };
 
 export const normalizeUsage = (adapterId, payload) => adapterDefinitions[adapterId]?.normalize(payload) || [];

@@ -27,6 +27,41 @@ export const adapterRegistry = {
     auth: 'bearer',
     windows: ['weekly'],
   },
+  grok: {
+    id: 'grok',
+    label: 'Grok',
+    endpoint: '',
+    auth: 'none',
+    windows: ['weekly', 'monthly'],
+  },
+  minimax: {
+    id: 'minimax',
+    label: 'MiniMax Coding Plan',
+    endpoint: 'https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains',
+    auth: 'bearer',
+    windows: ['five_hour', 'weekly'],
+  },
+  claude: {
+    id: 'claude',
+    label: 'Claude Code',
+    endpoint: '',
+    auth: 'none',
+    windows: ['five_hour', 'weekly'],
+  },
+  codex: {
+    id: 'codex',
+    label: 'OpenAI Codex',
+    endpoint: '',
+    auth: 'none',
+    windows: ['five_hour', 'weekly', 'monthly'],
+  },
+  gemini: {
+    id: 'gemini',
+    label: 'Gemini CLI',
+    endpoint: '',
+    auth: 'none',
+    windows: ['gemini_pro', 'gemini_flash', 'gemini_flash_lite'],
+  },
 };
 
 const minutesFromNow = (minutes) => new Date(Date.now() + minutes * 60_000).toISOString();
@@ -37,6 +72,11 @@ export const providerCatalog = [
   { id: 'zai', name: 'Z.ai', legalName: 'Z.ai / 智谱', monogram: 'Z', tone: 'violet', adapter: 'zai', logo: './logos/zai.svg', website: 'https://bigmodel.cn/' },
   { id: 'deepseek', name: 'DeepSeek', legalName: 'DeepSeek API', monogram: 'D', tone: 'blue', adapter: 'deepseek', logo: './logos/deepseek.png', website: 'https://www.deepseek.com/' },
   { id: 'wlb', name: 'wlbclub', legalName: 'wlbclub', monogram: 'W', tone: 'coral', adapter: 'wlb', website: 'https://www.wlbclub.com/' },
+  { id: 'grok', name: 'Grok', legalName: 'xAI Grok', monogram: 'G', tone: 'slate', adapter: 'grok', logo: './logos/grok.png', website: 'https://grok.com/' },
+  { id: 'minimax', name: 'MiniMax', legalName: 'MiniMax Coding Plan', monogram: 'M', tone: 'mint', adapter: 'minimax', logo: './logos/minimax.svg', website: 'https://platform.minimaxi.com' },
+  { id: 'claude', name: 'Claude', legalName: 'Claude Code', monogram: 'C', tone: 'coral', adapter: 'claude', logo: './logos/claude.jpg', website: 'https://claude.com/claude-code' },
+  { id: 'codex', name: 'Codex', legalName: 'OpenAI Codex', monogram: 'O', tone: 'mint', adapter: 'codex', logo: './logos/codex.svg', website: 'https://developers.openai.com/codex/' },
+  { id: 'gemini', name: 'Gemini', legalName: 'Gemini CLI', monogram: 'G', tone: 'sky', adapter: 'gemini', logo: './logos/gemini.svg', website: 'https://gemini.google.com/' },
 ];
 
 export const windowCatalog = {
@@ -44,6 +84,9 @@ export const windowCatalog = {
   weekly: { key: 'weekly', label: '7 天', short: '7d', group: '中周期', color: 'violet' },
   monthly: { key: 'monthly', label: '1个月', short: '月', group: '长周期', color: 'coral' },
   balance: { key: 'balance', label: '余额', short: '余额', group: '余额', color: 'green' },
+  gemini_pro: { key: 'gemini_pro', label: 'Gemini Pro', short: 'Pro', group: 'Gemini', color: 'sky' },
+  gemini_flash: { key: 'gemini_flash', label: 'Gemini Flash', short: 'Flash', group: 'Gemini', color: 'cyan' },
+  gemini_flash_lite: { key: 'gemini_flash_lite', label: 'Flash Lite', short: 'Lite', group: 'Gemini', color: 'mint' },
 };
 
 export const initialAccounts = [
