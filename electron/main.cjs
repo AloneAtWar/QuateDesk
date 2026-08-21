@@ -19,10 +19,20 @@ let nextPollAt = null;
 let pollStartedAt = null;
 let pollInProgress = false;
 const sentReminders = new Set();
-// 小控件固定尺寸。Windows 显示缩放非 100% 时，反复 setPosition 会因 DIP/物理像素
-// 换算误差把窗口越拖越大，所以拖动时也必须用固定宽高走 setBounds。
-const WIDGET_WIDTH = 280;
-const WIDGET_HEIGHT = 52;
+// 小控件固定尺寸档位（渲染端按 zoom 缩放内容）。Windows 显示缩放非 100% 时，反复 setPosition
+// 会因 DIP/物理像素换算误差把窗口越拖越大，所以拖动时也必须用固定宽高走 setBounds。
+const WIDGET_SIZES = {
+  small: { width: 240, height: 46 },
+  medium: { width: 280, height: 52 },
+  large: { width: 336, height: 62 },
+};
+let widgetSize = 'medium';
+const widgetSizeSpec = () => WIDGET_SIZES[widgetSize] || WIDGET_SIZES.medium;
+// 界面主题：默认暗色，主窗口与浮窗的底色保持一致避免闪白/闪黑
+const themeColors = (theme) => (theme === 'light'
+  ? { main: '#f3f5f1', widget: '#eef1ec' }
+  : { main: '#141d1f', widget: '#202c2e' });
+const savedTheme = () => (store?.loadState()?.settings?.theme === 'light' ? 'light' : 'dark');
 const RELEASES_URL = 'https://github.com/AloneAtWar/QuateDesk/releases';
 const distPath = path.join(__dirname, '..', 'dist', 'index.html');
 const preloadPath = path.join(__dirname, 'preload.cjs');
@@ -49,9 +59,27 @@ if (app.isPackaged) {
   }
 }
 
+// electron-updater 的 GitHub 更新说明来自 releases.atom，内容是 HTML；转成纯文本并去掉自动生成说明末尾的 Full Changelog 对比链接
+const htmlToText = (html) => html
+  .replace(/<br\s*\/?>/gi, '\n')
+  .replace(/<\/(p|div|h[1-6])>/gi, '\n\n')
+  .replace(/<\/(li|ul|ol)>/gi, '\n')
+  .replace(/<li[^>]*>/gi, '* ')
+  .replace(/<[^>]+>/g, '')
+  .replace(/&nbsp;/gi, ' ')
+  .replace(/&amp;/gi, '&')
+  .replace(/&lt;/gi, '<')
+  .replace(/&gt;/gi, '>')
+  .replace(/&quot;/gi, '"')
+  .replace(/&#0?39;/g, '\'')
+  .split('\n')
+  .map((line) => line.replace(/\s+/g, ' ').trim())
+  .filter((line) => line && !/^\**\s*Full Changelog\b/i.test(line))
+  .join('\n');
+
 const normalizeReleaseNotes = (notes) => Array.isArray(notes)
-  ? notes.map((item) => item?.note || '').filter(Boolean).join('\n\n')
-  : (typeof notes === 'string' ? notes : '');
+  ? notes.map((item) => htmlToText(String(item?.note || ''))).filter(Boolean).join('\n\n')
+  : htmlToText(typeof notes === 'string' ? notes : '');
 
 const sendUpdateStatus = (patch) => {
   updateStatus = { ...updateStatus, ...patch };
@@ -101,7 +129,13 @@ const builtinLogos = {
   kimi: './logos/kimi.png',
   zai: './logos/zai.svg',
   deepseek: './logos/deepseek.png',
-  mimo: './logos/xiaomi.svg',
+};
+// 内置厂商的默认官网；仅在厂商从未设置过官网时补齐，用户清空后不再强制回填
+const builtinWebsites = {
+  kimi: 'https://www.kimi.com/',
+  zai: 'https://bigmodel.cn/',
+  deepseek: 'https://www.deepseek.com/',
+  wlb: 'https://www.wlbclub.com/',
 };
 const migrateProvider = (provider) => {
   if (!provider) return provider;
@@ -113,21 +147,22 @@ const migrateProvider = (provider) => {
   const seededVariables = !builtin && builtinConfig?.adapterMode === 'script' && !provider.requestConfig?.variables?.some((item) => item.key === 'endpoint')
     ? { ...provider, requestConfig: { ...provider.requestConfig, variables: builtinConfig.variables } }
     : provider;
-  const migrated = builtin ? { ...provider, baseUrl: undefined, domain: undefined, requestConfig: builtin, logo } : { ...seededVariables, baseUrl: undefined, domain: undefined, logo };
-  if (provider.id === 'mimo') return { ...migrated, name: 'XiaoMi MiMo', legalName: 'XiaoMi MiMo', monogram: 'M' };
+  const website = provider.website === undefined ? (builtinWebsites[provider.id] ?? '') : provider.website;
+  const migrated = builtin ? { ...provider, website, baseUrl: undefined, domain: undefined, requestConfig: builtin, logo } : { ...seededVariables, website, baseUrl: undefined, domain: undefined, logo };
   if (provider.id === 'wlb') return { ...migrated, name: 'wlbclub', legalName: 'wlbclub', monogram: 'W' };
   return migrated;
 };
 
+// XiaoMi MiMo 从未推出适配接口，已从系统厂商中移除；历史 state 里残留的 mimo 厂商与账号在迁移时一并丢弃
 const migrateState = (state) => state ? {
   ...state,
-  accounts: (state.accounts || []).map(({ baseUrl, ...account }) => account),
-  providers: (state.providers || []).map(migrateProvider),
+  accounts: (state.accounts || []).map(({ baseUrl, ...account }) => account).filter((account) => account.providerId !== 'mimo'),
+  providers: (state.providers || []).map(migrateProvider).filter((provider) => provider.id !== 'mimo'),
 } : state;
 
 const cleanState = (state) => ({
-  accounts: (state?.accounts || []).map(({ credential, baseUrl, ...account }) => account),
-  providers: (state?.providers || []).map(({ baseUrl, domain, ...provider }) => migrateProvider(provider)),
+  accounts: (state?.accounts || []).map(({ credential, baseUrl, ...account }) => account).filter((account) => account.providerId !== 'mimo'),
+  providers: (state?.providers || []).map(({ baseUrl, domain, ...provider }) => migrateProvider(provider)).filter((provider) => provider.id !== 'mimo'),
   settings: state?.settings || {},
   lastSync: state?.lastSync || new Date().toISOString(),
 });
@@ -203,7 +238,7 @@ function createMainWindow() {
     x: area.x + area.width - width,
     y: area.y + area.height - height,
     skipTaskbar: true,
-    backgroundColor: '#f3f5f1', title: 'Quota Desk', icon: loadAppIcon(), autoHideMenuBar: true,
+    backgroundColor: themeColors(savedTheme()).main, title: 'Quota Desk', icon: loadAppIcon(), autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: preloadPath },
   });
   mainWindow.loadFile(distPath);
@@ -217,16 +252,39 @@ function createMainWindow() {
 function createWidgetWindow() {
   const display = screen.getPrimaryDisplay();
   const { width, height } = display.workAreaSize;
+  const settings = store?.loadState()?.settings || {};
+  widgetSize = WIDGET_SIZES[settings.widgetSize] ? settings.widgetSize : 'medium';
+  const spec = widgetSizeSpec();
   widgetWindow = new BrowserWindow({
-    width: WIDGET_WIDTH, height: WIDGET_HEIGHT, x: Math.max(0, width - WIDGET_WIDTH - 16), y: Math.max(0, height - WIDGET_HEIGHT - 14),
-    minWidth: WIDGET_WIDTH, maxWidth: WIDGET_WIDTH, minHeight: WIDGET_HEIGHT, maxHeight: WIDGET_HEIGHT,
+    width: spec.width, height: spec.height, x: Math.max(0, width - spec.width - 16), y: Math.max(0, height - spec.height - 14),
+    minWidth: spec.width, maxWidth: spec.width, minHeight: spec.height, maxHeight: spec.height,
     frame: false, resizable: false, movable: true, skipTaskbar: true, alwaysOnTop: true, show: false,
-    backgroundColor: '#202c2e', title: 'Quota Desk 小空间',
+    backgroundColor: themeColors(savedTheme()).widget, title: 'Quota Desk 浮窗',
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: preloadPath },
   });
   widgetWindow.loadFile(distPath, { query: { widget: '1' } });
   widgetWindow.once('ready-to-show', () => widgetWindow.showInactive());
   widgetWindow.on('closed', () => { widgetWindow = null; });
+}
+
+// 浮窗大小切换：窗口尺寸跟着档位走，右下角保持不动，内容由渲染端按 zoom 缩放
+function applyWidgetSize(size) {
+  widgetSize = WIDGET_SIZES[size] ? size : 'medium';
+  if (!widgetWindow || widgetWindow.isDestroyed()) return widgetSize;
+  const spec = widgetSizeSpec();
+  const bounds = widgetWindow.getBounds();
+  const area = screen.getPrimaryDisplay().workArea;
+  const x = Math.max(area.x, Math.min(area.x + area.width - spec.width, bounds.x + bounds.width - spec.width));
+  const y = Math.max(area.y, Math.min(area.y + area.height - spec.height, bounds.y + bounds.height - spec.height));
+  widgetWindow.setBounds({ x, y, width: spec.width, height: spec.height });
+  return widgetSize;
+}
+
+function applyTheme(theme) {
+  const colors = themeColors(theme === 'light' ? 'light' : 'dark');
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setBackgroundColor(colors.main);
+  if (widgetWindow && !widgetWindow.isDestroyed()) widgetWindow.setBackgroundColor(colors.widget);
+  return true;
 }
 
 function setWidgetVisible(visible) {
@@ -255,7 +313,7 @@ function buildTrayMenu() {
   return Menu.buildFromTemplate([
     { label: '打开 Quota Desk', click: () => { mainWindow?.show(); mainWindow?.focus(); } },
     { label: '立即刷新额度', click: () => pollState().catch(() => {}) },
-    { label: '显示 / 隐藏小空间', click: () => setWidgetVisible(!widgetWindow?.isVisible()) },
+    { label: '显示 / 隐藏浮窗', click: () => setWidgetVisible(!widgetWindow?.isVisible()) },
     { type: 'separator' },
     { label: '开机自启', type: 'checkbox', checked: getAutoLaunch(), click: (item) => { setAutoLaunch(item.checked); refreshTray(); } },
     { label: '自动检查更新', type: 'checkbox', checked: autoUpdate, click: (item) => setAutoUpdateEnabled(item.checked) },
@@ -339,16 +397,26 @@ function registerIpc() {
     return true;
   });
   ipcMain.handle('update:install', () => { autoUpdater?.quitAndInstall(true, true); return true; });
+  ipcMain.handle('widget:set-size', (_event, size) => applyWidgetSize(size));
+  ipcMain.handle('app:set-theme', (_event, theme) => applyTheme(theme));
+  // 厂商官网等外部链接一律走系统默认浏览器，不在应用窗口内导航
+  ipcMain.handle('app:open-external', (_event, url) => {
+    const target = String(url || '');
+    if (!/^https?:\/\//i.test(target)) throw new Error('仅支持打开 http/https 链接');
+    shell.openExternal(target);
+    return true;
+  });
   ipcMain.on('widget:move', (_event, { deltaX, deltaY }) => {
     if (!widgetWindow || widgetWindow.isDestroyed()) return;
     const dx = Math.round(Number(deltaX) || 0);
     const dy = Math.round(Number(deltaY) || 0);
     if (!dx && !dy) return;
+    const spec = widgetSizeSpec();
     const bounds = widgetWindow.getBounds();
     const area = screen.getDisplayMatching(bounds).workArea;
-    const x = Math.max(area.x, Math.min(area.x + area.width - WIDGET_WIDTH, bounds.x + dx));
-    const y = Math.max(area.y, Math.min(area.y + area.height - WIDGET_HEIGHT, bounds.y + dy));
-    widgetWindow.setBounds({ x, y, width: WIDGET_WIDTH, height: WIDGET_HEIGHT });
+    const x = Math.max(area.x, Math.min(area.x + area.width - spec.width, bounds.x + dx));
+    const y = Math.max(area.y, Math.min(area.y + area.height - spec.height, bounds.y + dy));
+    widgetWindow.setBounds({ x, y, width: spec.width, height: spec.height });
   });
 }
 

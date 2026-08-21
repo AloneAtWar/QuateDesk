@@ -27,24 +27,16 @@ export const adapterRegistry = {
     auth: 'bearer',
     windows: ['weekly'],
   },
-  mimo: {
-    id: 'mimo',
-    label: 'XiaoMi MiMo',
-    endpoint: 'https://platform.xiaomimimo.com/api/v1/tokenPlan/usage',
-    auth: 'cookie',
-    windows: ['monthly'],
-  },
 };
 
 const minutesFromNow = (minutes) => new Date(Date.now() + minutes * 60_000).toISOString();
 const daysFromNow = (days) => minutesFromNow(days * 24 * 60);
 
 export const providerCatalog = [
-  { id: 'kimi', name: 'Kimi', legalName: 'Kimi for Coding', monogram: 'K', tone: 'sky', adapter: 'kimi', logo: './logos/kimi.png' },
-  { id: 'zai', name: 'Z.ai', legalName: 'Z.ai / 智谱', monogram: 'Z', tone: 'violet', adapter: 'zai', logo: './logos/zai.svg' },
-  { id: 'deepseek', name: 'DeepSeek', legalName: 'DeepSeek API', monogram: 'D', tone: 'blue', adapter: 'deepseek', logo: './logos/deepseek.png' },
-  { id: 'wlb', name: 'wlbclub', legalName: 'wlbclub', monogram: 'W', tone: 'coral', adapter: 'wlb' },
-  { id: 'mimo', name: 'XiaoMi MiMo', legalName: 'XiaoMi MiMo', monogram: 'M', tone: 'mint', adapter: 'mimo', logo: './logos/xiaomi.svg' },
+  { id: 'kimi', name: 'Kimi', legalName: 'Kimi for Coding', monogram: 'K', tone: 'sky', adapter: 'kimi', logo: './logos/kimi.png', website: 'https://www.kimi.com/' },
+  { id: 'zai', name: 'Z.ai', legalName: 'Z.ai / 智谱', monogram: 'Z', tone: 'violet', adapter: 'zai', logo: './logos/zai.svg', website: 'https://bigmodel.cn/' },
+  { id: 'deepseek', name: 'DeepSeek', legalName: 'DeepSeek API', monogram: 'D', tone: 'blue', adapter: 'deepseek', logo: './logos/deepseek.png', website: 'https://www.deepseek.com/' },
+  { id: 'wlb', name: 'wlbclub', legalName: 'wlbclub', monogram: 'W', tone: 'coral', adapter: 'wlb', website: 'https://www.wlbclub.com/' },
 ];
 
 export const windowCatalog = {
@@ -76,10 +68,6 @@ export const initialAccounts = [
   {
     id: 'wlb-shared', providerId: 'wlb', name: '共享中转', identity: 'coding', tags: ['中转', '低优先'], status: 'active', lastChecked: minutesFromNow(-5),
     windows: [{ key: 'weekly', remaining: 36, used: 64, total: 100, unit: '%', resetAt: daysFromNow(1.52), available: true }],
-  },
-  {
-    id: 'mimo-personal', providerId: 'mimo', name: '个人账号', identity: 'cookie', tags: ['个人'], status: 'warning', lastChecked: minutesFromNow(-28),
-    windows: [{ key: 'monthly', remaining: 24, used: 76, total: 100, unit: '%', amount: 24, limitAmount: 100, resetAt: daysFromNow(12), available: false, error: 'Cookie 需要更新' }],
   },
 ];
 

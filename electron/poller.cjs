@@ -227,16 +227,6 @@ const definitions = {
       return [meter('weekly', percent(remaining, total), 100, '%', item.resetAt ?? item.reset_at ?? item.resetTime, { amount: remaining, limitAmount: total, available: payload?.isValid ?? payload?.status === 'active' })];
     },
   },
-  mimo: {
-    request: (account, provider) => ({ url: account.endpoint || provider.requestConfig?.endpoint || 'https://platform.xiaomimimo.com/api/v1/tokenPlan/usage', auth: provider.requestConfig?.auth || 'cookie' }),
-    normalize(payload) {
-      const item = payload?.data?.monthUsage?.items?.find((row) => row.name === 'month_total_token');
-      if (!item) return [];
-      const total = numeric(item.limit);
-      const remaining = Math.max(0, total - numeric(item.used));
-      return [meter('monthly', percent(remaining, total), 100, '%', item.resetTime, { amount: remaining, limitAmount: total })];
-    },
-  },
 };
 
 const buildHeaders = (auth, credential) => {
@@ -285,7 +275,7 @@ async function queryAccount(account, provider, credential, fetcher = fetch, secr
   if (!request.url || !/^https?:\/\//i.test(request.url)) throw new Error('额度接口地址无效');
   const headers = scripted || standard ? { Accept: 'application/json', ...request.headers } : buildHeaders(request.auth, credential);
   const response = await fetcher(request.url, { method: request.method || 'GET', headers, body: request.body ? JSON.stringify(request.body) : undefined, signal: AbortSignal.timeout(15_000) });
-  if (response.status === 401 || response.status === 403) throw new Error(provider.adapter === 'mimo' ? 'Cookie 已过期' : '凭据已失效');
+  if (response.status === 401 || response.status === 403) throw new Error('凭据已失效');
   if (!response.ok) throw new Error(`额度接口返回 HTTP ${response.status}`);
   const payload = await response.json();
   if (payload?.success === false || Number(payload?.code) >= 400) {

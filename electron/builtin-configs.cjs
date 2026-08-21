@@ -25,10 +25,6 @@ const scripts = {
     request: { url: "{{endpoint}}", method: "GET", headers: { Authorization: "Bearer {{apiKey}}" } },
     extractor(response) { const item = response?.rate_limits?.find((row) => row.window === "7d") || {}; const total = Number(item.limit || 0); const used = Number(item.used || 0); const amount = Number(item.remaining ?? Math.max(0, total - used)); return { key: "weekly", remaining: total > 0 ? amount / total * 100 : 0, total: 100, unit: "%", amount, limitAmount: total, resetAt: item.reset_at ?? item.resetAt ?? item.resetTime, available: response?.isValid ?? response?.status === "active" }; }
   })`,
-  mimo: `({
-    request: { url: "{{endpoint}}", method: "GET", headers: { Cookie: "{{apiKey}}" } },
-    extractor(response) { const item = response?.data?.monthUsage?.items?.find((row) => row.name === "month_total_token"); if (!item) return []; const total = Number(item.limit || 0); const used = Number(item.used || 0); const amount = Math.max(0, total - used); return { key: "monthly", remaining: total > 0 ? amount / total * 100 : 0, total: 100, unit: "%", amount, limitAmount: total, resetAt: item.resetTime }; }
-  })`,
 };
 
 const scriptVariables = (endpoint) => [
@@ -44,7 +40,6 @@ const builtinConfigs = {
     endpoint: 'https://codex.wlbclub.com/v1/usage', windows: ['weekly'], adapterMode: 'standard', method: 'GET', auth: 'bearer', authHeader: 'Authorization', authPrefix: 'Bearer ', builtinMigration: 'wlb-standard-v1',
     responseRules: [{ listPath: 'rate_limits', collectionMode: 'array', filterPath: 'window', filterOperator: 'equals', filterValue: '7d', defaultWindow: 'weekly', totalPath: 'limit', remainingPath: 'remaining', usedPath: 'used', resetPath: 'reset_at|resetAt|resetTime', availablePath: '$root.status', unavailableValues: 'inactive|invalid|false|0', unit: '%' }],
   },
-  mimo: { endpoint: 'https://platform.xiaomimimo.com/api/v1/tokenPlan/usage', windows: ['monthly'], adapterMode: 'script', script: scripts.mimo, variables: scriptVariables('https://platform.xiaomimimo.com/api/v1/tokenPlan/usage') },
 };
 
 module.exports = { builtinConfigs };

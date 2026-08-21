@@ -2,7 +2,7 @@
   "name": "quota-desk",
   "productName": "Quota Desk",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "一个运行在桌面上的 Coding Plan 额度监控小工具",
   "author": "AloneAtWar",
   "type": "module",

@@ -60,19 +60,6 @@ export const adapterDefinitions = {
       return [windowResult('weekly', percentage(remaining, total), 100, '%', quota.resetAt, { available: payload?.isValid ?? payload?.status === 'active' })];
     },
   },
-  mimo: {
-    ...adapterRegistry.mimo,
-    normalize(payload) {
-      const item = payload?.data?.monthUsage?.items?.find((row) => row.name === 'month_total_token');
-      if (!item) return [];
-      const total = numeric(item.limit);
-      const used = numeric(item.used);
-      return [windowResult('monthly', percentage(Math.max(0, total - used), total), 100, '%', item.resetTime, {
-        amount: Math.max(0, total - used),
-        limitAmount: total,
-      })];
-    },
-  },
 };
 
 export const normalizeUsage = (adapterId, payload) => adapterDefinitions[adapterId]?.normalize(payload) || [];
