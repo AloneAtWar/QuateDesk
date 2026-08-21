@@ -3,15 +3,21 @@
   "productName": "Quota Desk",
   "private": true,
   "version": "0.1.0",
+  "description": "一个运行在桌面上的 Coding Plan 额度监控小工具",
+  "author": "AloneAtWar",
   "type": "module",
   "main": "electron/main.cjs",
+  "repository": "github:AloneAtWar/QuateDesk",
   "scripts": {
     "test": "node --test",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "desktop": "npm run build && electron .",
-    "package:win": "npm run build && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-portable.ps1"
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:linux": "npm run build && electron-builder --linux"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
@@ -21,6 +27,43 @@
     "vite": "latest"
   },
   "devDependencies": {
-    "electron": "latest"
+    "electron": "latest",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.quotadesk.app",
+    "productName": "Quota Desk",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json"
+    ],
+    "win": {
+      "target": ["nsis", "portable"],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Quota Desk"
+    },
+    "mac": {
+      "target": ["dmg", "zip"],
+      "icon": "build/icon.png",
+      "category": "public.app-category.utilities"
+    },
+    "linux": {
+      "target": ["AppImage"],
+      "icon": "build/icon.png",
+      "category": "Utility"
+    },
+    "publish": [
+      {
+        "provider": "github"
+      }
+    ]
   }
 }
