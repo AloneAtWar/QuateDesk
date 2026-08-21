@@ -54,9 +54,9 @@ const migrateProvider = (provider) => {
     ? { ...provider, requestConfig: { ...provider.requestConfig, variables: builtinConfig.variables } }
     : provider;
   const migrated = builtin ? { ...provider, baseUrl: undefined, domain: undefined, requestConfig: builtin, logo } : { ...seededVariables, baseUrl: undefined, domain: undefined, logo };
-  return provider.id === 'mimo'
-    ? { ...migrated, name: 'XiaoMi MiMo', legalName: 'XiaoMi MiMo', monogram: 'M' }
-    : migrated;
+  if (provider.id === 'mimo') return { ...migrated, name: 'XiaoMi MiMo', legalName: 'XiaoMi MiMo', monogram: 'M' };
+  if (provider.id === 'wlb') return { ...migrated, name: 'wlbclub', legalName: 'wlbclub', monogram: 'W' };
+  return migrated;
 };
 
 const migrateState = (state) => state ? {
@@ -134,12 +134,14 @@ function schedulePolling() {
 
 function createMainWindow() {
   const area = screen.getPrimaryDisplay().workArea;
-  const width = 620;
-  const height = 540;
+  const width = 520;
+  const height = 470;
   mainWindow = new BrowserWindow({
-    width, height, minWidth: 480, minHeight: 420, show: false,
-    x: Math.max(area.x, area.x + area.width - width - 10),
-    y: Math.max(area.y, area.y + area.height - height - 10),
+    width, height, minWidth: width, minHeight: height, maxWidth: width, maxHeight: height,
+    resizable: false, maximizable: false, minimizable: false, movable: true, show: false,
+    frame: false,
+    x: area.x + area.width - width,
+    y: area.y + area.height - height,
     skipTaskbar: true,
     backgroundColor: '#f3f5f1', title: 'Quota Desk', icon: loadAppIcon(), autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: preloadPath },
@@ -201,6 +203,11 @@ function createTray() {
   tray.on('double-click', () => { mainWindow?.show(); mainWindow?.focus(); });
 }
 
+const windowSummaryLabels = { five_hour: '5小时', weekly: '7天', monthly: '1个月', balance: '余额' };
+const formatWindowSummary = (windows) => (windows || [])
+  .map((item) => `${windowSummaryLabels[item.key] || item.key} ${item.unit === '%' ? `${Math.round(Number(item.remaining) || 0)}%` : `${item.amount ?? item.remaining}${item.unit ? ` ${item.unit}` : ''}`}`)
+  .join(' · ') || '没有可用额度窗口';
+
 function registerIpc() {
   ipcMain.handle('state:load', () => {
     const state = migrateState(store.loadState());
@@ -228,7 +235,7 @@ function registerIpc() {
     if (!account) throw new Error('找不到要测试的账号');
     return {
       ok: account.status === 'active',
-      message: account.status === 'active' ? `成功读取 ${account.windows.length} 个额度窗口` : account.lastError,
+      message: account.status === 'active' ? formatWindowSummary(account.windows) : account.lastError,
       checkedAt: account.lastChecked,
       state: { ...state, runtime: runtimeStatus() },
     };
@@ -236,6 +243,9 @@ function registerIpc() {
   ipcMain.handle('widget:set-visible', (_event, visible) => setWidgetVisible(Boolean(visible)));
   ipcMain.handle('widget:get-visible', () => Boolean(widgetWindow?.isVisible()));
   ipcMain.handle('window:open-main', () => { mainWindow?.show(); mainWindow?.focus(); return true; });
+  ipcMain.handle('window:toggle-pin', () => { if (!mainWindow) return false; const next = !mainWindow.isAlwaysOnTop(); mainWindow.setAlwaysOnTop(next); return next; });
+  ipcMain.handle('window:get-pin', () => Boolean(mainWindow?.isAlwaysOnTop()));
+  ipcMain.handle('window:close-main', () => { mainWindow?.hide(); return true; });
   ipcMain.on('widget:move', (_event, { deltaX, deltaY }) => {
     if (!widgetWindow || widgetWindow.isDestroyed()) return;
     const dx = Math.round(Number(deltaX) || 0);

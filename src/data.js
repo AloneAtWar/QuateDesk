@@ -43,14 +43,14 @@ export const providerCatalog = [
   { id: 'kimi', name: 'Kimi', legalName: 'Kimi for Coding', monogram: 'K', tone: 'sky', adapter: 'kimi', logo: './logos/kimi.png' },
   { id: 'zai', name: 'Z.ai', legalName: 'Z.ai / 智谱', monogram: 'Z', tone: 'violet', adapter: 'zai', logo: './logos/zai.svg' },
   { id: 'deepseek', name: 'DeepSeek', legalName: 'DeepSeek API', monogram: 'D', tone: 'blue', adapter: 'deepseek', logo: './logos/deepseek.png' },
-  { id: 'wlb', name: 'WLB', legalName: 'WLB Club', monogram: 'W', tone: 'coral', adapter: 'wlb' },
+  { id: 'wlb', name: 'wlbclub', legalName: 'wlbclub', monogram: 'W', tone: 'coral', adapter: 'wlb' },
   { id: 'mimo', name: 'XiaoMi MiMo', legalName: 'XiaoMi MiMo', monogram: 'M', tone: 'mint', adapter: 'mimo', logo: './logos/xiaomi.svg' },
 ];
 
 export const windowCatalog = {
   five_hour: { key: 'five_hour', label: '5 小时', short: '5h', group: '短周期', color: 'cyan' },
   weekly: { key: 'weekly', label: '7 天', short: '7d', group: '中周期', color: 'violet' },
-  monthly: { key: 'monthly', label: '月度', short: '月', group: '长周期', color: 'coral' },
+  monthly: { key: 'monthly', label: '1个月', short: '月', group: '长周期', color: 'coral' },
   balance: { key: 'balance', label: '余额', short: '余额', group: '余额', color: 'green' },
 };
 

@@ -276,7 +276,7 @@ const buildStandardRequest = (account, provider, credential, secretVariables = {
 
 async function queryAccount(account, provider, credential, fetcher = fetch, secretVariables = {}) {
   const config = provider.requestConfig || {};
-  const credentialRequired = config.adapterMode === 'script' ? config.credentialRequired !== false : config.auth !== 'none';
+  const credentialRequired = config.adapterMode === 'script' ? config.credentialRequired === true : config.auth !== 'none';
   if (!credential && credentialRequired) throw new Error('缺少凭据，请在账号设置中更新');
   const scripted = config.adapterMode === 'script' && config.script ? runScriptAdapter(account, provider, credential, null, secretVariables) : null;
   const standard = config.adapterMode === 'standard' ? buildStandardRequest(account, provider, credential, secretVariables) : null;
