@@ -47,6 +47,7 @@ jobs:
             !release/win-unpacked/**
             !release/linux-unpacked/**
             !release/mac*/**
+            !release/builder-debug.yml
 
   # 汇总所有平台的产物,一次性创建(非草稿)Release
   release:
