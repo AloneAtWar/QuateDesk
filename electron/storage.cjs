@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { app, safeStorage } = require('electron');
+const { appendHistoryPoint, pruneHistory } = require('./history.cjs');
 
 const readJson = (filePath, fallback) => {
   try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); }
@@ -19,10 +20,31 @@ class DesktopStore {
     const root = app.getPath('userData');
     this.statePath = path.join(root, 'state.json');
     this.credentialsPath = path.join(root, 'credentials.json');
+    this.historyPath = path.join(root, 'history.json');
   }
 
   loadState() { return readJson(this.statePath, null); }
   saveState(state) { writeJson(this.statePath, state); return state; }
+
+  // 额度历史：{ accountId: [{ at, windows: { key: { remaining, amount, unit } } }] }
+  loadHistory() { return readJson(this.historyPath, {}); }
+
+  appendHistory(accountId, windows, retentionDays) {
+    writeJson(this.historyPath, appendHistoryPoint(this.loadHistory(), accountId, windows, Date.now(), retentionDays));
+  }
+
+  getHistory(accountId, retentionDays) {
+    const history = pruneHistory(this.loadHistory(), retentionDays);
+    writeJson(this.historyPath, history);
+    return history[accountId] || [];
+  }
+
+  clearHistory() { writeJson(this.historyPath, {}); return true; }
+
+  // 删除账号后清理它的历史，同时按当前保留天数裁剪
+  pruneHistoryAccounts(accountIds, retentionDays) {
+    writeJson(this.historyPath, pruneHistory(this.loadHistory(), retentionDays, Date.now(), new Set(accountIds)));
+  }
 
   loadCredentials() { return readJson(this.credentialsPath, {}); }
 

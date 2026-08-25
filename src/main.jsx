@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  AlertCircle, Bell, Check, ChevronDown, ChevronRight, CircleGauge, Clock3, Download, Eye, LayoutGrid,
+  AlertCircle, ArrowLeft, Bell, Check, ChevronDown, ChevronRight, CircleGauge, Clock3, Download, Eye, History, LayoutGrid,
   KeyRound, Monitor, Plus, Power, RefreshCw, Rows3, Settings2, ShieldCheck, SlidersHorizontal,
   Pencil, Pin, Sparkles, SunMoon, Tag, Trash2, UploadCloud, X, Zap,
 } from 'lucide-react';
@@ -102,12 +102,13 @@ const normalizeSettings = (value = {}) => {
   const byWidth = Number(value.widgetWidth) ? Number(value.widgetWidth) / WIDGET_BASE_SIZE.width : undefined;
   return {
     alerts: true, pollMinutes: '15', widgetTagLimit: '2', reminderRules: defaultReminderRules,
-    widget: true, widgetPreview: false, theme: 'dark', widgetScale: 1, widgetLength: 1,
+    widget: true, widgetPreview: false, theme: 'dark', widgetScale: 0.9, widgetLength: 0.9, historyDays: 7,
     ...value,
     reminderRules: Array.isArray(value.reminderRules) ? value.reminderRules : defaultReminderRules,
     theme: value.theme === 'light' ? 'light' : 'dark',
-    widgetScale: clampWidgetScale(value.widgetScale ?? byWidth ?? (legacySize ? legacySize / WIDGET_BASE_SIZE.width : undefined)),
-    widgetLength: clampWidgetLength(value.widgetLength ?? 1),
+    historyDays: [3, 7, 15, 30, 60, 90].includes(Number(value.historyDays)) ? Number(value.historyDays) : 7,
+    widgetScale: clampWidgetScale(value.widgetScale ?? byWidth ?? (legacySize ? legacySize / WIDGET_BASE_SIZE.width : 0.9)),
+    widgetLength: clampWidgetLength(value.widgetLength ?? 0.9),
     widgetSize: undefined,
     widgetWidth: undefined,
     widgetHeight: undefined,
@@ -284,7 +285,7 @@ function ResetTimeline({ accounts, providers }) {
   </section>;
 }
 
-function PriorityView({ accounts, providers, reminderRules }) {
+function PriorityView({ accounts, providers, reminderRules, onOpenHistory }) {
   const [collapsed, setCollapsed] = useState({});
   const grouped = useMemo(() => {
     const byWindow = new Map();
@@ -300,7 +301,7 @@ function PriorityView({ accounts, providers, reminderRules }) {
       <div className="section-heading"><div><h2>{windowCatalog[key]?.label || key}</h2></div><span className="section-count">{rows.length} 个账号</span><button type="button" className="icon-button faint section-toggle" title={collapsed[key] ? '展开' : '收起'} onClick={() => setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }))}>{collapsed[key] ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</button></div>
       {!collapsed[key] && <div className="priority-list">{rows.map(({ account, meter }) => {
         const provider = providers.find((item) => item.id === account.providerId);
-        return <div className="priority-row" key={`${account.id}-${meter.key}`}>
+        return <div className="priority-row clickable" key={`${account.id}-${meter.key}`} role="button" tabIndex={0} title="点击查看额度趋势" onClick={() => onOpenHistory?.(account)} onKeyDown={(event) => { if (event.key === 'Enter') onOpenHistory?.(account); }}>
           <AccountIdentity account={account} provider={provider} />
           <div className="priority-meter"><div className="meter-track"><span className="meter-fill" style={{ width: `${meter.remaining}%` }} /></div><b>{formatAmount(meter)}</b></div>
           <div className="priority-reset"><Clock3 size={13} /><span>{formatReset(meter.resetAt)}</span><RuleMarks meter={meter} rules={reminderRules} /></div>
@@ -310,7 +311,7 @@ function PriorityView({ accounts, providers, reminderRules }) {
   </div>;
 }
 
-function WindowsView({ accounts, providers, reminderRules, embedded = false }) {
+function WindowsView({ accounts, providers, reminderRules, embedded = false, onOpenHistory }) {
   const sorted = useMemo(() => [...accounts].sort((a, b) => {
     const aReset = Math.min(...a.windows.map((m) => m.resetAt ? new Date(m.resetAt).getTime() : Infinity));
     const bReset = Math.min(...b.windows.map((m) => m.resetAt ? new Date(m.resetAt).getTime() : Infinity));
@@ -322,7 +323,7 @@ function WindowsView({ accounts, providers, reminderRules, embedded = false }) {
       <div className="windows-column-head"><span>账号</span><span>剩余进度</span><span>状态</span></div>
       <div className="windows-list">{sorted.map((account) => {
         const provider = providers.find((item) => item.id === account.providerId);
-        return <div className="account-window-row" key={account.id}>
+        return <div className="account-window-row clickable" key={account.id} role="button" tabIndex={0} title="点击查看额度趋势" onClick={() => onOpenHistory?.(account)} onKeyDown={(event) => { if (event.key === 'Enter') onOpenHistory?.(account); }}>
           <div className="account-side"><AccountIdentity account={account} provider={provider} /><div className={`account-status ${account.status}`}><span className="status-dot" />{account.status === 'warning' ? '需处理' : '正常'}<small>{formatChecked(account.lastChecked)}</small></div><AccountRuleMarks account={account} rules={reminderRules} /></div>
           <div className="account-meters">{account.windows.map((meter) => <MeterBar key={meter.key} meter={meter} />)}</div>
         </div>;
@@ -331,16 +332,241 @@ function WindowsView({ accounts, providers, reminderRules, embedded = false }) {
   </div>;
 }
 
-function StatusView({ accounts, providers, runtime, onTestAccount, testingAccountId, testResults, reminderRules, mode = 'rings', onModeChange, onOpenSettings, lastSync, onRefresh, refreshing }) {
+// 额度历史折线图：横轴时间、纵轴剩余额度（百分比窗口取 remaining，余额窗口取 amount），每个窗口维度一条线
+const CHART_COLORS = { five_hour: 'var(--cyan)', weekly: 'var(--violet)', monthly: 'var(--coral)', balance: 'var(--green)', gemini_pro: 'var(--sky)', gemini_flash: 'var(--cyan)', gemini_flash_lite: 'var(--green-deep)' };
+const CHART_FALLBACK_COLORS = ['var(--cyan)', 'var(--violet)', 'var(--coral)', 'var(--green)', 'var(--sky)'];
+const chartColor = (key, index) => CHART_COLORS[key] || CHART_FALLBACK_COLORS[index % CHART_FALLBACK_COLORS.length];
+const chartValue = (sample) => sample.unit === '%' ? sample.remaining : Number(sample.amount ?? sample.remaining);
+const formatChartValue = (sample, value) => sample.unit === '%' ? `${Math.round(value)}%` : `${sample.unit === 'CNY' ? '¥' : sample.unit}${Number(value).toFixed(2)}`;
+const formatChartNumber = (value) => Number.isInteger(value) ? String(value) : Number(value).toFixed(2);
+// 悬停详情：百分比之外带上具体数值（剩余 / 总量）；总量就是 100 的纯百分比窗口没有额外数值，不显示
+const formatChartDetail = (sample) => {
+  const base = formatChartValue(sample, chartValue(sample));
+  if (sample.unit !== '%' || sample.amount == null || sample.limit == null || Number(sample.limit) === 100) return base;
+  return `${base} · 剩 ${formatChartNumber(Number(sample.amount))} / ${formatChartNumber(Number(sample.limit))}`;
+};
+// 该快照点的刷新周期：重置的绝对时间 + 相对该点的倒计时
+const formatPointReset = (resetAt, pointAt) => {
+  if (!resetAt) return '';
+  const d = new Date(resetAt);
+  const absolute = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const minutes = Math.round((d.getTime() - new Date(pointAt).getTime()) / 60000);
+  if (minutes <= 0) return `重置 ${absolute}`;
+  if (minutes < 60) return `重置 ${absolute}（${minutes} 分钟后）`;
+  if (minutes < 24 * 60) return `重置 ${absolute}（${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分后）`;
+  return `重置 ${absolute}（${Math.floor(minutes / (24 * 60))} 天后）`;
+};
+// 详情条用的简短版：只要倒计时，保证一行放得下
+const formatPointResetShort = (resetAt, pointAt) => {
+  if (!resetAt) return '';
+  const minutes = Math.round((new Date(resetAt).getTime() - new Date(pointAt).getTime()) / 60000);
+  if (minutes <= 0) return '';
+  if (minutes < 60) return `${minutes} 分钟后重置`;
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分后重置`;
+  return `${Math.floor(minutes / (24 * 60))} 天后重置`;
+};
+
+function UsageChart({ points, hiddenKeys = [] }) {
+  const [hover, setHover] = useState(null);
+  // 时间轴缩放：null 表示显示全程；滚轮以光标位置为中心缩放，放大后可拖动平移
+  const [view, setView] = useState(null);
+  const svgRef = useRef(null);
+  const dragRef = useRef(null);
+  const W = 470; const H = 184;
+  const PAD = { l: 36, r: 12, t: 14, b: 24 };
+  const innerW = W - PAD.l - PAD.r;
+  const innerH = H - PAD.t - PAD.b;
+  const { allKeys, samples, allPercent, fullStart, fullEnd } = useMemo(() => {
+    const keys = [...new Set(points.flatMap((point) => Object.keys(point.windows || {})))]
+      .sort((a, b) => (durationOrder[a] || 9) - (durationOrder[b] || 9));
+    // 抽样上限放宽到 2000，滚轮放大后仍能看清细节
+    const stride = Math.max(1, Math.ceil(points.length / 2000));
+    const sampled = points.filter((_point, index) => index % stride === 0 || index === points.length - 1);
+    const percentOnly = keys.every((key) => sampled.every((point) => !point.windows?.[key] || point.windows[key].unit === '%'));
+    return {
+      allKeys: keys, samples: sampled, allPercent: percentOnly,
+      fullStart: sampled.length ? new Date(sampled[0].at).getTime() : 0,
+      fullEnd: sampled.length ? new Date(sampled[sampled.length - 1].at).getTime() : 0,
+    };
+  }, [points]);
+  // React 根节点上的 wheel 监听是 passive 的，必须自己绑非 passive 监听才能 preventDefault
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el || samples.length < 2) return undefined;
+    const onWheel = (event) => {
+      event.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const ratio = Math.min(1, Math.max(0, (((event.clientX - rect.left) / rect.width) * W - PAD.l) / innerW));
+      setView((prev) => {
+        const fullSpan = Math.max(1, fullEnd - fullStart);
+        const cur = prev || { start: fullStart, end: fullEnd };
+        const curSpan = cur.end - cur.start;
+        const factor = event.deltaY > 0 ? 1.3 : 1 / 1.3;
+        const minSpan = Math.min(fullSpan, Math.max(10 * 60_000, fullSpan / 50));
+        const nextSpan = Math.min(fullSpan, Math.max(minSpan, curSpan * factor));
+        if (Math.abs(nextSpan - curSpan) < 1000) return prev;
+        const anchor = cur.start + curSpan * ratio;
+        const nextStart = Math.min(Math.max(fullStart, anchor - nextSpan * ratio), fullEnd - nextSpan);
+        return nextSpan >= fullSpan ? null : { start: nextStart, end: nextStart + nextSpan };
+      });
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [fullStart, fullEnd, samples.length]);
+  // 图例开关：隐藏的线不参与绘制；兜底不允许全部隐藏
+  const seriesKeys = allKeys.filter((key) => !hiddenKeys.includes(key));
+  const visibleKeys = seriesKeys.length ? seriesKeys : allKeys;
+  if (!allKeys.length || !samples.length) return <div className="settings-empty chart-empty">历史记录里没有可绘制的额度窗口</div>;
+  const start = view?.start ?? fullStart;
+  const end = view?.end ?? fullEnd;
+  const span = Math.max(1, end - start);
+  const ranged = samples.filter((point) => { const at = new Date(point.at).getTime(); return at >= start && at <= end; });
+  const drawn = ranged.length ? ranged : samples;
+  const single = samples.length === 1;
+  const toX = (at) => PAD.l + (single ? innerW / 2 : ((at - start) / span) * innerW);
+  const values = drawn.flatMap((point) => visibleKeys.map((key) => point.windows?.[key]).filter(Boolean).map(chartValue));
+  const yMin = allPercent ? 0 : Math.min(...values);
+  const yMax = allPercent ? 100 : Math.max(...values);
+  const yPad = allPercent ? 0 : Math.max((yMax - yMin) * 0.15, yMax * 0.02, 1);
+  const yLo = yMin - yPad; const yHi = yMax + yPad;
+  const toY = (value) => PAD.t + (1 - (value - yLo) / Math.max(1e-9, yHi - yLo)) * innerH;
+  const paths = visibleKeys.map((key) => {
+    const segments = [];
+    let current = '';
+    for (const point of drawn) {
+      const sample = point.windows?.[key];
+      if (!sample) { if (current) { segments.push(current); current = ''; } continue; }
+      const command = `${current ? 'L' : 'M'}${toX(new Date(point.at).getTime()).toFixed(1)},${toY(chartValue(sample)).toFixed(1)}`;
+      current += command;
+    }
+    if (current) segments.push(current);
+    return { key, segments };
+  });
+  const rangeDays = span / 86_400_000;
+  const formatTick = (at) => {
+    const d = new Date(at);
+    const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    return rangeDays <= 1.5 ? hm : rangeDays <= 10 ? `${d.getMonth() + 1}/${d.getDate()} ${hm}` : `${d.getMonth() + 1}/${d.getDate()}`;
+  };
+  const xTicks = single ? [start] : [0, 1, 2, 3, 4].map((index) => start + (span * index) / 4);
+  const yTicks = [0, 1, 2, 3].map((index) => yLo + ((yHi - yLo) * index) / 3);
+  const formatYTick = (value) => allPercent ? `${Math.round(value)}%` : value >= 100 ? String(Math.round(value)) : value.toFixed(1);
+  const pickPoint = (clientX) => {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect || !drawn.length) return null;
+    const x = ((clientX - rect.left) / rect.width) * W;
+    let best = 0;
+    let bestDistance = Infinity;
+    drawn.forEach((point, index) => {
+      const distance = Math.abs(toX(new Date(point.at).getTime()) - x);
+      if (distance < bestDistance) { bestDistance = distance; best = index; }
+    });
+    return best;
+  };
+  const startPan = (event) => {
+    if (!view) return;
+    dragRef.current = { x: event.clientX, start: view.start, end: view.end };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+  const movePan = (event) => {
+    const drag = dragRef.current;
+    if (!drag) { const picked = pickPoint(event.clientX); if (picked != null) setHover(picked); return; }
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const viewSpan = drag.end - drag.start;
+    const shift = ((event.clientX - drag.x) / rect.width) * (W / innerW) * viewSpan;
+    const nextStart = Math.min(Math.max(fullStart, drag.start - shift), fullEnd - viewSpan);
+    setView({ start: nextStart, end: nextStart + viewSpan });
+    setHover(null);
+  };
+  const endPan = () => { dragRef.current = null; };
+  const hoverPoint = hover == null ? null : drawn[hover];
+  const hoverX = hoverPoint ? toX(new Date(hoverPoint.at).getTime()) : 0;
+  const hoverDate = hoverPoint ? new Date(hoverPoint.at) : null;
+  return <div className={`usage-chart ${view ? 'zoomed' : ''}`}>
+    <div className="chart-detail">{hoverPoint ? <>
+      <b>{`${hoverDate.getMonth() + 1}/${hoverDate.getDate()} ${String(hoverDate.getHours()).padStart(2, '0')}:${String(hoverDate.getMinutes()).padStart(2, '0')}`}</b>
+      {visibleKeys.map((key, index) => {
+        const sample = hoverPoint.windows?.[key];
+        if (!sample) return null;
+        const reset = formatPointResetShort(sample.resetAt, hoverPoint.at);
+        return <span className="chart-detail-item" key={key}><i style={{ background: chartColor(key, index) }} />{windowCatalog[key]?.label || key}<b>{formatChartDetail(sample)}</b>{reset && <small>{reset}</small>}</span>;
+      })}
+    </> : <span className="chart-detail-hint">悬停查看该点的数值与重置时间</span>}</div>
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} onPointerDown={startPan} onPointerMove={movePan} onPointerUp={endPan} onPointerCancel={endPan} onMouseLeave={() => { setHover(null); endPan(); }}>
+      {yTicks.map((value) => <g key={value}><line x1={PAD.l} x2={W - PAD.r} y1={toY(value)} y2={toY(value)} className="chart-grid" /><text x={PAD.l - 6} y={toY(value) + 3} className="chart-y-label">{formatYTick(value)}</text></g>)}
+      {xTicks.map((at) => <text key={Math.round(at)} x={Math.min(Math.max(toX(at), PAD.l + 16), W - PAD.r - 16)} y={H - 7} className="chart-x-label">{formatTick(at)}</text>)}
+      {paths.map((path, index) => path.segments.map((d) => <path key={`${path.key}-${d.slice(0, 12)}`} d={d} fill="none" stroke={chartColor(path.key, index)} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />))}
+      {/* 点稀疏（放大看细节）时标出每个数据点；缩小看全程时不标，悬停照样有详情 */}
+      {drawn.length <= 40 && paths.map((path, index) => drawn.map((point) => {
+        const sample = point.windows?.[path.key];
+        return sample ? <circle key={`${path.key}-${point.at}`} cx={toX(new Date(point.at).getTime())} cy={toY(chartValue(sample))} r={drawn.length === 1 ? 3 : 2} fill={chartColor(path.key, index)} /> : null;
+      }))}
+      {hoverPoint && <g>
+        <line x1={hoverX} x2={hoverX} y1={PAD.t} y2={H - PAD.b} className="chart-cursor" />
+        {visibleKeys.map((key, index) => {
+          const sample = hoverPoint.windows?.[key];
+          return sample ? <circle key={key} cx={hoverX} cy={toY(chartValue(sample))} r="3" fill={chartColor(key, index)} stroke="var(--surface)" strokeWidth="1.4" /> : null;
+        })}
+      </g>}
+    </svg>
+    {samples.length > 1 && <div className="chart-tools"><span className="chart-hint">滚轮缩放 · 放大后拖动平移</span>{view && <button type="button" className="chart-reset" onClick={() => setView(null)}>重置缩放</button>}</div>}
+  </div>;
+}
+
+function HistoryView({ account, provider, onBack }) {
+  const [points, setPoints] = useState(null);
+  const [hiddenKeys, setHiddenKeys] = useState([]);
+  useEffect(() => {
+    let active = true;
+    if (!window.quotaDesk?.getHistory) { setPoints([]); return undefined; }
+    window.quotaDesk.getHistory(account.id).then((rows) => { if (active) setPoints(rows || []); }).catch(() => { if (active) setPoints([]); });
+    return () => { active = false; };
+  }, [account.id, account.lastChecked]);
+  const legendKeys = useMemo(() => [...new Set((points || []).flatMap((point) => Object.keys(point.windows || {})))]
+    .sort((a, b) => (durationOrder[a] || 9) - (durationOrder[b] || 9)), [points]);
+  // 图例读数：每条线取它最近一次出现的值
+  const latestSamples = useMemo(() => {
+    const found = {};
+    for (const point of [...(points || [])].reverse()) {
+      for (const key of legendKeys) if (!found[key] && point.windows?.[key]) found[key] = point.windows[key];
+    }
+    return found;
+  }, [points, legendKeys]);
+  // 点击图例开关对应折线，至少保留一条
+  const toggleKey = (key) => setHiddenKeys((old) => {
+    if (old.includes(key)) return old.filter((item) => item !== key);
+    return legendKeys.length - old.length <= 1 ? old : [...old, key];
+  });
+  return <div className="view-stack history-view">
+    <section className="surface-section">
+      <div className="history-head">
+        <AccountIdentity account={account} provider={provider} />
+        <span className="section-count">{points ? `${points.length} 条记录` : '读取中…'}</span>
+      </div>
+      {points === null ? <div className="settings-empty chart-empty">正在读取历史记录…</div>
+        : points.length === 0 ? <div className="settings-empty chart-empty">暂无历史数据，每次成功刷新额度后都会记录一条</div>
+          : <UsageChart points={points} hiddenKeys={hiddenKeys} />}
+      {legendKeys.length > 0 && <div className="chart-legend">{legendKeys.map((key, index) => {
+        const sample = latestSamples[key];
+        const hidden = hiddenKeys.includes(key);
+        return <button type="button" key={key} className={hidden ? 'off' : ''} title={hidden ? '点击显示该折线' : '点击隐藏该折线'} onClick={() => toggleKey(key)}><i style={{ background: chartColor(key, index) }} />{windowCatalog[key]?.label || key}{sample && <em>{formatChartValue(sample, chartValue(sample))}</em>}</button>;
+      })}</div>}
+    </section>
+    <div className="history-foot"><button type="button" className="outline-button" onClick={onBack}><ArrowLeft size={14} /> 返回</button></div>
+  </div>;
+}
+
+function StatusView({ accounts, providers, runtime, onTestAccount, testingAccountId, testResults, reminderRules, mode = 'rings', onModeChange, onOpenSettings, lastSync, onRefresh, refreshing, onOpenHistory }) {
   const groups = { active: accounts.filter((a) => a.status === 'active'), warning: accounts.filter((a) => a.status === 'warning') };
-  if (mode === 'rows') return <div className="view-stack"><WindowsView accounts={accounts} providers={providers} reminderRules={reminderRules} embedded /></div>;
-  if (mode === 'periods') return <div className="view-stack"><PriorityView accounts={accounts} providers={providers} reminderRules={reminderRules} /></div>;
+  if (mode === 'rows') return <div className="view-stack"><WindowsView accounts={accounts} providers={providers} reminderRules={reminderRules} embedded onOpenHistory={onOpenHistory} /></div>;
+  if (mode === 'periods') return <div className="view-stack"><PriorityView accounts={accounts} providers={providers} reminderRules={reminderRules} onOpenHistory={onOpenHistory} /></div>;
   return <div className="view-stack">
     <section className="overview-grid">{[...groups.active, ...groups.warning].map((account) => {
       const provider = providers.find((item) => item.id === account.providerId);
       const feedback = testResults[account.id];
       const testing = testingAccountId === account.id;
-      return <div className={`overview-card ${account.status}`} key={account.id}><div className="overview-head"><AccountIdentity account={account} provider={provider} /><div className="card-actions"><span className={`card-status-icon ${account.status}`} title={account.status === 'warning' ? (account.lastError || '连接检查失败') : (feedback?.message || `连接正常 · ${account.windows.length} 个额度窗口`)}>{account.status === 'warning' ? <AlertCircle size={14} /> : <ShieldCheck size={14} />}</span></div></div><div className="overview-body"><ConcentricRings account={account} /><div className="overview-meters">{(() => { const desc = [...account.windows].sort((a, b) => (durationOrder[b.key] || 9) - (durationOrder[a.key] || 9)).slice(0, 4); return [...desc].reverse().map((meter) => { const detail = `${formatReset(meter.resetAt)}${formatQuotaDetail(meter) ? ` · ${formatQuotaDetail(meter)}` : ''}`; return <div className="overview-meter" key={meter.key}><span><i className={`ring-dot ring-dot-${desc.indexOf(meter)}`} />{windowCatalog[meter.key]?.label || meter.key}</span><b>{formatAmount(meter)}</b><small title={detail}>{detail}</small></div>; }); })()}</div></div></div>;
+      return <div className={`overview-card ${account.status} clickable`} key={account.id} role="button" tabIndex={0} title="点击查看额度趋势" onClick={() => onOpenHistory?.(account)} onKeyDown={(event) => { if (event.key === 'Enter') onOpenHistory?.(account); }}><div className="overview-head"><AccountIdentity account={account} provider={provider} /><div className="card-actions"><span className={`card-status-icon ${account.status}`} title={account.status === 'warning' ? (account.lastError || '连接检查失败') : (feedback?.message || `连接正常 · ${account.windows.length} 个额度窗口`)}>{account.status === 'warning' ? <AlertCircle size={14} /> : <ShieldCheck size={14} />}</span></div></div><div className="overview-body"><ConcentricRings account={account} /><div className="overview-meters">{(() => { const desc = [...account.windows].sort((a, b) => (durationOrder[b.key] || 9) - (durationOrder[a.key] || 9)).slice(0, 4); return [...desc].reverse().map((meter) => { const detail = `${formatReset(meter.resetAt)}${formatQuotaDetail(meter) ? ` · ${formatQuotaDetail(meter)}` : ''}`; return <div className="overview-meter" key={meter.key}><span><i className={`ring-dot ring-dot-${desc.indexOf(meter)}`} />{windowCatalog[meter.key]?.label || meter.key}</span><b>{formatAmount(meter)}</b><small title={detail}>{detail}</small></div>; }); })()}</div></div></div>;
     })}</section>
   </div>;
 }
@@ -349,12 +575,13 @@ function Toggle({ checked, onChange, label, description }) {
   return <label className="setting-toggle"><span><b>{label}</b><small>{description}</small></span><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /><i /></label>;
 }
 
-function SettingsDrawer({ accounts, providers, settings, setSettings, onClose, openModal, onDeleteAccount, onTestAccount, testingAccountId, onEditProvider, autoLaunch, onToggleAutoLaunch, appVersion, update, onOpenUpdate, onCheckUpdate }) {
+function SettingsDrawer({ accounts, providers, settings, setSettings, onClose, openModal, onDeleteAccount, onTestAccount, testingAccountId, onEditProvider, autoLaunch, onToggleAutoLaunch, appVersion, update, onOpenUpdate, onCheckUpdate, onClearHistory }) {
   return <><div className="drawer-shade" onClick={onClose} /><aside className="settings-drawer" aria-label="设置">
     <div className="drawer-scroll">
       <section className="drawer-section"><div className="drawer-section-title"><Bell size={16} /><span>刷新提醒规则</span><button className="mini-add" onClick={() => setSettings((old) => ({ ...old, reminderRules: [...(old.reminderRules || []), { id: `rule-${Date.now()}`, beforeMinutes: 120, minRemaining: 50 }] }))}><Plus size={14} /> 新增规则</button></div><Toggle checked={settings.alerts !== false} onChange={(value) => setSettings((old) => ({ ...old, alerts: value }))} label="启用提醒" description="关闭后不发送桌面通知，也不标记命中规则" />{(settings.reminderRules || []).length === 0 ? <div className="settings-empty">当前没有运行规则</div> : (settings.reminderRules || []).map((rule, index) => <div className="rule-editor" key={rule.id}><label><span>刷新前多久（分钟）<small>窗口重置倒计时小于该值才提醒</small></span><input type="number" min="1" value={rule.beforeMinutes} onChange={(event) => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, beforeMinutes: event.target.value } : item) }))} /></label><label><span>剩余至少（百分比）<small>剩余额度不低于该值才提醒</small></span><input type="number" min="0" max="100" value={rule.minRemaining} onChange={(event) => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, minRemaining: event.target.value } : item) }))} /></label><button className="icon-button danger rule-delete" title="删除规则" aria-label={`删除 ${rule.label || '规则'}`} onClick={() => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.filter((item) => item.id !== rule.id) }))}><Trash2 size={13} /></button></div>)}<small className="drawer-help">满足“刷新前多久”且“剩余至少”时，额度窗口会标记该规则。可以一条规则都没有。</small><div className="setting-select"><span><b>轮询间隔</b><small>所有账号统一检查频率</small></span><select value={settings.pollMinutes} onChange={(event) => setSettings((old) => ({ ...old, pollMinutes: event.target.value }))}><option value="5">5 分钟</option><option value="15">15 分钟</option><option value="30">30 分钟</option><option value="60">1 小时</option></select></div></section>
       <section className="drawer-section"><div className="drawer-section-title"><SunMoon size={16} /><span>主题</span></div><div className="setting-select"><span><b>界面主题</b><small>主窗口与桌面浮窗同步应用</small></span><select value={settings.theme === 'light' ? 'light' : 'dark'} onChange={(event) => setSettings((old) => ({ ...old, theme: event.target.value }))}><option value="dark">暗色</option><option value="light">亮色</option></select></div></section>
-      <section className="drawer-section"><div className="drawer-section-title"><Monitor size={16} /><span>桌面浮窗</span></div><Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" description="固定在桌面顶层，双击展开主窗口" /><label className="size-slider"><span>大小</span><input type="range" min={80} max={300} step={5} value={Math.round(clampWidgetScale(settings.widgetScale) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetScale: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetScale(settings.widgetScale) * 100)}%</b></label><label className="size-slider"><span>长度</span><input type="range" min={Math.round(WIDGET_MIN_LENGTH * 100)} max={Math.round(WIDGET_MAX_LENGTH * 100)} step={5} value={Math.round(clampWidgetLength(settings.widgetLength) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetLength: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetLength(settings.widgetLength) * 100)}%</b></label><small className="drawer-help">长度只调整横向宽度（60%–150%）。浮窗会展示账号的全部额度窗口（含 1M）；空间不足时逐级收起：标签先缩成小圆点再隐藏，倒计时按周期从长到短逐个隐藏，最后才收起最长周期的额度——只有一个额度窗口的账号通常不用收起任何内容。名称放不下时显示省略号，悬停可查看完整内容。</small><button type="button" className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetScale: 1, widgetLength: 1 }))}>恢复默认大小与长度</button><div className="widget-setting-preview"><div style={{ width: Math.round(WIDGET_BASE_SIZE.width * clampWidgetLength(settings.widgetLength)), maxWidth: '100%', margin: '0 auto' }}><WidgetRow account={accounts[0]} provider={providers.find((item) => item.id === accounts[0]?.providerId)} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} /></div></div><button className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetPreview: true }))}><Eye size={15} /> 预览并调整</button></section>
+      <section className="drawer-section"><div className="drawer-section-title"><Monitor size={16} /><span>桌面浮窗</span></div><Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" description="固定在桌面顶层，双击展开主窗口" /><label className="size-slider"><span>大小</span><input type="range" min={80} max={300} step={5} value={Math.round(clampWidgetScale(settings.widgetScale) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetScale: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetScale(settings.widgetScale) * 100)}%</b></label><label className="size-slider"><span>长度</span><input type="range" min={Math.round(WIDGET_MIN_LENGTH * 100)} max={Math.round(WIDGET_MAX_LENGTH * 100)} step={5} value={Math.round(clampWidgetLength(settings.widgetLength) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetLength: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetLength(settings.widgetLength) * 100)}%</b></label><small className="drawer-help">长度只调整横向宽度（60%–150%）。浮窗会展示账号的全部额度窗口（含 1M）；空间不足时逐级收起：标签先缩成小圆点再隐藏，倒计时按周期从长到短逐个隐藏，最后才收起最长周期的额度——只有一个额度窗口的账号通常不用收起任何内容。名称放不下时显示省略号，悬停可查看完整内容。</small><button type="button" className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetScale: 0.9, widgetLength: 0.9 }))}>恢复默认大小与长度</button><div className="widget-setting-preview"><div style={{ width: Math.round(WIDGET_BASE_SIZE.width * clampWidgetLength(settings.widgetLength)), maxWidth: '100%', margin: '0 auto' }}><WidgetRow account={accounts[0]} provider={providers.find((item) => item.id === accounts[0]?.providerId)} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} /></div></div><button className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetPreview: true }))}><Eye size={15} /> 预览并调整</button></section>
+      <section className="drawer-section"><div className="drawer-section-title"><History size={16} /><span>额度历史</span></div><div className="setting-select"><span><b>保留时长</b><small>每次成功刷新都会记录一条，用于账号卡片的趋势图</small></span><select value={settings.historyDays} onChange={(event) => setSettings((old) => ({ ...old, historyDays: Number(event.target.value) }))}><option value={3}>3 天</option><option value={7}>7 天（默认）</option><option value={15}>15 天</option><option value={30}>30 天</option><option value={60}>60 天</option><option value={90}>3 个月（最长）</option></select></div><button className="outline-button full" onClick={onClearHistory}><Trash2 size={14} /> 清除全部历史记录</button><small className="drawer-help">删除账号时会一并删除该账号的额度历史；超过保留时长的记录会自动清理。</small></section>
       <section className="drawer-section"><div className="drawer-section-title"><ShieldCheck size={16} /><span>账号与凭据</span><button className="mini-add" onClick={() => openModal('account')}><Plus size={14} /> 添加账号</button></div><div className="settings-list">{accounts.length === 0 && <div className="settings-empty">还没有账号</div>}{accounts.map((account) => { const provider = providers.find((item) => item.id === account.providerId); const testing = testingAccountId === account.id; return <div className="settings-account" key={account.id}><Logo provider={provider} size="sm" /><div><b title={account.name}>{account.name}</b><small className={account.status === 'warning' ? 'warning-copy' : ''} title={account.status === 'warning' ? (account.lastError || '') : ''}>{account.status === 'warning' ? account.lastError : `${provider?.name} · ${account.windows.length} 个额度窗口`}</small></div><button className="row-icon-button" title="编辑账号" aria-label={`编辑 ${account.name}`} onClick={() => openModal({ type: 'account-edit', account })}><Pencil size={13} /></button><button className="row-icon-button" disabled={testing} title="刷新" aria-label={`刷新 ${account.name} 额度`} onClick={() => onTestAccount(account)}><RefreshCw size={13} className={testing ? 'spinning' : ''} /></button><button className="row-icon-button danger" title="删除账号" aria-label={`删除 ${account.name}`} onClick={() => onDeleteAccount(account)}><Trash2 size={13} /></button><span className={`status-dot ${account.status}`} /></div>; })}</div>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button full drawer-import-button" onClick={() => openModal('import-ccswitch')}><Download size={14} /> 从 cc-switch 导入账号</button>}</section>
       <section className="drawer-section"><div className="drawer-section-title"><LayoutGrid size={16} /><span>厂商适配器</span><button className="mini-add" onClick={() => openModal('provider')}><Plus size={14} /> 新增厂商</button></div><div className="settings-list providers-list">{providers.map((provider) => <div className="settings-account" key={provider.id}><Logo provider={provider} size="sm" /><div><b title={provider.name}>{provider.name}</b><small>{provider.requestConfig?.adapterMode === 'script' ? '脚本适配' : provider.requestConfig?.adapterMode === 'grok' ? '专属适配' : '标准映射'}</small></div><button className="row-icon-button" title="编辑厂商" aria-label={`编辑 ${provider.name}`} onClick={() => onEditProvider(provider)}><Pencil size={13} /></button><span className="adapter-state"><Check size={13} /></span></div>)}</div></section>
       <section className="drawer-section"><div className="drawer-section-title"><Power size={16} /><span>系统与更新</span></div><Toggle checked={autoLaunch} onChange={onToggleAutoLaunch} label="开机自启" description="登录 Windows 后自动启动 Quota Desk" /><Toggle checked={settings.autoUpdate !== false} onChange={(value) => setSettings((old) => ({ ...old, autoUpdate: value }))} label="自动检查更新" description="启动时检查 GitHub 上是否有新版本" /><div className="setting-select"><span><b>版本更新</b><small>当前版本 v{appVersion || '-'}</small></span>{update && ['available', 'downloading', 'downloaded'].includes(update.status) ? <button className="outline-button" onClick={onOpenUpdate}>v{update.version} 可用</button> : <button className="outline-button" disabled={update?.status === 'checking'} onClick={onCheckUpdate}>{update?.status === 'checking' ? '正在检查…' : '检查更新'}</button>}</div></section>
@@ -375,35 +602,49 @@ function WidgetRow({ account, provider, compact = false, tagLimit = 2, length = 
   const hasTag = tagLimit > 0 && (account?.tags || []).length > 0;
   const fullFit = useMemo(() => ({ tagMode: hasTag ? 2 : 0, smallHidden: 0, drop: 0, squeeze: false }), [hasTag]);
   const [fit, setFit] = useState(fullFit);
-  const [nameFloor, setNameFloor] = useState(64);
+  // 名称区域宽度下限：名称最多 64px（≈8 个字符），标签单独占位，二者分开计算
+  const [blockFloor, setBlockFloor] = useState({ name: 64, tag: 0 });
   const rowRef = useRef(null);
   const metersRef = useRef(null);
   const marqueeRef = useRef(null);
+  const nameRef = useRef(null);
   const tagsRef = useRef(null);
   // 长度 / 账号 / 子项数量变化时恢复完整展示，再按实际宽度重新逐级收起
   const fitKey = `${length}|${account?.id}|${account?.lastChecked}|${allMeters.length}|${hasTag}`;
   const fitKeyRef = useRef(fitKey);
   useLayoutEffect(() => {
-    // 名称区域的宽度下限按名称实际长度动态计算（最多 64px ≈ 8 个字符），短名称不多占空间；
-    // 下限变化后先应用再判断溢出，避免幻影占位误触发收起
-    const marqueeWidth = marqueeRef.current ? marqueeRef.current.scrollWidth : 0;
-    const tagWidth = fit.tagMode > 0 && tagsRef.current ? tagsRef.current.offsetWidth : 0;
-    const floor = Math.min(64, Math.ceil(marqueeWidth + tagWidth + (tagWidth ? 4 : 0)));
-    if (floor !== nameFloor) { setNameFloor(floor); return; }
-    if (fitKeyRef.current !== fitKey) { fitKeyRef.current = fitKey; setFit(fullFit); return; }
+    const measure = () => {
+      // 下限变化后先应用再判断溢出，避免幻影占位误触发收起
+      const nameLimit = Math.min(64, Math.ceil(marqueeRef.current ? marqueeRef.current.scrollWidth : 0));
+      const tagWidth = fit.tagMode > 0 && tagsRef.current ? Math.ceil(tagsRef.current.offsetWidth) + 4 : 0;
+      if (nameLimit !== blockFloor.name || tagWidth !== blockFloor.tag) { setBlockFloor({ name: nameLimit, tag: tagWidth }); return; }
+      if (fitKeyRef.current !== fitKey) { fitKeyRef.current = fitKey; setFit(fullFit); return; }
+      const row = rowRef.current;
+      if (!row) return;
+      // 芯片容器会被 flex 压缩而自身不撑开 row，所以 row 和芯片容器都要检查是否溢出
+      const meters = metersRef.current;
+      const overflowing = row.scrollWidth > row.clientWidth + 1 || Boolean(meters && meters.scrollWidth > meters.clientWidth + 1);
+      // 省略号模式下名称被标签挤到截断也算排不下，但只用于收标签；长名称本身允许省略号截断
+      const marqueeOn = fit.smallHidden === 0 && fit.drop === 0 && fit.tagMode === fullFit.tagMode && length >= 0.98;
+      const nameEl = nameRef.current;
+      const nameCramped = !marqueeOn && Boolean(nameEl && nameEl.scrollWidth > nameEl.clientWidth + 1);
+      if (!overflowing && !nameCramped) return;
+      setFit((prev) => {
+        if (hasTag && prev.tagMode > 0) return { ...prev, tagMode: prev.tagMode - 1 };
+        if (!overflowing) return prev;
+        if (prev.smallHidden < allMeters.length) return { ...prev, smallHidden: prev.smallHidden + 1 };
+        if (prev.drop < allMeters.length - 1) return { ...prev, drop: prev.drop + 1 };
+        if (!prev.squeeze) return { ...prev, squeeze: true };
+        return prev;
+      });
+    };
+    measure();
+    // 窗口被主进程 setBounds 改变尺寸时不经过 React 渲染，靠 ResizeObserver 补一次测量
     const row = rowRef.current;
-    if (!row) return;
-    // 芯片容器会被 flex 压缩而自身不撑开 row，所以 row 和芯片容器都要检查是否溢出
-    const meters = metersRef.current;
-    const overflowing = row.scrollWidth > row.clientWidth + 1 || Boolean(meters && meters.scrollWidth > meters.clientWidth + 1);
-    if (!overflowing) return;
-    setFit((prev) => {
-      if (hasTag && prev.tagMode > 0) return { ...prev, tagMode: prev.tagMode - 1 };
-      if (prev.smallHidden < allMeters.length) return { ...prev, smallHidden: prev.smallHidden + 1 };
-      if (prev.drop < allMeters.length - 1) return { ...prev, drop: prev.drop + 1 };
-      if (!prev.squeeze) return { ...prev, squeeze: true };
-      return prev;
-    });
+    if (!row || typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(measure);
+    observer.observe(row);
+    return () => observer.disconnect();
   });
   if (!account) return null;
   // 周期越长越先收起（1M → 7d → 5h），倒计时逐个隐藏，额度窗口至少保留一个
@@ -415,7 +656,7 @@ function WidgetRow({ account, provider, compact = false, tagLimit = 2, length = 
   const pristine = fit.smallHidden === 0 && fit.drop === 0 && fit.tagMode === fullFit.tagMode;
   const marquee = pristine && length >= 0.98;
   const classes = ['widget-row', compact && 'compact', fit.tagMode === 1 && 'tag-dot', fit.squeeze && 'squeeze', !marquee && 'ellipsis'].filter(Boolean).join(' ');
-  return <div className={classes} ref={rowRef} title={account.lastError || account.name} onDoubleClick={onDoubleClick}><Logo provider={provider} size="sm" interactive={false} /><div className="widget-account-block" style={{ minWidth: fit.squeeze ? 0 : nameFloor }}><span className="widget-account-marquee" ref={marqueeRef}><span className="widget-account">{account.name}</span></span>{fit.tagMode > 0 && <span className="widget-tags" ref={tagsRef}>{(account.tags || []).slice(0, 1).map((tag) => <em key={tag} title={tag}>{tag}</em>)}</span>}</div><div className="widget-meters" ref={metersRef}>{visibleMeters.length ? visibleMeters.map((meter) => <span className={`widget-meter ${meter.available === false ? 'off' : ''} ${smallHiddenKeys.has(meter.key) ? 'hide-reset' : ''}`} key={meter.key}><b>{windowCatalog[meter.key]?.short}</b><em>{formatAmount(meter)}</em><small>{formatResetCompact(meter.resetAt)}</small></span>) : <span className="widget-empty">等待同步</span>}</div><span className={`widget-live ${account.status === 'warning' ? 'warning' : ''}`}><i /></span></div>;
+  return <div className={classes} ref={rowRef} title={account.lastError || account.name} onDoubleClick={onDoubleClick}><Logo provider={provider} size="sm" interactive={false} /><div className="widget-account-block" style={{ minWidth: fit.squeeze ? 0 : blockFloor.name + blockFloor.tag }}><span className="widget-account-marquee" ref={marqueeRef}><span className="widget-account" ref={nameRef}>{account.name}</span></span>{fit.tagMode > 0 && <span className="widget-tags" ref={tagsRef}>{(account.tags || []).slice(0, 1).map((tag) => <em key={tag} title={tag}>{tag}</em>)}</span>}</div><div className="widget-meters" ref={metersRef}>{visibleMeters.length ? visibleMeters.map((meter) => <span className={`widget-meter ${meter.available === false ? 'off' : ''} ${smallHiddenKeys.has(meter.key) ? 'hide-reset' : ''}`} key={meter.key}><b>{windowCatalog[meter.key]?.short}</b><em>{formatAmount(meter)}</em><small>{formatResetCompact(meter.resetAt)}</small></span>) : <span className="widget-empty">等待同步</span>}</div><span className={`widget-live ${account.status === 'warning' ? 'warning' : ''}`}><i /></span></div>;
 }
 
 function WidgetPreview({ account, provider, onClose, tagLimit = 2, scale = 1, length = 1 }) {
@@ -777,6 +1018,8 @@ function App() {
   };
   const toggleAutoLaunch = async (value) => { if (bridge?.setAutoLaunch) setAutoLaunch(await bridge.setAutoLaunch(value)); };
   const [overviewMode, setOverviewMode] = useState('rings');
+  // 额度历史折线图视图：点账号卡片进入，返回按钮或右上角视图切换退出
+  const [historyAccountId, setHistoryAccountId] = useState(null);
   const [accounts, setAccounts] = useState(bridge ? [] : initialAccounts);
   const [providers, setProviders] = useState(providerCatalog);
   const [settings, setSettings] = useState(() => normalizeSettings({}));
@@ -938,7 +1181,7 @@ function App() {
     setModal(null);
   };
   const deleteAccount = async (account) => {
-    if (!window.confirm(`删除账号“${account.name}”及其本地凭据？`)) return;
+    if (!window.confirm(`删除账号“${account.name}”及其本地凭据与额度历史？`)) return;
     const nextAccounts = accounts.filter((item) => item.id !== account.id);
     if (bridge) {
       await bridge.deleteCredential(account.id);
@@ -946,7 +1189,13 @@ function App() {
       lastSaved.current = JSON.stringify(state);
       await bridge.saveState(state);
     }
+    if (historyAccountId === account.id) setHistoryAccountId(null);
     setAccounts(nextAccounts);
+  };
+  const clearHistory = async () => {
+    if (!window.confirm('清除所有账号已保存的额度历史记录？该操作不可恢复。')) return;
+    if (bridge) await bridge.clearHistory?.().catch(() => {});
+    setToast({ id: Date.now(), ok: true, message: '额度历史记录已清除' });
   };
   const saveProvider = async (draft) => {
     const id = draft.id || draft.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || `provider-${Date.now()}`;
@@ -960,14 +1209,15 @@ function App() {
     setModal(null);
   };
   const editProvider = (provider) => setModal({ type: 'provider-edit', provider });
+  const historyAccount = historyAccountId ? accounts.find((item) => item.id === historyAccountId) : null;
 
   return <div className="app-shell">
-    <header className="titlebar"><span className="titlebar-drag"><img src="./quota-desk.svg" alt="" /><b>Quota Desk</b></span><div className="titlebar-controls"><span className="last-checked" title="最后一次额度检查时间"><Clock3 size={11} />{formatChecked(lastSync)}</span>{update && ['available', 'downloading', 'downloaded', 'error'].includes(update.status) && <button className={`update-badge ${update.status}`} onClick={() => setUpdateOpen(true)} title="查看版本更新"><Download size={11} />{update.status === 'available' && `v${update.version} 可更新`}{update.status === 'downloading' && `下载中 ${update.percent || 0}%`}{update.status === 'downloaded' && '重启升级'}{update.status === 'error' && '更新失败'}</button>}<button className="control-solo" onClick={refreshAll} disabled={refreshing} title="立即刷新全部账号" aria-label="立即刷新全部账号"><RefreshCw size={13} className={refreshing ? 'spinning' : ''} /></button><div className="overview-controls" aria-label="账号总览展示方式"><button className={overviewMode === 'rings' ? 'active' : ''} onClick={() => setOverviewMode('rings')} title="账号总览" aria-label="账号总览"><CircleGauge size={13} /></button><button className={overviewMode === 'rows' ? 'active' : ''} onClick={() => setOverviewMode('rows')} title="行式明细" aria-label="行式明细"><Rows3 size={13} /></button><button className={overviewMode === 'periods' ? 'active' : ''} onClick={() => setOverviewMode('periods')} title="周期明细" aria-label="周期明细"><Clock3 size={13} /></button></div></div><div className="titlebar-actions"><button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={13} /></button>{bridge && <><button className={pinned ? 'active' : ''} title={pinned ? '取消固定' : '固定在桌面最前面'} aria-label="固定在桌面最前面" onClick={async () => setPinned(await bridge.togglePin())}><Pin size={13} /></button><button title="关闭到托盘" aria-label="关闭到托盘" onClick={() => bridge.closeMainWindow()}><X size={14} /></button></>}</div></header>
+    <header className="titlebar"><span className="titlebar-drag"><img src="./quota-desk.svg" alt="" /><b>Quota Desk</b></span><div className="titlebar-controls"><span className="last-checked" title="最后一次额度检查时间"><Clock3 size={11} />{formatChecked(lastSync)}</span>{update && ['available', 'downloading', 'downloaded', 'error'].includes(update.status) && <button className={`update-badge ${update.status}`} onClick={() => setUpdateOpen(true)} title="查看版本更新"><Download size={11} />{update.status === 'available' && `v${update.version} 可更新`}{update.status === 'downloading' && `下载中 ${update.percent || 0}%`}{update.status === 'downloaded' && '重启升级'}{update.status === 'error' && '更新失败'}</button>}<button className="control-solo" onClick={refreshAll} disabled={refreshing} title="立即刷新全部账号" aria-label="立即刷新全部账号"><RefreshCw size={13} className={refreshing ? 'spinning' : ''} /></button><div className="overview-controls" aria-label="账号总览展示方式"><button className={overviewMode === 'rings' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rings'); }} title="账号总览" aria-label="账号总览"><CircleGauge size={13} /></button><button className={overviewMode === 'rows' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rows'); }} title="行式明细" aria-label="行式明细"><Rows3 size={13} /></button><button className={overviewMode === 'periods' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('periods'); }} title="周期明细" aria-label="周期明细"><Clock3 size={13} /></button></div></div><div className="titlebar-actions"><button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={13} /></button>{bridge && <><button className={pinned ? 'active' : ''} title={pinned ? '取消固定' : '固定在桌面最前面'} aria-label="固定在桌面最前面" onClick={async () => setPinned(await bridge.togglePin())}><Pin size={13} /></button><button title="关闭到托盘" aria-label="关闭到托盘" onClick={() => bridge.closeMainWindow()}><X size={14} /></button></>}</div></header>
     {toast && <div className={`toast ${toast.ok ? 'ok' : 'fail'}`} role="status">{toast.ok ? <Check size={13} /> : <AlertCircle size={13} />}<span>{toast.message}</span></div>}
     <main className="main-shell">
-      <div className="content-area">{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{accounts.length === 0 ? <section className="empty-workspace"><div className="empty-mark"><CircleGauge size={22} /></div><div><span className="eyebrow">从一个账号开始</span><h2>把第一份 Coding Plan 接进来</h2><p>凭据将由 Windows 加密保存，额度请求只在本机发出。</p></div><button className="primary-button" onClick={() => setModal('account')}><Plus size={15} /> 添加账号</button><button className="outline-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> 设置</button>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button" onClick={() => setModal('import-ccswitch')}><Download size={15} /> 从 cc-switch 导入</button>}</section> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} />}</div>
+      <div className="content-area">{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{accounts.length === 0 ? <section className="empty-workspace"><div className="empty-mark"><CircleGauge size={22} /></div><div><span className="eyebrow">从一个账号开始</span><h2>把第一份 Coding Plan 接进来</h2><p>凭据将由 Windows 加密保存，额度请求只在本机发出。</p></div><button className="primary-button" onClick={() => setModal('account')}><Plus size={15} /> 添加账号</button><button className="outline-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> 设置</button>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button" onClick={() => setModal('import-ccswitch')}><Download size={15} /> 从 cc-switch 导入</button>}</section> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} />}</div>
     </main>
-    {settingsOpen && <SettingsDrawer accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)} openModal={setModal} onDeleteAccount={deleteAccount} onTestAccount={testAccount} testingAccountId={testingAccountId} onEditProvider={editProvider} autoLaunch={autoLaunch} onToggleAutoLaunch={toggleAutoLaunch} appVersion={appVersion} update={update} onOpenUpdate={() => setUpdateOpen(true)} onCheckUpdate={onCheckUpdate} />}
+    {settingsOpen && <SettingsDrawer accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)} openModal={setModal} onDeleteAccount={deleteAccount} onTestAccount={testAccount} testingAccountId={testingAccountId} onEditProvider={editProvider} autoLaunch={autoLaunch} onToggleAutoLaunch={toggleAutoLaunch} appVersion={appVersion} update={update} onOpenUpdate={() => setUpdateOpen(true)} onCheckUpdate={onCheckUpdate} onClearHistory={clearHistory} />}
     {updateOpen && update && <UpdateModal update={update} version={appVersion} onClose={() => setUpdateOpen(false)} />}
     {settings.widgetPreview && <WidgetPreview account={currentWidgetAccount} provider={currentWidgetProvider} tagLimit={Number(settings.widgetTagLimit ?? 2)} scale={settings.widgetScale} length={settings.widgetLength} onClose={() => setSettings((old) => ({ ...old, widgetPreview: false }))} />}
     {modal === 'account' && <AccountModalV2 providers={providers} onClose={() => setModal(null)} onSave={saveAccount} />}

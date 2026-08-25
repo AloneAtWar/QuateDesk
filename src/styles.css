@@ -505,3 +505,50 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 /* 厂商弹窗 New API 模板预设 */
 .preset-grid { grid-template-columns: auto 1fr; align-items: center; margin: 0 0 14px; }
 .preset-hint { color: var(--faint); font-size: 10px; }
+/* 额度历史折线图 */
+.overview-card.clickable { cursor: pointer; transition: border-color .18s ease; }
+.overview-card.clickable:hover { border-color: var(--hover-border); }
+.history-view { gap: 12px; }
+.history-view .surface-section { padding-bottom: 4px; }
+.history-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px 10px; border-bottom: 1px solid var(--line); }
+.history-head .account-identity { flex: 1; min-width: 0; }
+.back-button { flex: 0 0 auto; width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-soft); background: var(--control); }
+.back-button:hover { color: var(--ink); border-color: var(--hover-border); }
+.usage-chart { position: relative; padding: 10px 8px 2px; }
+.usage-chart svg { display: block; width: 100%; height: auto; }
+.chart-grid { stroke: var(--line-inner); stroke-width: 1; }
+.chart-y-label, .chart-x-label { fill: var(--faint); font-size: 9px; font-family: 'DM Mono', monospace; }
+.chart-y-label { text-anchor: end; }
+.chart-x-label { text-anchor: middle; }
+.chart-cursor { stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart-detail { display: flex; align-items: center; gap: 14px; min-height: 22px; margin: 0 6px 4px; padding: 3px 8px; border: 1px solid var(--line-inner); border-radius: 7px; background: var(--surface-2); overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+.chart-detail::-webkit-scrollbar { display: none; }
+.chart-detail > b { flex: 0 0 auto; color: var(--muted); font-size: 10px; font-weight: 600; }
+.chart-detail-item { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; font-size: 10px; color: var(--ink-soft); }
+.chart-detail-item b { color: var(--ink); font-weight: 700; }
+.chart-detail-item small { color: var(--faint); font-size: 9px; }
+.chart-detail-hint { color: var(--faint); font-size: 10px; }
+.chart-detail i, .chart-legend i { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 4px 18px 8px; border-top: 1px solid var(--line-inner); }
+.chart-legend span { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; color: var(--muted); }
+.chart-legend em { font-style: normal; font-weight: 700; color: var(--ink); }
+.chart-empty { padding: 34px 16px; }
+
+/* 浮窗省略号模式下解除名称块宽度上限：让内容撑满以便检测溢出，标签先于名称被收起 */
+.widget-row.ellipsis .widget-account-block { max-width: none; }
+/* 名称优先：空间不足时标签先被压缩省略，而不是账号名 */
+.account-title-line .tag-pill { flex: 0 4 auto; min-width: 14px; overflow: hidden; text-overflow: ellipsis; }
+/* 行式/周期视图的账号行可点击进入趋势图 */
+.account-window-row.clickable, .priority-row.clickable { cursor: pointer; }
+/* 历史视图底部返回（在卡片外，左对齐） */
+.history-foot { display: flex; padding: 0 2px; }
+.usage-chart.zoomed svg { cursor: grab; }
+.usage-chart.zoomed svg:active { cursor: grabbing; }
+.chart-tools { display: flex; align-items: center; justify-content: space-between; padding: 0 12px 4px; min-height: 18px; }
+.chart-hint { color: var(--faint); font-size: 9px; }
+.chart-reset { border: 1px solid var(--line); border-radius: 5px; padding: 2px 8px; color: var(--ink-soft); background: var(--control); font-size: 9px; }
+.chart-reset:hover { color: var(--ink); border-color: var(--hover-border); }
+.chart-legend button { display: inline-flex; align-items: center; gap: 6px; border: 0; padding: 2px 0; color: var(--muted); background: transparent; font-size: 10px; cursor: pointer; }
+.chart-legend button:hover { color: var(--ink); }
+.chart-legend button.off { opacity: .38; }
+.chart-legend button em { font-style: normal; font-weight: 700; color: var(--ink); }

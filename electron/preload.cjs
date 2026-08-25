@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('quotaDesk', {
   deleteCredential: (accountId) => ipcRenderer.invoke('credential:delete', accountId),
   pollAll: () => ipcRenderer.invoke('quota:poll-all'),
   pollAccount: (accountId) => ipcRenderer.invoke('quota:poll-account', accountId),
+  getHistory: (accountId) => ipcRenderer.invoke('history:get', accountId),
+  clearHistory: () => ipcRenderer.invoke('history:clear'),
   testAccount: (accountId) => ipcRenderer.invoke('quota:test-account', accountId),
   setWidgetVisible: (visible) => ipcRenderer.invoke('widget:set-visible', visible),
   getWidgetVisible: () => ipcRenderer.invoke('widget:get-visible'),

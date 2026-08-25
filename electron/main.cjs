@@ -3,6 +3,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { DesktopStore } = require('./storage.cjs');
 const { queryAccount } = require('./poller.cjs');
+const { clampRetentionDays } = require('./history.cjs');
 const { builtinConfigs } = require('./builtin-configs.cjs');
 const { scanCcswitch } = require('./ccswitch.cjs');
 
@@ -35,17 +36,19 @@ const clampWidgetLength = (value) => {
   const length = Math.round(Number(value) * 20) / 20;
   return Number.isFinite(length) ? Math.min(WIDGET_MAX_LENGTH, Math.max(WIDGET_MIN_LENGTH, length)) : 1;
 };
-const widgetWindowSize = (scale, length = 1) => ({ width: Math.round(WIDGET_BASE_SIZE.width * scale * clampWidgetLength(length)), height: Math.round(WIDGET_BASE_SIZE.height * scale) });
-// 兼容旧设置：小/中/大档位与像素宽高都折算成比例
+const widgetWindowSize = (scale, length = 0.9) => ({ width: Math.round(WIDGET_BASE_SIZE.width * scale * clampWidgetLength(length)), height: Math.round(WIDGET_BASE_SIZE.height * scale) });
+// 兼容旧设置：小/中/大档位与像素宽高都折算成比例；新装默认 90%
 const savedWidgetScale = () => {
   const settings = store?.loadState()?.settings || {};
   const legacyWidth = { small: 240, medium: 280, large: 336 }[settings.widgetSize];
   const byWidth = Number(settings.widgetWidth) ? Number(settings.widgetWidth) / WIDGET_BASE_SIZE.width : undefined;
-  return clampWidgetScale(settings.widgetScale ?? byWidth ?? (legacyWidth ? legacyWidth / WIDGET_BASE_SIZE.width : undefined));
+  return clampWidgetScale(settings.widgetScale ?? byWidth ?? (legacyWidth ? legacyWidth / WIDGET_BASE_SIZE.width : 0.9));
 };
 let widgetScale = 1;
-const savedWidgetLength = () => clampWidgetLength(store?.loadState()?.settings?.widgetLength ?? 1);
+const savedWidgetLength = () => clampWidgetLength(store?.loadState()?.settings?.widgetLength ?? 0.9);
 let widgetLength = 1;
+// 额度历史保留天数：默认 7 天，最长 3 个月（90 天）
+const historyRetentionDays = () => clampRetentionDays(store?.loadState()?.settings?.historyDays);
 // 界面主题：默认暗色，主窗口与浮窗的底色保持一致避免闪白/闪黑
 const themeColors = (theme) => (theme === 'light'
   ? { main: '#f3f5f1', widget: '#eef1ec' }
@@ -262,6 +265,7 @@ async function pollState(accountIds = null) {
       const checkedAt = new Date().toISOString();
       const updated = { ...account, windows, status: 'active', lastError: null, lastChecked: checkedAt, lastTestAt: checkedAt };
       nextAccounts.push(updated);
+      store.appendHistory(account.id, windows, historyRetentionDays());
       notifyWaste(current, updated, provider);
     } catch (error) {
       const checkedAt = new Date().toISOString();
@@ -412,6 +416,8 @@ function registerIpc() {
   });
   ipcMain.handle('state:save', (_event, state) => {
     const saved = store.saveState(cleanState(state));
+    // 账号被删除时连同它的额度历史一起清掉
+    store.pruneHistoryAccounts((saved.accounts || []).map((account) => account.id), historyRetentionDays());
     schedulePolling();
     sendState(saved);
     refreshTray();
@@ -428,6 +434,8 @@ function registerIpc() {
   ipcMain.handle('credential:delete', (_event, accountId) => store.deleteCredential(accountId));
   ipcMain.handle('quota:poll-all', () => pollState());
   ipcMain.handle('quota:poll-account', (_event, accountId) => pollState([accountId]));
+  ipcMain.handle('history:get', (_event, accountId) => store.getHistory(String(accountId || ''), historyRetentionDays()));
+  ipcMain.handle('history:clear', () => store.clearHistory());
   ipcMain.handle('quota:test-account', async (_event, accountId) => {
     const state = await pollState([accountId]);
     const account = state.accounts.find((item) => item.id === accountId);
