@@ -82,7 +82,7 @@ export const providerCatalog = [
 export const windowCatalog = {
   five_hour: { key: 'five_hour', label: '5 小时', short: '5h', group: '短周期', color: 'cyan' },
   weekly: { key: 'weekly', label: '7 天', short: '7d', group: '中周期', color: 'violet' },
-  monthly: { key: 'monthly', label: '1个月', short: '月', group: '长周期', color: 'coral' },
+  monthly: { key: 'monthly', label: '1个月', short: '1M', group: '长周期', color: 'coral' },
   balance: { key: 'balance', label: '余额', short: '余额', group: '余额', color: 'green' },
   gemini_pro: { key: 'gemini_pro', label: 'Gemini Pro', short: 'Pro', group: 'Gemini', color: 'sky' },
   gemini_flash: { key: 'gemini_flash', label: 'Gemini Flash', short: 'Flash', group: 'Gemini', color: 'cyan' },

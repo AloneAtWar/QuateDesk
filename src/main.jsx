@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   AlertCircle, Bell, Check, ChevronDown, ChevronRight, CircleGauge, Clock3, Download, Eye, LayoutGrid,
@@ -84,21 +84,30 @@ const ruleMatches = (meter, rule) => {
 };
 const defaultReminderRules = [{ id: 'soon', label: '即将刷新且额度充足', beforeMinutes: 120, minRemaining: 50 }];
 // 浮窗整体等比缩放：窗口尺寸和内容（字体/图标/间距）按同一个比例放大缩小
-const WIDGET_BASE_SIZE = { width: 280, height: 52 };
+// 基准宽度保证默认大小下名称 + 标签 + 全部额度窗口（含 1M）都能完整放下，不做任何隐藏
+const WIDGET_BASE_SIZE = { width: 350, height: 52 };
 const clampWidgetScale = (value) => {
   const scale = Math.round(Number(value) * 20) / 20;
   return Number.isFinite(scale) ? Math.min(3, Math.max(0.8, scale)) : 1;
+};
+// 浮窗长度：只拉伸/压缩横向长度，高度跟随“大小”不变；最短保证额度芯片完整显示
+const WIDGET_MIN_LENGTH = 0.6;
+const WIDGET_MAX_LENGTH = 1.5;
+const clampWidgetLength = (value) => {
+  const length = Math.round(Number(value) * 20) / 20;
+  return Number.isFinite(length) ? Math.min(WIDGET_MAX_LENGTH, Math.max(WIDGET_MIN_LENGTH, length)) : 1;
 };
 const normalizeSettings = (value = {}) => {
   const legacySize = { small: 240, medium: 280, large: 336 }[value.widgetSize];
   const byWidth = Number(value.widgetWidth) ? Number(value.widgetWidth) / WIDGET_BASE_SIZE.width : undefined;
   return {
     alerts: true, pollMinutes: '15', widgetTagLimit: '2', reminderRules: defaultReminderRules,
-    widget: true, widgetPreview: false, theme: 'dark', widgetScale: 1,
+    widget: true, widgetPreview: false, theme: 'dark', widgetScale: 1, widgetLength: 1,
     ...value,
     reminderRules: Array.isArray(value.reminderRules) ? value.reminderRules : defaultReminderRules,
     theme: value.theme === 'light' ? 'light' : 'dark',
     widgetScale: clampWidgetScale(value.widgetScale ?? byWidth ?? (legacySize ? legacySize / WIDGET_BASE_SIZE.width : undefined)),
+    widgetLength: clampWidgetLength(value.widgetLength ?? 1),
     widgetSize: undefined,
     widgetWidth: undefined,
     widgetHeight: undefined,
@@ -340,33 +349,79 @@ function Toggle({ checked, onChange, label, description }) {
   return <label className="setting-toggle"><span><b>{label}</b><small>{description}</small></span><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /><i /></label>;
 }
 
-function SettingsDrawer({ accounts, providers, settings, setSettings, onClose, openModal, onDeleteAccount, onTestAccount, testingAccountId, onEditProvider, autoLaunch, onToggleAutoLaunch, appVersion, update, onOpenUpdate }) {
+function SettingsDrawer({ accounts, providers, settings, setSettings, onClose, openModal, onDeleteAccount, onTestAccount, testingAccountId, onEditProvider, autoLaunch, onToggleAutoLaunch, appVersion, update, onOpenUpdate, onCheckUpdate }) {
   return <><div className="drawer-shade" onClick={onClose} /><aside className="settings-drawer" aria-label="设置">
     <div className="drawer-scroll">
       <section className="drawer-section"><div className="drawer-section-title"><Bell size={16} /><span>刷新提醒规则</span><button className="mini-add" onClick={() => setSettings((old) => ({ ...old, reminderRules: [...(old.reminderRules || []), { id: `rule-${Date.now()}`, beforeMinutes: 120, minRemaining: 50 }] }))}><Plus size={14} /> 新增规则</button></div><Toggle checked={settings.alerts !== false} onChange={(value) => setSettings((old) => ({ ...old, alerts: value }))} label="启用提醒" description="关闭后不发送桌面通知，也不标记命中规则" />{(settings.reminderRules || []).length === 0 ? <div className="settings-empty">当前没有运行规则</div> : (settings.reminderRules || []).map((rule, index) => <div className="rule-editor" key={rule.id}><label><span>刷新前多久（分钟）<small>窗口重置倒计时小于该值才提醒</small></span><input type="number" min="1" value={rule.beforeMinutes} onChange={(event) => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, beforeMinutes: event.target.value } : item) }))} /></label><label><span>剩余至少（百分比）<small>剩余额度不低于该值才提醒</small></span><input type="number" min="0" max="100" value={rule.minRemaining} onChange={(event) => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, minRemaining: event.target.value } : item) }))} /></label><button className="icon-button danger rule-delete" title="删除规则" aria-label={`删除 ${rule.label || '规则'}`} onClick={() => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.filter((item) => item.id !== rule.id) }))}><Trash2 size={13} /></button></div>)}<small className="drawer-help">满足“刷新前多久”且“剩余至少”时，额度窗口会标记该规则。可以一条规则都没有。</small><div className="setting-select"><span><b>轮询间隔</b><small>所有账号统一检查频率</small></span><select value={settings.pollMinutes} onChange={(event) => setSettings((old) => ({ ...old, pollMinutes: event.target.value }))}><option value="5">5 分钟</option><option value="15">15 分钟</option><option value="30">30 分钟</option><option value="60">1 小时</option></select></div></section>
       <section className="drawer-section"><div className="drawer-section-title"><SunMoon size={16} /><span>主题</span></div><div className="setting-select"><span><b>界面主题</b><small>主窗口与桌面浮窗同步应用</small></span><select value={settings.theme === 'light' ? 'light' : 'dark'} onChange={(event) => setSettings((old) => ({ ...old, theme: event.target.value }))}><option value="dark">暗色</option><option value="light">亮色</option></select></div></section>
-      <section className="drawer-section"><div className="drawer-section-title"><Monitor size={16} /><span>桌面浮窗</span></div><Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" description="固定在桌面顶层，双击展开主窗口" /><label className="size-slider"><span>大小</span><input type="range" min={80} max={300} step={5} value={Math.round(clampWidgetScale(settings.widgetScale) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetScale: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetScale(settings.widgetScale) * 100)}%</b></label><button type="button" className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetScale: 1 }))}>恢复默认大小</button><div className="widget-setting-preview"><WidgetRow account={accounts[0]} provider={providers.find((item) => item.id === accounts[0]?.providerId)} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} /></div><button className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetPreview: true }))}><Eye size={15} /> 预览并调整</button></section>
+      <section className="drawer-section"><div className="drawer-section-title"><Monitor size={16} /><span>桌面浮窗</span></div><Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" description="固定在桌面顶层，双击展开主窗口" /><label className="size-slider"><span>大小</span><input type="range" min={80} max={300} step={5} value={Math.round(clampWidgetScale(settings.widgetScale) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetScale: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetScale(settings.widgetScale) * 100)}%</b></label><label className="size-slider"><span>长度</span><input type="range" min={Math.round(WIDGET_MIN_LENGTH * 100)} max={Math.round(WIDGET_MAX_LENGTH * 100)} step={5} value={Math.round(clampWidgetLength(settings.widgetLength) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetLength: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetLength(settings.widgetLength) * 100)}%</b></label><small className="drawer-help">长度只调整横向宽度（60%–150%）。浮窗会展示账号的全部额度窗口（含 1M）；空间不足时逐级收起：标签先缩成小圆点再隐藏，倒计时按周期从长到短逐个隐藏，最后才收起最长周期的额度——只有一个额度窗口的账号通常不用收起任何内容。名称放不下时显示省略号，悬停可查看完整内容。</small><button type="button" className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetScale: 1, widgetLength: 1 }))}>恢复默认大小与长度</button><div className="widget-setting-preview"><div style={{ width: Math.round(WIDGET_BASE_SIZE.width * clampWidgetLength(settings.widgetLength)), maxWidth: '100%', margin: '0 auto' }}><WidgetRow account={accounts[0]} provider={providers.find((item) => item.id === accounts[0]?.providerId)} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} /></div></div><button className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetPreview: true }))}><Eye size={15} /> 预览并调整</button></section>
       <section className="drawer-section"><div className="drawer-section-title"><ShieldCheck size={16} /><span>账号与凭据</span><button className="mini-add" onClick={() => openModal('account')}><Plus size={14} /> 添加账号</button></div><div className="settings-list">{accounts.length === 0 && <div className="settings-empty">还没有账号</div>}{accounts.map((account) => { const provider = providers.find((item) => item.id === account.providerId); const testing = testingAccountId === account.id; return <div className="settings-account" key={account.id}><Logo provider={provider} size="sm" /><div><b title={account.name}>{account.name}</b><small className={account.status === 'warning' ? 'warning-copy' : ''} title={account.status === 'warning' ? (account.lastError || '') : ''}>{account.status === 'warning' ? account.lastError : `${provider?.name} · ${account.windows.length} 个额度窗口`}</small></div><button className="row-icon-button" title="编辑账号" aria-label={`编辑 ${account.name}`} onClick={() => openModal({ type: 'account-edit', account })}><Pencil size={13} /></button><button className="row-icon-button" disabled={testing} title="刷新" aria-label={`刷新 ${account.name} 额度`} onClick={() => onTestAccount(account)}><RefreshCw size={13} className={testing ? 'spinning' : ''} /></button><button className="row-icon-button danger" title="删除账号" aria-label={`删除 ${account.name}`} onClick={() => onDeleteAccount(account)}><Trash2 size={13} /></button><span className={`status-dot ${account.status}`} /></div>; })}</div>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button full drawer-import-button" onClick={() => openModal('import-ccswitch')}><Download size={14} /> 从 cc-switch 导入账号</button>}</section>
       <section className="drawer-section"><div className="drawer-section-title"><LayoutGrid size={16} /><span>厂商适配器</span><button className="mini-add" onClick={() => openModal('provider')}><Plus size={14} /> 新增厂商</button></div><div className="settings-list providers-list">{providers.map((provider) => <div className="settings-account" key={provider.id}><Logo provider={provider} size="sm" /><div><b title={provider.name}>{provider.name}</b><small>{provider.requestConfig?.adapterMode === 'script' ? '脚本适配' : provider.requestConfig?.adapterMode === 'grok' ? '专属适配' : '标准映射'}</small></div><button className="row-icon-button" title="编辑厂商" aria-label={`编辑 ${provider.name}`} onClick={() => onEditProvider(provider)}><Pencil size={13} /></button><span className="adapter-state"><Check size={13} /></span></div>)}</div></section>
-      <section className="drawer-section"><div className="drawer-section-title"><Power size={16} /><span>系统与更新</span></div><Toggle checked={autoLaunch} onChange={onToggleAutoLaunch} label="开机自启" description="登录 Windows 后自动启动 Quota Desk" /><Toggle checked={settings.autoUpdate !== false} onChange={(value) => setSettings((old) => ({ ...old, autoUpdate: value }))} label="自动检查更新" description="启动时检查 GitHub 上是否有新版本" /><div className="setting-select"><span><b>版本更新</b><small>当前版本 v{appVersion || '-'}</small></span>{update && ['available', 'downloading', 'downloaded'].includes(update.status) ? <button className="outline-button" onClick={onOpenUpdate}>v{update.version} 可用</button> : <button className="outline-button" onClick={() => window.quotaDesk?.checkForUpdates()}>检查更新</button>}</div></section>
+      <section className="drawer-section"><div className="drawer-section-title"><Power size={16} /><span>系统与更新</span></div><Toggle checked={autoLaunch} onChange={onToggleAutoLaunch} label="开机自启" description="登录 Windows 后自动启动 Quota Desk" /><Toggle checked={settings.autoUpdate !== false} onChange={(value) => setSettings((old) => ({ ...old, autoUpdate: value }))} label="自动检查更新" description="启动时检查 GitHub 上是否有新版本" /><div className="setting-select"><span><b>版本更新</b><small>当前版本 v{appVersion || '-'}</small></span>{update && ['available', 'downloading', 'downloaded'].includes(update.status) ? <button className="outline-button" onClick={onOpenUpdate}>v{update.version} 可用</button> : <button className="outline-button" disabled={update?.status === 'checking'} onClick={onCheckUpdate}>{update?.status === 'checking' ? '正在检查…' : '检查更新'}</button>}</div></section>
     </div>
   </aside></>;
 }
 
-// 浮窗等比缩放容器：布局尺寸按比例反向缩小，再用 transform 放大，视觉上正好铺满窗口
-function WidgetScaledRow({ scale = 1, children }) {
-  return <div className="widget-scale-layer"><div className="widget-scale-frame" style={{ width: WIDGET_BASE_SIZE.width - 8 / scale, height: WIDGET_BASE_SIZE.height - 8 / scale, transform: `scale(${scale})` }}>{children}</div></div>;
+// 浮窗等比缩放容器：布局尺寸按比例反向缩小，再用 transform 放大，视觉上正好铺满窗口；长度只影响横向布局宽度
+function WidgetScaledRow({ scale = 1, length = 1, children }) {
+  return <div className="widget-scale-layer"><div className="widget-scale-frame" style={{ width: WIDGET_BASE_SIZE.width * clampWidgetLength(length) - 8 / scale, height: WIDGET_BASE_SIZE.height - 8 / scale, transform: `scale(${scale})` }}>{children}</div></div>;
 }
 
-function WidgetRow({ account, provider, compact = false, tagLimit = 2, onDoubleClick }) {
+// 浮窗内容自适应：账号的全部额度窗口（含 1M）都参与展示，按实际渲染宽度判断是否排得下；
+// 排不下时按 标签缩圆点 → 隐藏标签 → 逐个隐藏倒计时（最长周期先收）→ 收起草长周期额度 → 压缩名称宽度 逐级收起。
+// 只有一个额度窗口的账号通常无需收起任何内容；名称放不下时用省略号截断（悬停显示完整名称）。
+function WidgetRow({ account, provider, compact = false, tagLimit = 2, length = 1, onDoubleClick }) {
+  const allMeters = account?.windows || [];
+  const hasTag = tagLimit > 0 && (account?.tags || []).length > 0;
+  const fullFit = useMemo(() => ({ tagMode: hasTag ? 2 : 0, smallHidden: 0, drop: 0, squeeze: false }), [hasTag]);
+  const [fit, setFit] = useState(fullFit);
+  const [nameFloor, setNameFloor] = useState(64);
+  const rowRef = useRef(null);
+  const metersRef = useRef(null);
+  const marqueeRef = useRef(null);
+  const tagsRef = useRef(null);
+  // 长度 / 账号 / 子项数量变化时恢复完整展示，再按实际宽度重新逐级收起
+  const fitKey = `${length}|${account?.id}|${account?.lastChecked}|${allMeters.length}|${hasTag}`;
+  const fitKeyRef = useRef(fitKey);
+  useLayoutEffect(() => {
+    // 名称区域的宽度下限按名称实际长度动态计算（最多 64px ≈ 8 个字符），短名称不多占空间；
+    // 下限变化后先应用再判断溢出，避免幻影占位误触发收起
+    const marqueeWidth = marqueeRef.current ? marqueeRef.current.scrollWidth : 0;
+    const tagWidth = fit.tagMode > 0 && tagsRef.current ? tagsRef.current.offsetWidth : 0;
+    const floor = Math.min(64, Math.ceil(marqueeWidth + tagWidth + (tagWidth ? 4 : 0)));
+    if (floor !== nameFloor) { setNameFloor(floor); return; }
+    if (fitKeyRef.current !== fitKey) { fitKeyRef.current = fitKey; setFit(fullFit); return; }
+    const row = rowRef.current;
+    if (!row) return;
+    // 芯片容器会被 flex 压缩而自身不撑开 row，所以 row 和芯片容器都要检查是否溢出
+    const meters = metersRef.current;
+    const overflowing = row.scrollWidth > row.clientWidth + 1 || Boolean(meters && meters.scrollWidth > meters.clientWidth + 1);
+    if (!overflowing) return;
+    setFit((prev) => {
+      if (hasTag && prev.tagMode > 0) return { ...prev, tagMode: prev.tagMode - 1 };
+      if (prev.smallHidden < allMeters.length) return { ...prev, smallHidden: prev.smallHidden + 1 };
+      if (prev.drop < allMeters.length - 1) return { ...prev, drop: prev.drop + 1 };
+      if (!prev.squeeze) return { ...prev, squeeze: true };
+      return prev;
+    });
+  });
   if (!account) return null;
-  const visibleMeters = (account.windows || []).slice(0, 2);
-  return <div className={`widget-row ${compact ? 'compact' : ''}`} title={account.lastError || account.name} onDoubleClick={onDoubleClick}><Logo provider={provider} size="sm" interactive={false} /><div className="widget-account-block"><span className="widget-account-marquee"><span className="widget-account">{account.name}</span></span>{tagLimit > 0 && <span className="widget-tags">{(account.tags || []).slice(0, 1).map((tag) => <em key={tag}>{tag}</em>)}</span>}</div><div className="widget-meters">{visibleMeters.length ? visibleMeters.map((meter) => <span className={`widget-meter ${meter.available === false ? 'off' : ''}`} key={meter.key}><b>{windowCatalog[meter.key]?.short}</b><em>{formatAmount(meter)}</em><small>{formatResetCompact(meter.resetAt)}</small></span>) : <span className="widget-empty">等待同步</span>}</div><span className={`widget-live ${account.status === 'warning' ? 'warning' : ''}`}><i /></span></div>;
+  // 周期越长越先收起（1M → 7d → 5h），倒计时逐个隐藏，额度窗口至少保留一个
+  const dropPriority = [...allMeters].sort((a, b) => (durationOrder[b.key] || 9) - (durationOrder[a.key] || 9));
+  const smallHiddenKeys = new Set(dropPriority.slice(0, fit.smallHidden).map((meter) => meter.key));
+  const droppedKeys = new Set(dropPriority.slice(0, fit.drop).map((meter) => meter.key));
+  const visibleMeters = allMeters.filter((meter) => !droppedKeys.has(meter.key));
+  // 完整展示且有富余空间时名称保留跑马灯滚动；有任何收起或长度变短时切换为省略号截断
+  const pristine = fit.smallHidden === 0 && fit.drop === 0 && fit.tagMode === fullFit.tagMode;
+  const marquee = pristine && length >= 0.98;
+  const classes = ['widget-row', compact && 'compact', fit.tagMode === 1 && 'tag-dot', fit.squeeze && 'squeeze', !marquee && 'ellipsis'].filter(Boolean).join(' ');
+  return <div className={classes} ref={rowRef} title={account.lastError || account.name} onDoubleClick={onDoubleClick}><Logo provider={provider} size="sm" interactive={false} /><div className="widget-account-block" style={{ minWidth: fit.squeeze ? 0 : nameFloor }}><span className="widget-account-marquee" ref={marqueeRef}><span className="widget-account">{account.name}</span></span>{fit.tagMode > 0 && <span className="widget-tags" ref={tagsRef}>{(account.tags || []).slice(0, 1).map((tag) => <em key={tag} title={tag}>{tag}</em>)}</span>}</div><div className="widget-meters" ref={metersRef}>{visibleMeters.length ? visibleMeters.map((meter) => <span className={`widget-meter ${meter.available === false ? 'off' : ''} ${smallHiddenKeys.has(meter.key) ? 'hide-reset' : ''}`} key={meter.key}><b>{windowCatalog[meter.key]?.short}</b><em>{formatAmount(meter)}</em><small>{formatResetCompact(meter.resetAt)}</small></span>) : <span className="widget-empty">等待同步</span>}</div><span className={`widget-live ${account.status === 'warning' ? 'warning' : ''}`}><i /></span></div>;
 }
 
-function WidgetPreview({ account, provider, onClose, tagLimit = 2, scale = 1 }) {
+function WidgetPreview({ account, provider, onClose, tagLimit = 2, scale = 1, length = 1 }) {
   const clamped = clampWidgetScale(scale);
-  return <div className="widget-preview-layer"><div className="widget-preview-head"><span><Monitor size={14} /> 浮窗预览</span><button className="icon-button" onClick={onClose} aria-label="关闭预览"><X size={15} /></button></div><div className="widget-preview-window" style={{ width: Math.round(WIDGET_BASE_SIZE.width * clamped), height: Math.round(WIDGET_BASE_SIZE.height * clamped) }}><WidgetScaledRow scale={clamped}><WidgetRow account={account} provider={provider} compact tagLimit={tagLimit} /></WidgetScaledRow></div></div>;
+  const clampedLength = clampWidgetLength(length);
+  return <div className="widget-preview-layer"><div className="widget-preview-head"><span><Monitor size={14} /> 浮窗预览</span><button className="icon-button" onClick={onClose} aria-label="关闭预览"><X size={15} /></button></div><div className="widget-preview-window" style={{ width: Math.round(WIDGET_BASE_SIZE.width * clamped * clampedLength), height: Math.round(WIDGET_BASE_SIZE.height * clamped) }}><WidgetScaledRow scale={clamped} length={clampedLength}><WidgetRow account={account} provider={provider} compact tagLimit={tagLimit} length={clampedLength} /></WidgetScaledRow></div></div>;
 }
 
 function AccountModal({ providers, onClose, onSave }) {
@@ -622,10 +677,10 @@ function WidgetApp() {
   const cycleAccount = (direction) => { lastWheelAt.current = Date.now(); setIndex((value) => (value + direction + Math.max(accounts.length, 1)) % Math.max(accounts.length, 1)); };
   const account = accounts[index % Math.max(accounts.length, 1)];
   const provider = providers.find((item) => item.id === account?.providerId);
-  const startDrag = (event) => { dragRef.current = { active: true, moved: false, x: event.screenX, y: event.screenY }; event.currentTarget.setPointerCapture?.(event.pointerId); };
+  const startDrag = (event) => { if (event.button !== 0) return; dragRef.current = { active: true, moved: false, x: event.screenX, y: event.screenY }; event.currentTarget.setPointerCapture?.(event.pointerId); };
   const moveDrag = (event) => { const drag = dragRef.current; if (!drag.active) return; const deltaX = event.screenX - drag.x; const deltaY = event.screenY - drag.y; if (!deltaX && !deltaY) return; drag.moved ||= Math.abs(deltaX) + Math.abs(deltaY) > 2; drag.x = event.screenX; drag.y = event.screenY; window.quotaDesk?.moveWidget(deltaX, deltaY); };
   const stopDrag = () => { dragRef.current.active = false; };
-  return <div className="widget-window-shell" title="拖动移动，双击展开，滚轮切换账号" onWheel={(event) => cycleAccount(event.deltaY > 0 ? 1 : -1)} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag} onDoubleClick={() => { if (!dragRef.current.moved) window.quotaDesk?.openMainWindow(); }}><WidgetScaledRow scale={clampWidgetScale(settings.widgetScale)}><WidgetRow account={account} provider={provider} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} /></WidgetScaledRow></div>;
+  return <div className="widget-window-shell" title="拖动移动，双击展开，滚轮切换账号，右键打开菜单" onWheel={(event) => cycleAccount(event.deltaY > 0 ? 1 : -1)} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag} onDoubleClick={() => { if (!dragRef.current.moved) window.quotaDesk?.openMainWindow(); }}><WidgetScaledRow scale={clampWidgetScale(settings.widgetScale)} length={clampWidgetLength(settings.widgetLength)}><WidgetRow account={account} provider={provider} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} /></WidgetScaledRow></div>;
 }
 
 function ImportCcswitchModal({ onClose, onApplied }) {
@@ -706,8 +761,20 @@ function App() {
     bridge.getUpdateStatus?.().then((status) => status && setUpdate(status)).catch(() => {});
     bridge.getVersion?.().then(setAppVersion).catch(() => {});
     bridge.getAutoLaunch?.().then(setAutoLaunch).catch(() => {});
-    return bridge.onUpdateStatus?.((status) => setUpdate(status));
+    return bridge.onUpdateStatus?.((status) => {
+      setUpdate(status);
+      // 手动点击“检查更新”的反馈：有更新弹窗、无更新/失败弹 toast；自动检查不打扰
+      if (!status?.manual) return;
+      if (status.status === 'available') setUpdateOpen(true);
+      else if (status.status === 'none') setToast({ id: Date.now(), ok: true, message: '当前已是最新版本' });
+      else if (status.status === 'error') setToast({ id: Date.now(), ok: false, message: status.message || '检查更新失败，请检查网络后重试' });
+    });
   }, [bridge]);
+  const onCheckUpdate = async () => {
+    if (!bridge?.checkForUpdates) return;
+    const ok = await bridge.checkForUpdates();
+    if (ok === false) setToast({ id: Date.now(), ok: false, message: '当前环境不支持检查更新（仅打包后的应用可用）' });
+  };
   const toggleAutoLaunch = async (value) => { if (bridge?.setAutoLaunch) setAutoLaunch(await bridge.setAutoLaunch(value)); };
   const [overviewMode, setOverviewMode] = useState('rings');
   const [accounts, setAccounts] = useState(bridge ? [] : initialAccounts);
@@ -779,7 +846,7 @@ function App() {
   useEffect(() => { if (bridge && hydrated.current) bridge.setWidgetVisible(Boolean(settings.widget)).catch((error) => setDesktopError(error.message)); }, [settings.widget]);
   useEffect(() => { document.documentElement.dataset.theme = settings.theme === 'light' ? 'light' : 'dark'; }, [settings.theme]);
   useEffect(() => { if (bridge && hydrated.current) bridge.setTheme?.(settings.theme === 'light' ? 'light' : 'dark').catch(() => {}); }, [settings.theme]);
-  useEffect(() => { if (bridge && hydrated.current) bridge.setWidgetSize?.(clampWidgetScale(settings.widgetScale)).catch(() => {}); }, [settings.widgetScale]);
+  useEffect(() => { if (bridge && hydrated.current) bridge.setWidgetSize?.({ scale: clampWidgetScale(settings.widgetScale), length: clampWidgetLength(settings.widgetLength) }).catch(() => {}); }, [settings.widgetScale, settings.widgetLength]);
 
   const currentWidgetAccount = accounts[widgetIndex % Math.max(accounts.length, 1)];
   const currentWidgetProvider = providers.find((item) => item.id === currentWidgetAccount?.providerId);
@@ -900,9 +967,9 @@ function App() {
     <main className="main-shell">
       <div className="content-area">{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{accounts.length === 0 ? <section className="empty-workspace"><div className="empty-mark"><CircleGauge size={22} /></div><div><span className="eyebrow">从一个账号开始</span><h2>把第一份 Coding Plan 接进来</h2><p>凭据将由 Windows 加密保存，额度请求只在本机发出。</p></div><button className="primary-button" onClick={() => setModal('account')}><Plus size={15} /> 添加账号</button><button className="outline-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> 设置</button>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button" onClick={() => setModal('import-ccswitch')}><Download size={15} /> 从 cc-switch 导入</button>}</section> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} />}</div>
     </main>
-    {settingsOpen && <SettingsDrawer accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)} openModal={setModal} onDeleteAccount={deleteAccount} onTestAccount={testAccount} testingAccountId={testingAccountId} onEditProvider={editProvider} autoLaunch={autoLaunch} onToggleAutoLaunch={toggleAutoLaunch} appVersion={appVersion} update={update} onOpenUpdate={() => setUpdateOpen(true)} />}
+    {settingsOpen && <SettingsDrawer accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)} openModal={setModal} onDeleteAccount={deleteAccount} onTestAccount={testAccount} testingAccountId={testingAccountId} onEditProvider={editProvider} autoLaunch={autoLaunch} onToggleAutoLaunch={toggleAutoLaunch} appVersion={appVersion} update={update} onOpenUpdate={() => setUpdateOpen(true)} onCheckUpdate={onCheckUpdate} />}
     {updateOpen && update && <UpdateModal update={update} version={appVersion} onClose={() => setUpdateOpen(false)} />}
-    {settings.widgetPreview && <WidgetPreview account={currentWidgetAccount} provider={currentWidgetProvider} tagLimit={Number(settings.widgetTagLimit ?? 2)} scale={settings.widgetScale} onClose={() => setSettings((old) => ({ ...old, widgetPreview: false }))} />}
+    {settings.widgetPreview && <WidgetPreview account={currentWidgetAccount} provider={currentWidgetProvider} tagLimit={Number(settings.widgetTagLimit ?? 2)} scale={settings.widgetScale} length={settings.widgetLength} onClose={() => setSettings((old) => ({ ...old, widgetPreview: false }))} />}
     {modal === 'account' && <AccountModalV2 providers={providers} onClose={() => setModal(null)} onSave={saveAccount} />}
     {modal?.type === 'account-edit' && <AccountEditModalV2 account={modal.account} provider={providers.find((item) => item.id === modal.account.providerId)} onClose={() => setModal(null)} onSave={updateAccount} />}
     {modal?.type === 'credential' && <CredentialModalV2 account={modal.account} provider={providers.find((item) => item.id === modal.account.providerId)} onClose={() => setModal(null)} onSave={updateCredential} />}

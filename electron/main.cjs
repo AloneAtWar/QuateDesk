@@ -23,12 +23,19 @@ const sentReminders = new Set();
 // 小控件整体等比缩放：一个比例因子同时决定窗口像素尺寸和内容缩放（渲染端 transform）。
 // Windows 显示缩放非 100% 时，反复 setPosition 会因 DIP/物理像素换算误差把窗口
 // 越拖越大，所以拖动时也必须用固定宽高走 setBounds。
-const WIDGET_BASE_SIZE = { width: 280, height: 52 };
+const WIDGET_BASE_SIZE = { width: 350, height: 52 };
 const clampWidgetScale = (value) => {
   const scale = Math.round(Number(value) * 20) / 20;
   return Number.isFinite(scale) ? Math.min(3, Math.max(0.8, scale)) : 1;
 };
-const widgetWindowSize = (scale) => ({ width: Math.round(WIDGET_BASE_SIZE.width * scale), height: Math.round(WIDGET_BASE_SIZE.height * scale) });
+// 浮窗长度：在等比缩放之外单独调整横向长度（高度不变），最短也要保证额度芯片完整显示
+const WIDGET_MIN_LENGTH = 0.6;
+const WIDGET_MAX_LENGTH = 1.5;
+const clampWidgetLength = (value) => {
+  const length = Math.round(Number(value) * 20) / 20;
+  return Number.isFinite(length) ? Math.min(WIDGET_MAX_LENGTH, Math.max(WIDGET_MIN_LENGTH, length)) : 1;
+};
+const widgetWindowSize = (scale, length = 1) => ({ width: Math.round(WIDGET_BASE_SIZE.width * scale * clampWidgetLength(length)), height: Math.round(WIDGET_BASE_SIZE.height * scale) });
 // 兼容旧设置：小/中/大档位与像素宽高都折算成比例
 const savedWidgetScale = () => {
   const settings = store?.loadState()?.settings || {};
@@ -37,6 +44,8 @@ const savedWidgetScale = () => {
   return clampWidgetScale(settings.widgetScale ?? byWidth ?? (legacyWidth ? legacyWidth / WIDGET_BASE_SIZE.width : undefined));
 };
 let widgetScale = 1;
+const savedWidgetLength = () => clampWidgetLength(store?.loadState()?.settings?.widgetLength ?? 1);
+let widgetLength = 1;
 // 界面主题：默认暗色，主窗口与浮窗的底色保持一致避免闪白/闪黑
 const themeColors = (theme) => (theme === 'light'
   ? { main: '#f3f5f1', widget: '#eef1ec' }
@@ -97,18 +106,33 @@ const sendUpdateStatus = (patch) => {
   }
 };
 
+// 网络连接异常（DNS、断网、超时等）导致的检查失败不算“更新失败”
+const UPDATE_NETWORK_ERROR = /net::|ERR_INTERNET|ERR_NAME|ERR_CONNECTION|ERR_ADDRESS|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNREFUSED|ECONNRESET|ECONNABORTED|getaddrinfo|time(?:d)?\s*out|network|socket hang up|unable to connect|网络|无法连接/i;
+// 手动检查（设置页/托盘点击“检查更新”）需要明确反馈；自动检查遇到网络异常时静默处理
+let manualUpdateCheck = false;
+
 function setupAutoUpdater() {
   if (!autoUpdater) return;
-  autoUpdater.on('checking-for-update', () => sendUpdateStatus({ status: 'checking' }));
-  autoUpdater.on('update-available', (info) => sendUpdateStatus({ status: 'available', version: info.version, releaseNotes: normalizeReleaseNotes(info.releaseNotes), percent: 0, message: '' }));
-  autoUpdater.on('update-not-available', () => sendUpdateStatus({ status: 'none' }));
-  autoUpdater.on('download-progress', (progress) => sendUpdateStatus({ status: 'downloading', percent: Math.round(progress.percent || 0) }));
-  autoUpdater.on('update-downloaded', (info) => sendUpdateStatus({ status: 'downloaded', version: info.version || updateStatus.version, percent: 100 }));
-  autoUpdater.on('error', (error) => sendUpdateStatus({ status: 'error', message: error?.message || '检查更新失败' }));
+  autoUpdater.on('checking-for-update', () => sendUpdateStatus({ status: 'checking', manual: manualUpdateCheck }));
+  autoUpdater.on('update-available', (info) => sendUpdateStatus({ status: 'available', version: info.version, releaseNotes: normalizeReleaseNotes(info.releaseNotes), percent: 0, message: '', manual: manualUpdateCheck }));
+  autoUpdater.on('update-not-available', () => sendUpdateStatus({ status: 'none', manual: manualUpdateCheck }));
+  autoUpdater.on('download-progress', (progress) => sendUpdateStatus({ status: 'downloading', percent: Math.round(progress.percent || 0), manual: manualUpdateCheck }));
+  autoUpdater.on('update-downloaded', (info) => sendUpdateStatus({ status: 'downloaded', version: info.version || updateStatus.version, percent: 100, manual: manualUpdateCheck }));
+  autoUpdater.on('error', (error) => {
+    const raw = error?.message || '';
+    const networkError = UPDATE_NETWORK_ERROR.test(raw);
+    if (networkError && !manualUpdateCheck) {
+      // 后台自动检查遇到网络异常：回到空闲状态，不展示“更新失败”
+      sendUpdateStatus({ status: 'idle', message: '', manual: false });
+      return;
+    }
+    sendUpdateStatus({ status: 'error', manual: manualUpdateCheck, message: networkError ? '网络连接异常，无法检查更新，请稍后重试' : (raw || '检查更新失败') });
+  });
 }
 
-function checkForUpdates() {
+function checkForUpdates(manual = false) {
   if (!autoUpdater) return false;
+  manualUpdateCheck = manual;
   autoUpdater.checkForUpdates().catch(() => {});
   return true;
 }
@@ -288,23 +312,30 @@ function createWidgetWindow() {
   const display = screen.getPrimaryDisplay();
   const { width, height } = display.workAreaSize;
   widgetScale = savedWidgetScale();
-  const size = widgetWindowSize(widgetScale);
+  widgetLength = savedWidgetLength();
+  const size = widgetWindowSize(widgetScale, widgetLength);
   widgetWindow = new BrowserWindow({
     width: size.width, height: size.height, x: Math.max(0, width - size.width - 16), y: Math.max(0, height - size.height - 14),
-    minWidth: widgetWindowSize(0.8).width, maxWidth: widgetWindowSize(3).width, minHeight: widgetWindowSize(0.8).height, maxHeight: widgetWindowSize(1.5).height,
+    minWidth: widgetWindowSize(0.8, WIDGET_MIN_LENGTH).width, maxWidth: widgetWindowSize(3, WIDGET_MAX_LENGTH).width, minHeight: widgetWindowSize(0.8).height, maxHeight: widgetWindowSize(1.5).height,
     frame: false, resizable: false, movable: true, skipTaskbar: true, alwaysOnTop: true, show: false,
     backgroundColor: themeColors(savedTheme()).widget, title: 'Quota Desk 浮窗',
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: preloadPath },
   });
   widgetWindow.loadFile(distPath, { query: { widget: '1' } });
   widgetWindow.once('ready-to-show', () => widgetWindow.showInactive());
+  // 浮窗右键弹出与托盘一致的菜单
+  widgetWindow.webContents.on('context-menu', (event) => {
+    event.preventDefault();
+    buildTrayMenu().popup({ window: widgetWindow });
+  });
   widgetWindow.on('closed', () => { widgetWindow = null; });
 }
 
-// 浮窗大小调整：接收缩放比例，窗口像素尺寸按基准尺寸换算，右下角保持不动
-function applyWidgetSize(scale) {
+// 浮窗大小/长度调整：接收缩放比例与长度比例，窗口像素尺寸按基准尺寸换算，右下角保持不动
+function applyWidgetSize(scale, length) {
   widgetScale = clampWidgetScale(scale);
-  const size = widgetWindowSize(widgetScale);
+  widgetLength = clampWidgetLength(length ?? widgetLength);
+  const size = widgetWindowSize(widgetScale, widgetLength);
   if (!widgetWindow || widgetWindow.isDestroyed()) return widgetScale;
   const bounds = widgetWindow.getBounds();
   const area = screen.getPrimaryDisplay().workArea;
@@ -351,7 +382,7 @@ function buildTrayMenu() {
     { type: 'separator' },
     { label: '开机自启', type: 'checkbox', checked: getAutoLaunch(), click: (item) => { setAutoLaunch(item.checked); refreshTray(); } },
     { label: '自动检查更新', type: 'checkbox', checked: autoUpdate, click: (item) => setAutoUpdateEnabled(item.checked) },
-    { label: '检查更新', click: () => checkForUpdates() },
+    { label: '检查更新', click: () => checkForUpdates(true) },
     { type: 'separator' },
     { label: '退出', click: () => { quitting = true; app.quit(); } },
   ]);
@@ -479,7 +510,7 @@ function registerIpc() {
     return { imported: importedIds.length, state: migrateState(store.loadState()) };
   });
   ipcMain.handle('update:get-status', () => updateStatus);
-  ipcMain.handle('update:check', () => checkForUpdates());
+  ipcMain.handle('update:check', () => checkForUpdates(true));
   ipcMain.handle('update:download', () => {
     if (process.platform === 'darwin') {
       // macOS 未签名无法静默替换 .app,直接引导到 Release 页手动下载
@@ -491,7 +522,7 @@ function registerIpc() {
     return true;
   });
   ipcMain.handle('update:install', () => { autoUpdater?.quitAndInstall(true, true); return true; });
-  ipcMain.handle('widget:set-size', (_event, size) => applyWidgetSize(size));
+  ipcMain.handle('widget:set-size', (_event, size) => (size && typeof size === 'object' ? applyWidgetSize(size.scale, size.length) : applyWidgetSize(size)));
   ipcMain.handle('app:set-theme', (_event, theme) => applyTheme(theme));
   // 厂商官网等外部链接一律走系统默认浏览器，不在应用窗口内导航
   ipcMain.handle('app:open-external', (_event, url) => {
@@ -505,7 +536,7 @@ function registerIpc() {
     const dx = Math.round(Number(deltaX) || 0);
     const dy = Math.round(Number(deltaY) || 0);
     if (!dx && !dy) return;
-    const size = widgetWindowSize(widgetScale);
+    const size = widgetWindowSize(widgetScale, widgetLength);
     const bounds = widgetWindow.getBounds();
     const area = screen.getDisplayMatching(bounds).workArea;
     const x = Math.max(area.x, Math.min(area.x + area.width - size.width, bounds.x + dx));

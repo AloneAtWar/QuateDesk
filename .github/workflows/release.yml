@@ -60,8 +60,12 @@ jobs:
           path: artifacts
           merge: true
 
+      # Release 说明取 CHANGELOG 最顶部当前版本的章节，不用自动生成的提交列表
+      - name: Extract release notes
+        run: awk '/^## \[/{n++} n==1' CHANGELOG.md > release-notes.md && cat release-notes.md
+
       - uses: softprops/action-gh-release@v2
         with:
           draft: false
-          generate_release_notes: true
+          body_path: release-notes.md
           files: artifacts/**

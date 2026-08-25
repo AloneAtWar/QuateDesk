@@ -156,6 +156,15 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .widget-meters .widget-meter b, .widget-meters .widget-meter em, .widget-meters .widget-meter small { white-space: nowrap; }
 .widget-window-shell .widget-row { -webkit-app-region: no-drag; }
 
+/* 浮窗内容自适应：排不下时逐级收起——标签先缩成圆点（悬停显示完整文字）再隐藏，倒计时按周期从长到短逐个隐藏，
+   再收起最长周期的额度窗口，最后才压缩名称宽度；squeeze 档同时收紧间距保证最短长度不裁剪芯片 */
+.widget-row.tag-dot .widget-account-block .widget-tags em { flex: 0 0 auto; width: 8px; height: 8px; padding: 0; border-radius: 4px; font-size: 0; }
+.widget-meters .widget-meter.hide-reset small { display: none !important; }
+.widget-row.ellipsis .widget-account-block .widget-account { animation: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.widget-row.squeeze { gap: 4px; padding-left: 5px; padding-right: 5px; }
+.widget-row.squeeze .widget-meters { overflow: hidden; gap: 3px; }
+.widget-row.squeeze .widget-meters .widget-meter { padding: 2px 4px; gap: 3px; }
+
 @media (max-width: 620px) {
   .widget-row { gap: 5px; }
     .widget-meter { gap: 3px; padding: 4px 5px; }
