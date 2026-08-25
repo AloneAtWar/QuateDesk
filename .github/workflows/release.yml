@@ -54,6 +54,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      # 提取 CHANGELOG 需要先检出代码（release 任务默认没有 workspace）
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*
@@ -62,7 +65,7 @@ jobs:
 
       # Release 说明取 CHANGELOG 最顶部当前版本的章节，不用自动生成的提交列表
       - name: Extract release notes
-        run: awk '/^## \[/{n++} n==1' CHANGELOG.md > release-notes.md && cat release-notes.md
+        run: awk 'index($0, "## [") == 1 { n++ } n == 1' CHANGELOG.md > release-notes.md && cat release-notes.md
 
       - uses: softprops/action-gh-release@v2
         with:
