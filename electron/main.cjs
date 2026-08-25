@@ -286,7 +286,11 @@ function schedulePolling() {
   pollStartedAt ||= new Date().toISOString();
   nextPollAt = new Date(Date.now() + minutes * 60_000).toISOString();
   pollTimer = setInterval(() => {
-    pollState().catch(() => {}).finally(() => { nextPollAt = new Date(Date.now() + minutes * 60_000).toISOString(); });
+    pollState().catch(() => {}).finally(() => {
+      nextPollAt = new Date(Date.now() + minutes * 60_000).toISOString();
+      // 其他置顶程序后来激活可能压到浮窗，每次轮询后顺手补一次置顶
+      ensureWidgetOnTop();
+    });
   }, minutes * 60_000);
 }
 
@@ -305,11 +309,29 @@ function createMainWindow() {
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: preloadPath },
   });
   mainWindow.loadFile(distPath);
+  // Windows 上只有一个真正生效的置顶层，主窗口置顶后与浮窗同层、激活即会盖到浮窗上；
+  // 主窗口显示/被激活时把浮窗压回自己上方，保证自家浮窗永不被主界面挡住
+  mainWindow.on('show', () => {
+    if (!mainWindow.isAlwaysOnTop()) return;
+    mainWindow.setAlwaysOnTop(true, 'screen-saver');
+    mainWindow.moveTop();
+    ensureWidgetOnTop();
+  });
+  mainWindow.on('focus', () => { if (mainWindow.isAlwaysOnTop()) ensureWidgetOnTop(); });
   mainWindow.webContents.on('did-fail-load', (_event, code, description, url) => console.error('[Quota Desk] load failed', code, description, url));
   mainWindow.webContents.on('render-process-gone', (_event, details) => console.error('[Quota Desk] renderer gone', details.reason));
   mainWindow.once('ready-to-show', () => mainWindow.show());
   mainWindow.on('close', (event) => { if (!quitting) { event.preventDefault(); mainWindow.hide(); } });
   mainWindow.on('closed', () => { mainWindow = null; });
+}
+
+// Electron 43 回归：alwaysOnTop 构造参数与默认 'floating' 级别的 setAlwaysOnTop(true)
+// 均不再真正生效，必须显式给非默认级别（'screen-saver'，Windows 上同为 HWND_TOPMOST）。
+// 另外浮窗经 hide() 后再显示、Win+D 显示桌面等场景也可能丢失置顶，展示后统一补一次。
+function ensureWidgetOnTop() {
+  if (!widgetWindow || widgetWindow.isDestroyed() || !widgetWindow.isVisible()) return;
+  widgetWindow.setAlwaysOnTop(true, 'screen-saver');
+  widgetWindow.moveTop();
 }
 
 function createWidgetWindow() {
@@ -326,7 +348,10 @@ function createWidgetWindow() {
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: preloadPath },
   });
   widgetWindow.loadFile(distPath, { query: { widget: '1' } });
-  widgetWindow.once('ready-to-show', () => widgetWindow.showInactive());
+  widgetWindow.once('ready-to-show', () => { widgetWindow.showInactive(); ensureWidgetOnTop(); });
+  // 系统恢复可见（显示桌面还原等）时同样补一次置顶
+  widgetWindow.on('show', ensureWidgetOnTop);
+  widgetWindow.on('restore', ensureWidgetOnTop);
   // 浮窗右键弹出与托盘一致的菜单
   widgetWindow.webContents.on('context-menu', (event) => {
     event.preventDefault();
@@ -358,7 +383,7 @@ function applyTheme(theme) {
 
 function setWidgetVisible(visible) {
   if (!widgetWindow || widgetWindow.isDestroyed()) { if (visible) createWidgetWindow(); return visible; }
-  if (visible) widgetWindow.showInactive(); else widgetWindow.hide();
+  if (visible) { widgetWindow.showInactive(); ensureWidgetOnTop(); } else widgetWindow.hide();
   return visible;
 }
 
@@ -450,7 +475,8 @@ function registerIpc() {
   ipcMain.handle('widget:set-visible', (_event, visible) => setWidgetVisible(Boolean(visible)));
   ipcMain.handle('widget:get-visible', () => Boolean(widgetWindow?.isVisible()));
   ipcMain.handle('window:open-main', () => { mainWindow?.show(); mainWindow?.focus(); return true; });
-  ipcMain.handle('window:toggle-pin', () => { if (!mainWindow) return false; const next = !mainWindow.isAlwaysOnTop(); mainWindow.setAlwaysOnTop(next); return next; });
+  // Electron 43 默认级别的 setAlwaysOnTop 不生效，置顶/取消固定都要显式传级别（见 ensureWidgetOnTop 注释）
+  ipcMain.handle('window:toggle-pin', () => { if (!mainWindow) return false; const next = !mainWindow.isAlwaysOnTop(); mainWindow.setAlwaysOnTop(next, 'screen-saver'); if (next) ensureWidgetOnTop(); return next; });
   ipcMain.handle('window:get-pin', () => Boolean(mainWindow?.isAlwaysOnTop()));
   ipcMain.handle('window:close-main', () => { mainWindow?.hide(); return true; });
   ipcMain.handle('app:get-version', () => app.getVersion());
