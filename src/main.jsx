@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  AlertCircle, ArrowLeft, Bell, Check, ChevronDown, ChevronRight, CircleGauge, Clock3, Download, Eye, History, LayoutGrid,
+  AlertCircle, ArrowLeft, Bell, Check, ChevronDown, ChevronRight, CircleGauge, Clock3, Download, Eye, ExternalLink, History, LayoutGrid,
   KeyRound, Monitor, Plus, Power, RefreshCw, Rows3, Settings2, ShieldCheck, SlidersHorizontal,
   Pencil, Pin, Sparkles, SunMoon, Tag, Trash2, UploadCloud, X, Zap,
 } from 'lucide-react';
@@ -584,7 +584,7 @@ function SettingsDrawer({ accounts, providers, settings, setSettings, onClose, o
       <section className="drawer-section"><div className="drawer-section-title"><History size={16} /><span>额度历史</span></div><div className="setting-select"><span><b>保留时长</b><small>每次成功刷新都会记录一条，用于账号卡片的趋势图</small></span><select value={settings.historyDays} onChange={(event) => setSettings((old) => ({ ...old, historyDays: Number(event.target.value) }))}><option value={3}>3 天</option><option value={7}>7 天（默认）</option><option value={15}>15 天</option><option value={30}>30 天</option><option value={60}>60 天</option><option value={90}>3 个月（最长）</option></select></div><button className="outline-button full" onClick={onClearHistory}><Trash2 size={14} /> 清除全部历史记录</button><small className="drawer-help">删除账号时会一并删除该账号的额度历史；超过保留时长的记录会自动清理。</small></section>
       <section className="drawer-section"><div className="drawer-section-title"><ShieldCheck size={16} /><span>账号与凭据</span><button className="mini-add" onClick={() => openModal('account')}><Plus size={14} /> 添加账号</button></div><div className="settings-list">{accounts.length === 0 && <div className="settings-empty">还没有账号</div>}{accounts.map((account) => { const provider = providers.find((item) => item.id === account.providerId); const testing = testingAccountId === account.id; return <div className="settings-account" key={account.id}><Logo provider={provider} size="sm" /><div><b title={account.name}>{account.name}</b><small className={account.status === 'warning' ? 'warning-copy' : ''} title={account.status === 'warning' ? (account.lastError || '') : ''}>{account.status === 'warning' ? account.lastError : `${provider?.name} · ${account.windows.length} 个额度窗口`}</small></div><button className="row-icon-button" title="编辑账号" aria-label={`编辑 ${account.name}`} onClick={() => openModal({ type: 'account-edit', account })}><Pencil size={13} /></button><button className="row-icon-button" disabled={testing} title="刷新" aria-label={`刷新 ${account.name} 额度`} onClick={() => onTestAccount(account)}><RefreshCw size={13} className={testing ? 'spinning' : ''} /></button><button className="row-icon-button danger" title="删除账号" aria-label={`删除 ${account.name}`} onClick={() => onDeleteAccount(account)}><Trash2 size={13} /></button><span className={`status-dot ${account.status}`} /></div>; })}</div>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button full drawer-import-button" onClick={() => openModal('import-ccswitch')}><Download size={14} /> 从 cc-switch 导入账号</button>}</section>
       <section className="drawer-section"><div className="drawer-section-title"><LayoutGrid size={16} /><span>厂商适配器</span><button className="mini-add" onClick={() => openModal('provider')}><Plus size={14} /> 新增厂商</button></div><div className="settings-list providers-list">{providers.map((provider) => <div className="settings-account" key={provider.id}><Logo provider={provider} size="sm" /><div><b title={provider.name}>{provider.name}</b><small>{provider.requestConfig?.adapterMode === 'script' ? '脚本适配' : provider.requestConfig?.adapterMode === 'grok' ? '专属适配' : '标准映射'}</small></div><button className="row-icon-button" title="编辑厂商" aria-label={`编辑 ${provider.name}`} onClick={() => onEditProvider(provider)}><Pencil size={13} /></button><span className="adapter-state"><Check size={13} /></span></div>)}</div></section>
-      <section className="drawer-section"><div className="drawer-section-title"><Power size={16} /><span>系统与更新</span></div><Toggle checked={autoLaunch} onChange={onToggleAutoLaunch} label="开机自启" description="登录 Windows 后自动启动 Quota Desk" /><Toggle checked={settings.autoUpdate !== false} onChange={(value) => setSettings((old) => ({ ...old, autoUpdate: value }))} label="自动检查更新" description="启动时检查 GitHub 上是否有新版本" /><div className="setting-select"><span><b>版本更新</b><small>当前版本 v{appVersion || '-'}</small></span>{update && ['available', 'downloading', 'downloaded'].includes(update.status) ? <button className="outline-button" onClick={onOpenUpdate}>v{update.version} 可用</button> : <button className="outline-button" disabled={update?.status === 'checking'} onClick={onCheckUpdate}>{update?.status === 'checking' ? '正在检查…' : '检查更新'}</button>}</div></section>
+      <section className="drawer-section"><div className="drawer-section-title"><Power size={16} /><span>系统与更新</span></div><Toggle checked={autoLaunch} onChange={onToggleAutoLaunch} label="开机自启" description="登录 Windows 后自动启动 Quota Desk" /><Toggle checked={settings.autoUpdate !== false} onChange={(value) => setSettings((old) => ({ ...old, autoUpdate: value }))} label="自动检查更新" description="启动时及每小时自动检查 GitHub 上是否有新版本" /><div className="setting-select"><span><b>版本更新</b><small>当前版本 v{appVersion || '-'}</small></span>{update && ['available', 'downloading', 'downloaded'].includes(update.status) ? <button className="outline-button" onClick={onOpenUpdate}>v{update.version} 可用</button> : <button className="outline-button" disabled={update?.status === 'checking'} onClick={onCheckUpdate}>{update?.status === 'checking' ? '正在检查…' : '检查更新'}</button>}</div></section>
     </div>
   </aside></>;
 }
@@ -973,18 +973,22 @@ function ImportCcswitchModal({ onClose, onApplied }) {
 function UpdateModal({ update, version, onClose }) {
   const notes = update?.releaseNotes?.trim();
   const status = update?.status;
+  const manualDownload = Boolean(update?.manualDownload);
+  // 下载失败的重试直接重新下载；检查失败的重试才需要重新检查
+  const retryUpdate = () => (update?.errorKind === 'download' ? window.quotaDesk?.downloadUpdate() : window.quotaDesk?.checkForUpdates());
   return <div className="modal-backdrop" onClick={onClose}><div className="modal compact-modal update-modal" onClick={(event) => event.stopPropagation()}>
     <div className="modal-head"><div><span className="eyebrow">版本更新</span><h2>发现新版本 v{update?.version}</h2></div></div>
     <div className="adapter-note"><Download size={15} /><span>当前版本 v{version}，可升级到 v{update?.version}。</span></div>
     {status === 'error' && <div className="adapter-note update-error"><AlertCircle size={15} /><span>{update?.message || '检查更新失败，请稍后重试。'}</span></div>}
+    {manualDownload && status === 'available' && <div className="adapter-note"><ExternalLink size={15} /><span>当前版本不支持应用内升级，将打开 GitHub 发布页手动下载。</span></div>}
     {notes ? <div className="release-notes">{notes}</div> : <div className="settings-empty">该版本没有提供更新说明</div>}
     {status === 'downloading' && <div className="update-progress" role="progressbar" aria-valuenow={update?.percent || 0}><i style={{ width: `${update?.percent || 0}%` }} /></div>}
     <div className="modal-actions">
       <button type="button" className="outline-button" onClick={onClose}>{status === 'downloaded' ? '稍后重启' : '暂不升级'}</button>
-      {status === 'available' && <button type="button" className="primary-button" onClick={() => window.quotaDesk?.downloadUpdate()}><Download size={14} /> 立即升级</button>}
+      {status === 'available' && <button type="button" className="primary-button" onClick={() => window.quotaDesk?.downloadUpdate()}>{manualDownload ? <ExternalLink size={14} /> : <Download size={14} />} {manualDownload ? '前往发布页下载' : '立即升级'}</button>}
       {status === 'downloading' && <button type="button" className="primary-button" disabled>下载中 {update?.percent || 0}%</button>}
       {status === 'downloaded' && <button type="button" className="primary-button" onClick={() => window.quotaDesk?.installUpdate()}><Power size={14} /> 重启并安装</button>}
-      {status === 'error' && <button type="button" className="primary-button" onClick={() => window.quotaDesk?.checkForUpdates()}><RefreshCw size={14} /> 重试</button>}
+      {status === 'error' && <button type="button" className="primary-button" onClick={retryUpdate}><RefreshCw size={14} /> 重试</button>}
     </div>
   </div></div>;
 }

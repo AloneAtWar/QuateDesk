@@ -113,31 +113,73 @@ const sendUpdateStatus = (patch) => {
 const UPDATE_NETWORK_ERROR = /net::|ERR_INTERNET|ERR_NAME|ERR_CONNECTION|ERR_ADDRESS|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNREFUSED|ECONNRESET|ECONNABORTED|getaddrinfo|time(?:d)?\s*out|network|socket hang up|unable to connect|网络|无法连接/i;
 // 手动检查（设置页/托盘点击“检查更新”）需要明确反馈；自动检查遇到网络异常时静默处理
 let manualUpdateCheck = false;
+// electron-updater 出错时同一个 Error 会先后走 'error' 事件和 promise rejection 两条路，按实例去重避免重复上报
+let lastReportedUpdateError = null;
+// 检查进行中标记：期间再次触发不叠加请求，手动请求则把进行中的检查升级为手动以便给出反馈
+let updateCheckInFlight = false;
+// 应用常驻托盘，只在启动时查一次会让长期不重启的用户错过新版本，改为每小时自动检查
+const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+let updateCheckTimer = null;
+// macOS 未签名、Windows 便携版都无法在应用内完成升级，只能引导到发布页手动下载（便携版由 electron-builder 注入 PORTABLE_EXECUTABLE_DIR 环境变量标识）
+const MANUAL_DOWNLOAD_ONLY = process.platform === 'darwin' || Boolean(process.env.PORTABLE_EXECUTABLE_DIR);
+
+function reportUpdateError(error) {
+  if (error === lastReportedUpdateError) return;
+  lastReportedUpdateError = error;
+  const raw = error?.message || '';
+  const networkError = UPDATE_NETWORK_ERROR.test(raw);
+  // 下载一定由用户主动触发，失败必须可见，不走自动检查遇到网络异常时的静默分支
+  if (updateStatus.status === 'downloading') {
+    sendUpdateStatus({ status: 'error', errorKind: 'download', version: updateStatus.version, manual: true, message: networkError ? '网络连接异常，下载失败，请稍后重试' : (raw || '下载失败') });
+    return;
+  }
+  // 已上报的下载失败不被去重漏网的重复报错覆盖成“检查失败”
+  if (updateStatus.status === 'error' && updateStatus.errorKind === 'download') return;
+  if (networkError && !manualUpdateCheck) {
+    // 后台自动检查遇到网络异常：回到空闲状态，不展示“更新失败”
+    sendUpdateStatus({ status: 'idle', message: '', manual: false });
+    return;
+  }
+  sendUpdateStatus({ status: 'error', errorKind: 'check', manual: manualUpdateCheck, message: networkError ? '网络连接异常，无法检查更新，请稍后重试' : (raw || '检查更新失败') });
+}
 
 function setupAutoUpdater() {
   if (!autoUpdater) return;
   autoUpdater.on('checking-for-update', () => sendUpdateStatus({ status: 'checking', manual: manualUpdateCheck }));
-  autoUpdater.on('update-available', (info) => sendUpdateStatus({ status: 'available', version: info.version, releaseNotes: normalizeReleaseNotes(info.releaseNotes), percent: 0, message: '', manual: manualUpdateCheck }));
+  autoUpdater.on('update-available', (info) => sendUpdateStatus({ status: 'available', version: info.version, releaseNotes: normalizeReleaseNotes(info.releaseNotes), percent: 0, message: '', manualDownload: MANUAL_DOWNLOAD_ONLY, manual: manualUpdateCheck }));
   autoUpdater.on('update-not-available', () => sendUpdateStatus({ status: 'none', manual: manualUpdateCheck }));
   autoUpdater.on('download-progress', (progress) => sendUpdateStatus({ status: 'downloading', percent: Math.round(progress.percent || 0), manual: manualUpdateCheck }));
   autoUpdater.on('update-downloaded', (info) => sendUpdateStatus({ status: 'downloaded', version: info.version || updateStatus.version, percent: 100, manual: manualUpdateCheck }));
-  autoUpdater.on('error', (error) => {
-    const raw = error?.message || '';
-    const networkError = UPDATE_NETWORK_ERROR.test(raw);
-    if (networkError && !manualUpdateCheck) {
-      // 后台自动检查遇到网络异常：回到空闲状态，不展示“更新失败”
-      sendUpdateStatus({ status: 'idle', message: '', manual: false });
-      return;
-    }
-    sendUpdateStatus({ status: 'error', manual: manualUpdateCheck, message: networkError ? '网络连接异常，无法检查更新，请稍后重试' : (raw || '检查更新失败') });
-  });
+  autoUpdater.on('error', (error) => reportUpdateError(error));
+}
+
+// 后台自动检查只在这些状态下发起：已有可用版本、下载中或已下载待安装时不重复打扰
+function backgroundUpdateCheckAllowed() {
+  return ['idle', 'none', 'error'].includes(updateStatus.status);
 }
 
 function checkForUpdates(manual = false) {
   if (!autoUpdater) return false;
+  if (updateCheckInFlight) {
+    // 检查进行中：手动请求把这次检查升级为手动，让进行中的结果直接反馈给用户
+    if (manual) manualUpdateCheck = true;
+    return true;
+  }
+  updateCheckInFlight = true;
   manualUpdateCheck = manual;
-  autoUpdater.checkForUpdates().catch(() => {});
+  lastReportedUpdateError = null;
+  const done = () => { updateCheckInFlight = false; };
+  autoUpdater.checkForUpdates().then(done, done);
   return true;
+}
+
+function scheduleUpdateChecks() {
+  if (updateCheckTimer) clearInterval(updateCheckTimer);
+  updateCheckTimer = setInterval(() => {
+    if (store?.loadState()?.settings?.autoUpdate === false) return;
+    if (!backgroundUpdateCheckAllowed()) return;
+    checkForUpdates();
+  }, UPDATE_CHECK_INTERVAL_MS);
 }
 
 function setAutoUpdateEnabled(enabled) {
@@ -145,7 +187,7 @@ function setAutoUpdateEnabled(enabled) {
   const saved = store.saveState(cleanState({ ...state, settings: { ...(state.settings || {}), autoUpdate: Boolean(enabled) } }));
   sendState(saved);
   refreshTray();
-  if (enabled) checkForUpdates();
+  if (enabled && backgroundUpdateCheckAllowed()) checkForUpdates();
 }
 
 const runtimeStatus = () => ({
@@ -440,14 +482,15 @@ function registerIpc() {
     return state ? { ...state, runtime: runtimeStatus() } : null;
   });
   ipcMain.handle('state:save', (_event, state) => {
+    // 记录保存前的开关状态：只在“自动检查更新”从关闭切换为开启时补一次立即检查，避免每次保存设置都请求 GitHub
+    const autoUpdateWasDisabled = store.loadState()?.settings?.autoUpdate === false;
     const saved = store.saveState(cleanState(state));
     // 账号被删除时连同它的额度历史一起清掉
     store.pruneHistoryAccounts((saved.accounts || []).map((account) => account.id), historyRetentionDays());
     schedulePolling();
     sendState(saved);
     refreshTray();
-    // 渲染进程里重新打开“自动检查更新”时立即检查一次
-    if (saved?.settings?.autoUpdate && ['idle', 'none', 'error'].includes(updateStatus.status)) checkForUpdates();
+    if (autoUpdateWasDisabled && saved?.settings?.autoUpdate && backgroundUpdateCheckAllowed()) checkForUpdates();
     return saved;
   });
   ipcMain.handle('credential:save', (_event, { accountId, credential = '', variables }) => {
@@ -546,13 +589,16 @@ function registerIpc() {
   ipcMain.handle('update:get-status', () => updateStatus);
   ipcMain.handle('update:check', () => checkForUpdates(true));
   ipcMain.handle('update:download', () => {
-    if (process.platform === 'darwin') {
-      // macOS 未签名无法静默替换 .app,直接引导到 Release 页手动下载
+    if (MANUAL_DOWNLOAD_ONLY) {
+      // macOS 未签名、Windows 便携版都无法在应用内完成升级，直接引导到 Release 页手动下载
       shell.openExternal(RELEASES_URL);
       return true;
     }
     if (!autoUpdater) return false;
-    autoUpdater.downloadUpdate().catch((error) => sendUpdateStatus({ status: 'error', message: error?.message || '下载失败' }));
+    lastReportedUpdateError = null;
+    // 先进入下载中状态，让按钮立即反馈，也让下载阶段的报错能按“下载失败”归类
+    sendUpdateStatus({ status: 'downloading', percent: 0, message: '', manual: true });
+    autoUpdater.downloadUpdate().catch(reportUpdateError);
     return true;
   });
   ipcMain.handle('update:install', () => { autoUpdater?.quitAndInstall(true, true); return true; });
@@ -592,10 +638,11 @@ else {
     schedulePolling();
     setupAutoUpdater();
     if (state?.settings?.autoUpdate !== false) checkForUpdates();
+    scheduleUpdateChecks();
     pollState().catch((error) => console.error('[Quota Desk] initial poll failed', error.message));
     app.on('activate', () => mainWindow?.show());
   });
 }
 
-app.on('before-quit', () => { quitting = true; if (pollTimer) clearInterval(pollTimer); });
+app.on('before-quit', () => { quitting = true; if (pollTimer) clearInterval(pollTimer); if (updateCheckTimer) clearInterval(updateCheckTimer); });
 app.on('window-all-closed', () => {});
