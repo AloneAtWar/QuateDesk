@@ -133,10 +133,13 @@ const definitions = {
           const mapping = rule.windowMap || {};
           const key = mapping[rawWindow] || (['five_hour', 'weekly', 'monthly', 'balance'].includes(rawWindow) ? rawWindow : rule.defaultWindow);
           if (!key) return [];
-          const total = mappedNumber(item, payload, rule.totalPath, 0);
-          const used = mappedNumber(item, payload, rule.usedPath, 0);
+          const rawTotal = mappedNumber(item, payload, rule.totalPath, NaN);
+          const rawUsed = mappedNumber(item, payload, rule.usedPath, NaN);
+          const rawRemaining = mappedNumber(item, payload, rule.remainingPath, NaN);
+          const total = Number.isFinite(rawTotal) ? rawTotal : 0;
+          const used = Number.isFinite(rawUsed) ? rawUsed : 0;
+          const remainingAmount = Number.isFinite(rawRemaining) ? rawRemaining : Math.max(0, total - used);
           const rawPercentage = mappedNumber(item, payload, rule.percentagePath, NaN);
-          const remainingAmount = mappedNumber(item, payload, rule.remainingPath, Math.max(0, total - used));
           const percentageRemaining = rule.percentageMode === 'remaining' ? rawPercentage : 100 - rawPercentage;
           const remaining = key === 'balance' ? 100 : Number.isFinite(rawPercentage) ? Math.max(0, Math.min(100, percentageRemaining)) : percent(remainingAmount, total);
           const availableValue = mappedAtPath(item, payload, rule.availablePath);
@@ -144,7 +147,14 @@ const definitions = {
           const unavailableValues = String(rule.unavailableValues || 'false|0|inactive|invalid').split('|').map((value) => value.toLowerCase());
           const available = availableValue === undefined ? true : !unavailableValues.includes(String(normalizedAvailability));
           const mappedUnit = mappedAtPath(item, payload, rule.unitPath) || rule.unit || (key === 'balance' ? 'CNY' : '%');
-          return [meter(key, remaining, 100, mappedUnit, mappedAtPath(item, payload, rule.resetPath), { amount: remainingAmount, limitAmount: total, available })];
+          // 只配了百分比的窗口没有真实的总量/剩余数值，置 null 让展示层不渲染“已用 0 / 0”占位
+          const hasRealAmount = Number.isFinite(rawRemaining) || (Number.isFinite(rawTotal) && Number.isFinite(rawUsed));
+          const hasRealLimit = Number.isFinite(rawTotal) && total > 0;
+          return [meter(key, remaining, 100, mappedUnit, mappedAtPath(item, payload, rule.resetPath), {
+            amount: mappedUnit === '%' && !hasRealAmount ? null : remainingAmount,
+            limitAmount: mappedUnit === '%' && !hasRealLimit ? null : total,
+            available,
+          })];
         });
       });
     },

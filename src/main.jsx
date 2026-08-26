@@ -36,7 +36,13 @@ const formatChecked = (date) => {
 };
 
 const formatAmount = (meter) => meter.key === 'balance' || meter.unit !== '%' ? `${meter.unit === 'CNY' ? '¥' : meter.unit}${Number(meter.amount ?? meter.remaining).toFixed(2)}` : `${Math.round(meter.remaining)}%`;
-const formatQuotaDetail = (meter) => meter.unit === '%' && meter.limitAmount != null ? `已用 ${Number(meter.limitAmount - (meter.amount ?? meter.remaining)).toFixed(2)} / ${Number(meter.limitAmount).toFixed(2)}` : '';
+// “已用 / 总量”明细只在窗口真的带有具体数值时展示；数值缺失、总量为 0 或就是 100 的纯百分比窗口不显示
+const formatQuotaDetail = (meter) => {
+  const amount = Number(meter.amount);
+  const limit = Number(meter.limitAmount);
+  if (meter.unit !== '%' || !Number.isFinite(amount) || !Number.isFinite(limit) || limit <= 0 || limit === 100) return '';
+  return `已用 ${Math.max(0, limit - amount).toFixed(2)} / ${limit.toFixed(2)}`;
+};
 
 const defaultEndpoint = (provider) => {
   const endpoint = provider?.requestConfig?.endpoint || adapterDefinitions[provider?.adapter]?.endpoint || '';
@@ -339,11 +345,13 @@ const chartColor = (key, index) => CHART_COLORS[key] || CHART_FALLBACK_COLORS[in
 const chartValue = (sample) => sample.unit === '%' ? sample.remaining : Number(sample.amount ?? sample.remaining);
 const formatChartValue = (sample, value) => sample.unit === '%' ? `${Math.round(value)}%` : `${sample.unit === 'CNY' ? '¥' : sample.unit}${Number(value).toFixed(2)}`;
 const formatChartNumber = (value) => Number.isInteger(value) ? String(value) : Number(value).toFixed(2);
-// 悬停详情：百分比之外带上具体数值（剩余 / 总量）；总量就是 100 的纯百分比窗口没有额外数值，不显示
+// 悬停详情：百分比之外带上具体数值（剩余 / 总量）；与卡片明细同规则，纯百分比窗口（总量缺失、为 0 或就是 100）没有额外数值，不显示
 const formatChartDetail = (sample) => {
   const base = formatChartValue(sample, chartValue(sample));
-  if (sample.unit !== '%' || sample.amount == null || sample.limit == null || Number(sample.limit) === 100) return base;
-  return `${base} · 剩 ${formatChartNumber(Number(sample.amount))} / ${formatChartNumber(Number(sample.limit))}`;
+  const amount = Number(sample.amount);
+  const limit = Number(sample.limit);
+  if (sample.unit !== '%' || !Number.isFinite(amount) || !Number.isFinite(limit) || limit <= 0 || limit === 100) return base;
+  return `${base} · 剩 ${formatChartNumber(amount)} / ${formatChartNumber(limit)}`;
 };
 // 该快照点的刷新周期：重置的绝对时间 + 相对该点的倒计时
 const formatPointReset = (resetAt, pointAt) => {
