@@ -37,8 +37,12 @@ const builtinConfigs = {
   zai: { endpoint: 'https://open.bigmodel.cn/api/monitor/usage/quota/limit', windows: ['five_hour', 'weekly', 'monthly'], adapterMode: 'script', script: scripts.zai, variables: scriptVariables('https://open.bigmodel.cn/api/monitor/usage/quota/limit') },
   deepseek: { endpoint: 'https://api.deepseek.com/user/balance', windows: ['balance'], adapterMode: 'script', script: scripts.deepseek, variables: scriptVariables('https://api.deepseek.com/user/balance') },
   wlb: {
-    endpoint: 'https://codex.wlbclub.com/v1/usage', windows: ['weekly'], adapterMode: 'standard', method: 'GET', auth: 'bearer', authHeader: 'Authorization', authPrefix: 'Bearer ', builtinMigration: 'wlb-standard-v1',
-    responseRules: [{ listPath: 'rate_limits', collectionMode: 'array', filterPath: 'window', filterOperator: 'equals', filterValue: '7d', defaultWindow: 'weekly', totalPath: 'limit', remainingPath: 'remaining', usedPath: 'used', resetPath: 'reset_at|resetAt|resetTime', availablePath: '$root.status', unavailableValues: 'inactive|invalid|false|0', unit: '%' }],
+    endpoint: 'https://codex.wlbclub.com/v1/usage', windows: ['daily', 'weekly'], adapterMode: 'standard', method: 'GET', auth: 'bearer', authHeader: 'Authorization', authPrefix: 'Bearer ', builtinMigration: 'wlb-standard-v2',
+    responseRules: [
+      // rate_limits 里 window=1d 的行是 wlbclub 后上线的 1 天限额
+      { listPath: 'rate_limits', collectionMode: 'array', filterPath: 'window', filterOperator: 'equals', filterValue: '1d', defaultWindow: 'daily', totalPath: 'limit', remainingPath: 'remaining', usedPath: 'used', resetPath: 'reset_at|resetAt|resetTime', availablePath: '$root.status', unavailableValues: 'inactive|invalid|false|0', unit: '%' },
+      { listPath: 'rate_limits', collectionMode: 'array', filterPath: 'window', filterOperator: 'equals', filterValue: '7d', defaultWindow: 'weekly', totalPath: 'limit', remainingPath: 'remaining', usedPath: 'used', resetPath: 'reset_at|resetAt|resetTime', availablePath: '$root.status', unavailableValues: 'inactive|invalid|false|0', unit: '%' },
+    ],
   },
   // Grok 订阅走专属适配（poller.cjs queryGrokSubscription）：读本机 grok CLI 凭据查 grok.com 计费端点，无需用户填任何凭据
   grok: { windows: ['weekly', 'monthly'], adapterMode: 'grok', auth: 'none', credentialRequired: false },

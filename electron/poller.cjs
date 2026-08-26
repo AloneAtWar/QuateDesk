@@ -131,7 +131,7 @@ const definitions = {
           if (!item || !filterMatches(item, payload, rule)) return [];
           const rawWindow = String(mappedAtPath(item, payload, rule.windowField) ?? item.__windowKey ?? rule.defaultWindow ?? '').toLowerCase();
           const mapping = rule.windowMap || {};
-          const key = mapping[rawWindow] || (['five_hour', 'weekly', 'monthly', 'balance'].includes(rawWindow) ? rawWindow : rule.defaultWindow);
+          const key = mapping[rawWindow] || (['five_hour', 'daily', 'weekly', 'monthly', 'balance'].includes(rawWindow) ? rawWindow : rule.defaultWindow);
           if (!key) return [];
           const rawTotal = mappedNumber(item, payload, rule.totalPath, NaN);
           const rawUsed = mappedNumber(item, payload, rule.usedPath, NaN);

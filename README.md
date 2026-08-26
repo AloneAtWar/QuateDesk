@@ -75,7 +75,7 @@ Quota Desk 专注解决这件事：把多个服务商、多个账号、多个周
 | Kimi for Coding | 5 小时、7 天 | API Token |
 | Z.ai / 智谱 | 5 小时、7 天、1 个月 | API Token |
 | DeepSeek | 余额 | API Token |
-| wlbclub | 7 天 | API Token |
+| wlbclub | 1 天、7 天 | API Token |
 | Grok / SuperGrok | 自动识别周期窗口 | 读取本机 grok CLI 登录状态 |
 | MiniMax Coding Plan | 5 小时、7 天 | API Token |
 | Claude Code | 5 小时、7 天 | 读取本机 Claude Code 登录状态 |

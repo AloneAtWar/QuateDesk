@@ -25,7 +25,7 @@ export const adapterRegistry = {
     label: 'WLB Club',
     endpoint: 'https://codex.wlbclub.com/v1/usage',
     auth: 'bearer',
-    windows: ['weekly'],
+    windows: ['daily', 'weekly'],
   },
   grok: {
     id: 'grok',
@@ -81,6 +81,7 @@ export const providerCatalog = [
 
 export const windowCatalog = {
   five_hour: { key: 'five_hour', label: '5 小时', short: '5h', group: '短周期', color: 'cyan' },
+  daily: { key: 'daily', label: '1 天', short: '1d', group: '短周期', color: 'sky' },
   weekly: { key: 'weekly', label: '7 天', short: '7d', group: '中周期', color: 'violet' },
   monthly: { key: 'monthly', label: '1个月', short: '1M', group: '长周期', color: 'coral' },
   balance: { key: 'balance', label: '余额', short: '余额', group: '余额', color: 'green' },

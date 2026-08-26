@@ -86,10 +86,15 @@ test('runs WLB Club through the built-in standard response rules', async () => {
   assert.equal(provider.requestConfig.adapterMode, 'standard');
   assert.equal(request.url, 'https://codex.wlbclub.com/v1/usage');
   assert.equal(request.options.headers.Authorization, 'Bearer secret');
-  assert.equal(windows.length, 1);
-  assert.equal(windows[0].key, 'weekly');
-  assert.equal(windows[0].remaining, 7.74);
-  assert.equal(windows[0].limitAmount, 216.98);
+  // 1d 行映射为 daily 窗口（wlbclub 上线的 1 天限额）；接口没给 reset_at 时刷新时间留空
+  assert.equal(windows.length, 2);
+  assert.equal(windows[0].key, 'daily');
+  assert.equal(windows[0].remaining, 33.33);
+  assert.equal(windows[0].amount, 10);
+  assert.equal(windows[0].limitAmount, 30);
+  assert.equal(windows[1].key, 'weekly');
+  assert.equal(windows[1].remaining, 7.74);
+  assert.equal(windows[1].limitAmount, 216.98);
 });
 
 test('runs a scripted request and extractor for complex providers', async () => {
@@ -234,4 +239,54 @@ test('MiniMax 套餐无周限额时只返回 5 小时窗口', async () => {
   const windows = await queryAccount({ id: 't', name: 'MiniMax' }, { id: 'minimax', name: 'MiniMax', requestConfig: builtinConfigs.minimax }, 'sk-test', fetcher);
   assert.equal(windows.length, 1);
   assert.equal(windows[0].key, 'five_hour');
+});
+
+// ── wlbclub 内置适配 ────────────────────────────────────────────
+test('wlbclub rate_limits 解析 1 天与 7 天窗口', async () => {
+  const { builtinConfigs } = require('../electron/builtin-configs.cjs');
+  const fetcher = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      status: 'active',
+      rate_limits: [
+        { window: '1d', limit: 100, remaining: 45, used: 55, reset_at: '2026-08-27T00:00:00Z' },
+        { window: '7d', limit: 300, remaining: 240, used: 60, reset_at: '2026-08-31T00:00:00Z' },
+      ],
+    }),
+  });
+  const windows = await queryAccount(
+    { id: 't', name: 'wlbclub', windowKeys: ['daily', 'weekly'] },
+    { id: 'wlb', name: 'wlbclub', requestConfig: builtinConfigs.wlb },
+    'sk-test',
+    fetcher,
+  );
+  assert.equal(windows.length, 2);
+  assert.equal(windows[0].key, 'daily');
+  assert.equal(windows[0].remaining, 45);
+  assert.equal(windows[0].amount, 45);
+  assert.equal(windows[0].limitAmount, 100);
+  assert.equal(windows[0].resetAt, '2026-08-27T00:00:00Z');
+  assert.equal(windows[1].key, 'weekly');
+  assert.equal(windows[1].remaining, 80);
+  assert.equal(windows[1].amount, 240);
+  assert.equal(windows[1].limitAmount, 300);
+});
+
+test('wlbclub 接口暂未返回 1d 行时仍只解析 7 天窗口', async () => {
+  const { builtinConfigs } = require('../electron/builtin-configs.cjs');
+  const fetcher = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ status: 'active', rate_limits: [{ window: '7d', limit: 300, remaining: 150, used: 150, reset_at: '2026-08-31T00:00:00Z' }] }),
+  });
+  const windows = await queryAccount(
+    { id: 't', name: 'wlbclub', windowKeys: ['daily', 'weekly'] },
+    { id: 'wlb', name: 'wlbclub', requestConfig: builtinConfigs.wlb },
+    'sk-test',
+    fetcher,
+  );
+  assert.equal(windows.length, 1);
+  assert.equal(windows[0].key, 'weekly');
+  assert.equal(windows[0].remaining, 50);
 });

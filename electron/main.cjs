@@ -257,10 +257,20 @@ const migrateProvider = (provider) => {
   return migrated;
 };
 
+const migrateAccount = (account) => {
+  if (!account) return account;
+  const { baseUrl, ...rest } = account;
+  // wlbclub 上线 1 天限额：已显式选择过窗口的 wlb 账号自动补上 daily；没选过窗口的账号不做过滤，本来就会显示
+  if (rest.providerId === 'wlb' && Array.isArray(rest.windowKeys) && rest.windowKeys.length && !rest.windowKeys.includes('daily')) {
+    return { ...rest, windowKeys: [...rest.windowKeys, 'daily'] };
+  }
+  return rest;
+};
+
 // XiaoMi MiMo 从未推出适配接口，已从系统厂商中移除；历史 state 里残留的 mimo 厂商与账号在迁移时一并丢弃
 const migrateState = (state) => state ? {
   ...state,
-  accounts: (state.accounts || []).map(({ baseUrl, ...account }) => account).filter((account) => account.providerId !== 'mimo'),
+  accounts: (state.accounts || []).map(migrateAccount).filter((account) => account.providerId !== 'mimo'),
   providers: ensureCliProviders((state.providers || []).map(migrateProvider).filter((provider) => provider.id !== 'mimo')),
 } : state;
 
@@ -470,7 +480,7 @@ function createTray() {
   tray.on('double-click', () => { mainWindow?.show(); mainWindow?.focus(); });
 }
 
-const windowSummaryLabels = { five_hour: '5小时', weekly: '7天', monthly: '1个月', balance: '余额' };
+const windowSummaryLabels = { five_hour: '5小时', daily: '1天', weekly: '7天', monthly: '1个月', balance: '余额' };
 const formatWindowSummary = (windows) => (windows || [])
   .map((item) => `${windowSummaryLabels[item.key] || item.key} ${item.unit === '%' ? `${Math.round(Number(item.remaining) || 0)}%` : `${item.amount ?? item.remaining}${item.unit ? ` ${item.unit}` : ''}`}`)
   .join(' · ') || '没有可用额度窗口';
