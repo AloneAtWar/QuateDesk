@@ -334,7 +334,7 @@ async function pollState(accountIds = null) {
 function schedulePolling() {
   if (pollTimer) clearInterval(pollTimer);
   const state = store.loadState();
-  const minutes = Math.max(1, Number(state?.settings?.pollMinutes || 15));
+  const minutes = Math.min(30, Math.max(1, Number(state?.settings?.pollMinutes) || 5));
   pollStartedAt ||= new Date().toISOString();
   nextPollAt = new Date(Date.now() + minutes * 60_000).toISOString();
   pollTimer = setInterval(() => {

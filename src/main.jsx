@@ -106,10 +106,13 @@ const clampWidgetLength = (value) => {
 const normalizeSettings = (value = {}) => {
   const legacySize = { small: 240, medium: 280, large: 336 }[value.widgetSize];
   const byWidth = Number(value.widgetWidth) ? Number(value.widgetWidth) / WIDGET_BASE_SIZE.width : undefined;
+  const pollNumber = Number(value.pollMinutes);
   return {
-    alerts: true, pollMinutes: '15', widgetTagLimit: '2', reminderRules: defaultReminderRules,
+    alerts: true, pollMinutes: '5', widgetTagLimit: '2', reminderRules: defaultReminderRules,
     widget: true, widgetPreview: false, theme: 'dark', widgetScale: 0.9, widgetLength: 0.9, historyDays: 7,
     ...value,
+    // 轮询间隔只提供 5–30 分钟；旧配置里更大的值收敛到 30，缺失或非法时回到默认 5
+    pollMinutes: [5, 10, 15, 30].includes(pollNumber) ? String(pollNumber) : (pollNumber > 30 ? '30' : '5'),
     reminderRules: Array.isArray(value.reminderRules) ? value.reminderRules : defaultReminderRules,
     theme: value.theme === 'light' ? 'light' : 'dark',
     historyDays: [3, 7, 15, 30, 60, 90].includes(Number(value.historyDays)) ? Number(value.historyDays) : 7,
@@ -353,6 +356,7 @@ const formatChartDetail = (sample) => {
   if (sample.unit !== '%' || !Number.isFinite(amount) || !Number.isFinite(limit) || limit <= 0 || limit === 100) return base;
   return `${base} · 剩 ${formatChartNumber(amount)} / ${formatChartNumber(limit)}`;
 };
+const formatChartStamp = (at) => { const d = new Date(at); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 // 该快照点的刷新周期：重置的绝对时间 + 相对该点的倒计时
 const formatPointReset = (resetAt, pointAt) => {
   if (!resetAt) return '';
@@ -376,6 +380,8 @@ const formatPointResetShort = (resetAt, pointAt) => {
 
 function UsageChart({ points, hiddenKeys = [] }) {
   const [hover, setHover] = useState(null);
+  // 断线区间（无数据时段）的悬停提示：{ from, to } 为区间前后两个数据点的时间
+  const [hoverGap, setHoverGap] = useState(null);
   // 时间轴缩放：null 表示显示全程；滚轮以光标位置为中心缩放，放大后可拖动平移
   const [view, setView] = useState(null);
   const svgRef = useRef(null);
@@ -384,17 +390,22 @@ function UsageChart({ points, hiddenKeys = [] }) {
   const PAD = { l: 36, r: 12, t: 14, b: 24 };
   const innerW = W - PAD.l - PAD.r;
   const innerH = H - PAD.t - PAD.b;
-  const { allKeys, samples, allPercent, fullStart, fullEnd } = useMemo(() => {
+  const { allKeys, samples, allPercent, fullStart, fullEnd, breakGapMs } = useMemo(() => {
     const keys = [...new Set(points.flatMap((point) => Object.keys(point.windows || {})))]
       .sort((a, b) => (durationOrder[a] || 9) - (durationOrder[b] || 9));
     // 抽样上限放宽到 2000，滚轮放大后仍能看清细节
     const stride = Math.max(1, Math.ceil(points.length / 2000));
     const sampled = points.filter((_point, index) => index % stride === 0 || index === points.length - 1);
     const percentOnly = keys.every((key) => sampled.every((point) => !point.windows?.[key] || point.windows[key].unit === '%'));
+    // 断线阈值 = 2 倍采样中位间隔且至少 10 分钟：默认 5 分钟轮询时正好 10 分钟，选了更长轮询间隔的账号按自身节奏放宽
+    const times = sampled.map((point) => new Date(point.at).getTime());
+    const gaps = times.slice(1).map((at, index) => at - times[index]).filter((gap) => gap > 0).sort((a, b) => a - b);
+    const medianGap = gaps.length >= 3 ? gaps[Math.floor(gaps.length / 2)] : 5 * 60_000;
     return {
       allKeys: keys, samples: sampled, allPercent: percentOnly,
       fullStart: sampled.length ? new Date(sampled[0].at).getTime() : 0,
       fullEnd: sampled.length ? new Date(sampled[sampled.length - 1].at).getTime() : 0,
+      breakGapMs: Math.max(medianGap * 2, 10 * 60_000),
     };
   }, [points]);
   // React 根节点上的 wheel 监听是 passive 的，必须自己绑非 passive 监听才能 preventDefault
@@ -433,17 +444,22 @@ function UsageChart({ points, hiddenKeys = [] }) {
   const single = samples.length === 1;
   const toX = (at) => PAD.l + (single ? innerW / 2 : ((at - start) / span) * innerW);
   const values = drawn.flatMap((point) => visibleKeys.map((key) => point.windows?.[key]).filter(Boolean).map(chartValue));
-  const yMin = allPercent ? 0 : Math.min(...values);
-  const yMax = allPercent ? 100 : Math.max(...values);
-  const yPad = allPercent ? 0 : Math.max((yMax - yMin) * 0.15, yMax * 0.02, 1);
-  const yLo = yMin - yPad; const yHi = yMax + yPad;
+  // 纵轴随可见折线的实际范围自适应（例如只剩 30% 附近的 5 小时线时不必再顶到 100%）；百分比窗口的上下限夹在 0–100 之间
+  const yMin = values.length ? Math.min(...values) : 0;
+  const yMax = values.length ? Math.max(...values) : (allPercent ? 100 : 1);
+  const yPad = Math.max((yMax - yMin) * 0.15, allPercent ? 5 : Math.max(yMax * 0.02, 1));
+  const yLo = allPercent ? Math.max(0, yMin - yPad) : yMin - yPad;
+  const yHi = allPercent ? Math.min(100, yMax + yPad) : yMax + yPad;
   const toY = (value) => PAD.t + (1 - (value - yLo) / Math.max(1e-9, yHi - yLo)) * innerH;
   const paths = visibleKeys.map((key) => {
     const segments = [];
     let current = '';
-    for (const point of drawn) {
+    for (let index = 0; index < drawn.length; index++) {
+      const point = drawn[index];
       const sample = point.windows?.[key];
-      if (!sample) { if (current) { segments.push(current); current = ''; } continue; }
+      // 与上一点的间隔超过断线阈值（程序关闭等无数据时段）时断开，不强行连线
+      const gapFromPrev = index > 0 ? new Date(point.at).getTime() - new Date(drawn[index - 1].at).getTime() : Infinity;
+      if (!sample || gapFromPrev > breakGapMs) { if (current) { segments.push(current); current = ''; } if (!sample) continue; }
       const command = `${current ? 'L' : 'M'}${toX(new Date(point.at).getTime()).toFixed(1)},${toY(chartValue(sample)).toFixed(1)}`;
       current += command;
     }
@@ -459,17 +475,23 @@ function UsageChart({ points, hiddenKeys = [] }) {
   const xTicks = single ? [start] : [0, 1, 2, 3, 4].map((index) => start + (span * index) / 4);
   const yTicks = [0, 1, 2, 3].map((index) => yLo + ((yHi - yLo) * index) / 3);
   const formatYTick = (value) => allPercent ? `${Math.round(value)}%` : value >= 100 ? String(Math.round(value)) : value.toFixed(1);
-  const pickPoint = (clientX) => {
+  // 悬停：8px 内吸附到最近数据点；落在断线区间（无数据时段）时给出“暂无数据”提示；其余情况沿用最近点
+  const moveHover = (clientX) => {
     const rect = svgRef.current?.getBoundingClientRect();
-    if (!rect || !drawn.length) return null;
+    if (!rect || !drawn.length) return;
     const x = ((clientX - rect.left) / rect.width) * W;
+    const ats = drawn.map((point) => new Date(point.at).getTime());
     let best = 0;
     let bestDistance = Infinity;
-    drawn.forEach((point, index) => {
-      const distance = Math.abs(toX(new Date(point.at).getTime()) - x);
+    ats.forEach((at, index) => {
+      const distance = Math.abs(toX(at) - x);
       if (distance < bestDistance) { bestDistance = distance; best = index; }
     });
-    return best;
+    if (bestDistance <= 8) { setHover(best); setHoverGap(null); return; }
+    const t = start + ((x - PAD.l) / innerW) * span;
+    const gapIndex = ats.findIndex((at, index) => index < ats.length - 1 && t > at && t < ats[index + 1] && ats[index + 1] - at > breakGapMs);
+    if (gapIndex >= 0) { setHover(null); setHoverGap({ from: ats[gapIndex], to: ats[gapIndex + 1] }); return; }
+    setHover(best); setHoverGap(null);
   };
   const startPan = (event) => {
     if (!view) return;
@@ -478,7 +500,7 @@ function UsageChart({ points, hiddenKeys = [] }) {
   };
   const movePan = (event) => {
     const drag = dragRef.current;
-    if (!drag) { const picked = pickPoint(event.clientX); if (picked != null) setHover(picked); return; }
+    if (!drag) { moveHover(event.clientX); return; }
     const rect = svgRef.current?.getBoundingClientRect();
     if (!rect) return;
     const viewSpan = drag.end - drag.start;
@@ -490,18 +512,17 @@ function UsageChart({ points, hiddenKeys = [] }) {
   const endPan = () => { dragRef.current = null; };
   const hoverPoint = hover == null ? null : drawn[hover];
   const hoverX = hoverPoint ? toX(new Date(hoverPoint.at).getTime()) : 0;
-  const hoverDate = hoverPoint ? new Date(hoverPoint.at) : null;
   return <div className={`usage-chart ${view ? 'zoomed' : ''}`}>
     <div className="chart-detail">{hoverPoint ? <>
-      <b>{`${hoverDate.getMonth() + 1}/${hoverDate.getDate()} ${String(hoverDate.getHours()).padStart(2, '0')}:${String(hoverDate.getMinutes()).padStart(2, '0')}`}</b>
+      <b>{formatChartStamp(hoverPoint.at)}</b>
       {visibleKeys.map((key, index) => {
         const sample = hoverPoint.windows?.[key];
         if (!sample) return null;
         const reset = formatPointResetShort(sample.resetAt, hoverPoint.at);
         return <span className="chart-detail-item" key={key}><i style={{ background: chartColor(key, index) }} />{windowCatalog[key]?.label || key}<b>{formatChartDetail(sample)}</b>{reset && <small>{reset}</small>}</span>;
       })}
-    </> : <span className="chart-detail-hint">悬停查看该点的数值与重置时间</span>}</div>
-    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} onPointerDown={startPan} onPointerMove={movePan} onPointerUp={endPan} onPointerCancel={endPan} onMouseLeave={() => { setHover(null); endPan(); }}>
+    </> : hoverGap ? <span className="chart-detail-hint">{formatChartStamp(hoverGap.from)} – {formatChartStamp(hoverGap.to)} · 该时段暂无数据</span> : <span className="chart-detail-hint">悬停查看该点的数值与重置时间</span>}</div>
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} onPointerDown={startPan} onPointerMove={movePan} onPointerUp={endPan} onPointerCancel={endPan} onMouseLeave={() => { setHover(null); setHoverGap(null); endPan(); }}>
       {yTicks.map((value) => <g key={value}><line x1={PAD.l} x2={W - PAD.r} y1={toY(value)} y2={toY(value)} className="chart-grid" /><text x={PAD.l - 6} y={toY(value) + 3} className="chart-y-label">{formatYTick(value)}</text></g>)}
       {xTicks.map((at) => <text key={Math.round(at)} x={Math.min(Math.max(toX(at), PAD.l + 16), W - PAD.r - 16)} y={H - 7} className="chart-x-label">{formatTick(at)}</text>)}
       {paths.map((path, index) => path.segments.map((d) => <path key={`${path.key}-${d.slice(0, 12)}`} d={d} fill="none" stroke={chartColor(path.key, index)} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />))}
@@ -586,7 +607,7 @@ function Toggle({ checked, onChange, label, description }) {
 function SettingsDrawer({ accounts, providers, settings, setSettings, onClose, openModal, onDeleteAccount, onTestAccount, testingAccountId, onEditProvider, autoLaunch, onToggleAutoLaunch, appVersion, update, onOpenUpdate, onCheckUpdate, onClearHistory }) {
   return <><div className="drawer-shade" onClick={onClose} /><aside className="settings-drawer" aria-label="设置">
     <div className="drawer-scroll">
-      <section className="drawer-section"><div className="drawer-section-title"><Bell size={16} /><span>刷新提醒规则</span><button className="mini-add" onClick={() => setSettings((old) => ({ ...old, reminderRules: [...(old.reminderRules || []), { id: `rule-${Date.now()}`, beforeMinutes: 120, minRemaining: 50 }] }))}><Plus size={14} /> 新增规则</button></div><Toggle checked={settings.alerts !== false} onChange={(value) => setSettings((old) => ({ ...old, alerts: value }))} label="启用提醒" description="关闭后不发送桌面通知，也不标记命中规则" />{(settings.reminderRules || []).length === 0 ? <div className="settings-empty">当前没有运行规则</div> : (settings.reminderRules || []).map((rule, index) => <div className="rule-editor" key={rule.id}><label><span>刷新前多久（分钟）<small>窗口重置倒计时小于该值才提醒</small></span><input type="number" min="1" value={rule.beforeMinutes} onChange={(event) => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, beforeMinutes: event.target.value } : item) }))} /></label><label><span>剩余至少（百分比）<small>剩余额度不低于该值才提醒</small></span><input type="number" min="0" max="100" value={rule.minRemaining} onChange={(event) => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, minRemaining: event.target.value } : item) }))} /></label><button className="icon-button danger rule-delete" title="删除规则" aria-label={`删除 ${rule.label || '规则'}`} onClick={() => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.filter((item) => item.id !== rule.id) }))}><Trash2 size={13} /></button></div>)}<small className="drawer-help">满足“刷新前多久”且“剩余至少”时，额度窗口会标记该规则。可以一条规则都没有。</small><div className="setting-select"><span><b>轮询间隔</b><small>所有账号统一检查频率</small></span><select value={settings.pollMinutes} onChange={(event) => setSettings((old) => ({ ...old, pollMinutes: event.target.value }))}><option value="5">5 分钟</option><option value="15">15 分钟</option><option value="30">30 分钟</option><option value="60">1 小时</option></select></div></section>
+      <section className="drawer-section"><div className="drawer-section-title"><Bell size={16} /><span>刷新提醒规则</span><button className="mini-add" onClick={() => setSettings((old) => ({ ...old, reminderRules: [...(old.reminderRules || []), { id: `rule-${Date.now()}`, beforeMinutes: 120, minRemaining: 50 }] }))}><Plus size={14} /> 新增规则</button></div><Toggle checked={settings.alerts !== false} onChange={(value) => setSettings((old) => ({ ...old, alerts: value }))} label="启用提醒" description="关闭后不发送桌面通知，也不标记命中规则" />{(settings.reminderRules || []).length === 0 ? <div className="settings-empty">当前没有运行规则</div> : (settings.reminderRules || []).map((rule, index) => <div className="rule-editor" key={rule.id}><label><span>刷新前多久（分钟）<small>窗口重置倒计时小于该值才提醒</small></span><input type="number" min="1" value={rule.beforeMinutes} onChange={(event) => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, beforeMinutes: event.target.value } : item) }))} /></label><label><span>剩余至少（百分比）<small>剩余额度不低于该值才提醒</small></span><input type="number" min="0" max="100" value={rule.minRemaining} onChange={(event) => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, minRemaining: event.target.value } : item) }))} /></label><button className="icon-button danger rule-delete" title="删除规则" aria-label={`删除 ${rule.label || '规则'}`} onClick={() => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.filter((item) => item.id !== rule.id) }))}><Trash2 size={13} /></button></div>)}<small className="drawer-help">满足“刷新前多久”且“剩余至少”时，额度窗口会标记该规则。可以一条规则都没有。</small><div className="setting-select"><span><b>轮询间隔</b><small>所有账号统一检查频率</small></span><select value={settings.pollMinutes} onChange={(event) => setSettings((old) => ({ ...old, pollMinutes: event.target.value }))}><option value="5">5 分钟</option><option value="10">10 分钟</option><option value="15">15 分钟</option><option value="30">30 分钟</option></select></div></section>
       <section className="drawer-section"><div className="drawer-section-title"><SunMoon size={16} /><span>主题</span></div><div className="setting-select"><span><b>界面主题</b><small>主窗口与桌面浮窗同步应用</small></span><select value={settings.theme === 'light' ? 'light' : 'dark'} onChange={(event) => setSettings((old) => ({ ...old, theme: event.target.value }))}><option value="dark">暗色</option><option value="light">亮色</option></select></div></section>
       <section className="drawer-section"><div className="drawer-section-title"><Monitor size={16} /><span>桌面浮窗</span></div><Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" description="固定在桌面顶层，双击展开主窗口" /><label className="size-slider"><span>大小</span><input type="range" min={80} max={300} step={5} value={Math.round(clampWidgetScale(settings.widgetScale) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetScale: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetScale(settings.widgetScale) * 100)}%</b></label><label className="size-slider"><span>长度</span><input type="range" min={Math.round(WIDGET_MIN_LENGTH * 100)} max={Math.round(WIDGET_MAX_LENGTH * 100)} step={5} value={Math.round(clampWidgetLength(settings.widgetLength) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetLength: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetLength(settings.widgetLength) * 100)}%</b></label><small className="drawer-help">长度只调整横向宽度（60%–150%）。浮窗会展示账号的全部额度窗口（含 1M）；空间不足时逐级收起：标签先缩成小圆点再隐藏，倒计时按周期从长到短逐个隐藏，最后才收起最长周期的额度——只有一个额度窗口的账号通常不用收起任何内容。名称放不下时显示省略号，悬停可查看完整内容。</small><button type="button" className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetScale: 0.9, widgetLength: 0.9 }))}>恢复默认大小与长度</button><div className="widget-setting-preview"><div style={{ width: Math.round(WIDGET_BASE_SIZE.width * clampWidgetLength(settings.widgetLength)), maxWidth: '100%', margin: '0 auto' }}><WidgetRow account={accounts[0]} provider={providers.find((item) => item.id === accounts[0]?.providerId)} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} /></div></div><button className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetPreview: true }))}><Eye size={15} /> 预览并调整</button></section>
       <section className="drawer-section"><div className="drawer-section-title"><History size={16} /><span>额度历史</span></div><div className="setting-select"><span><b>保留时长</b><small>每次成功刷新都会记录一条，用于账号卡片的趋势图</small></span><select value={settings.historyDays} onChange={(event) => setSettings((old) => ({ ...old, historyDays: Number(event.target.value) }))}><option value={3}>3 天</option><option value={7}>7 天（默认）</option><option value={15}>15 天</option><option value={30}>30 天</option><option value={60}>60 天</option><option value={90}>3 个月（最长）</option></select></div><button className="outline-button full" onClick={onClearHistory}><Trash2 size={14} /> 清除全部历史记录</button><small className="drawer-help">删除账号时会一并删除该账号的额度历史；超过保留时长的记录会自动清理。</small></section>
