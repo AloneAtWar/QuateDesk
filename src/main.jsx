@@ -302,7 +302,9 @@ function PriorityView({ accounts, providers, reminderRules, onOpenHistory }) {
       if (!byWindow.has(row.meter.key)) byWindow.set(row.meter.key, []);
       byWindow.get(row.meter.key).push(row);
     });
-    return [...byWindow.entries()].map(([key, rows]) => [key, rows.sort((a, b) => new Date(a.meter.resetAt || '9999').getTime() - new Date(b.meter.resetAt || '9999').getTime())]);
+    return [...byWindow.entries()]
+      .sort(([a], [b]) => (durationOrder[a] || 9) - (durationOrder[b] || 9))
+      .map(([key, rows]) => [key, rows.sort((a, b) => new Date(a.meter.resetAt || '9999').getTime() - new Date(b.meter.resetAt || '9999').getTime())]);
   }, [accounts]);
   return <div className="view-stack">
     <ResetTimeline accounts={accounts} providers={providers} />
