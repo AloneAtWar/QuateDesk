@@ -112,6 +112,66 @@ const meter = (key, remaining, total, unit = '%', resetAt = null, extra = {}) =>
   ...extra,
 });
 
+// ── 网络层兜底：账号级超时 + 瞬时错误自动重试 ────────────────────────────────
+const DEFAULT_TIMEOUT_MS = 15_000;
+const RETRY_DELAYS_MS = [1_000, 2_000];
+
+// 账号设置里的超时（秒）收敛到 5–120，缺省 15 秒
+const accountTimeoutMs = (account) => {
+  const seconds = Number(account?.timeoutSeconds);
+  if (!Number.isFinite(seconds) || seconds <= 0) return DEFAULT_TIMEOUT_MS;
+  return Math.min(120, Math.max(5, Math.round(seconds))) * 1000;
+};
+
+// 瞬时网络错误（值得自动重试）：超时中断、连接被掐断/重置、DNS 抖动、断网或网络切换、响应被截断。
+// 凭据失效、HTTP 4xx/5xx、业务失败不属于瞬时错误，原样抛出不重试。
+const TRANSIENT_NETWORK_ERROR = new RegExp([
+  'aborted due to timeout',
+  'TimeoutError',
+  'timed?\\s*out',
+  'ETIMEDOUT',
+  'net::ERR_CONNECTION_(?:CLOSED|RESET|REFUSED|TIMED_OUT|ABORTED)',
+  'net::ERR_NAME_NOT_RESOLVED',
+  'net::ERR_ADDRESS_UNREACHABLE',
+  'net::ERR_INTERNET_DISCONNECTED',
+  'net::ERR_NETWORK_CHANGED',
+  'net::ERR_EMPTY_RESPONSE',
+  'net::ERR_CONTENT_LENGTH_MISMATCH',
+  'net::ERR_INCOMPLETE_CHUNKED_ENCODING',
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ECONNABORTED',
+  'EPIPE',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'socket hang up',
+  'fetch failed',
+  'terminated',
+  'Unexpected end of JSON',
+].join('|'), 'i');
+
+const isTransientNetworkError = (error) => TRANSIENT_NETWORK_ERROR.test(String(error?.message || ''));
+
+// 网络类报错翻译成可行动的中文提示；attempts 为最终失败时的总尝试次数
+const describeNetworkError = (error, attempts) => {
+  const raw = String(error?.message || '');
+  if (/aborted due to timeout|TimeoutError|ETIMEDOUT|timed?\s*out/i.test(raw)) {
+    return `连接超时，已自动重试 ${attempts} 次仍失败。可在账号设置中调大超时时间；访问境外厂商请在「设置 → 网络代理」中配置代理`;
+  }
+  if (/ERR_NAME_NOT_RESOLVED|ENOTFOUND|EAI_AGAIN/i.test(raw)) {
+    return `域名解析失败，已自动重试 ${attempts} 次仍失败，请检查网络连接或代理设置`;
+  }
+  if (/ERR_PROXY|ERR_TUNNEL|ERR_SOCKS/i.test(raw)) {
+    return '代理连接失败，请检查「设置 → 网络代理」中的代理地址是否可用';
+  }
+  if (/ERR_INTERNET_DISCONNECTED/i.test(raw)) {
+    return '本机网络未连接，请检查网络后再刷新';
+  }
+  return `网络连接被中断（已自动重试 ${attempts} 次仍失败，${raw.slice(0, 90)}）。境外厂商直连常被中断，请在「设置 → 网络代理」中配置代理`;
+};
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const definitions = {
   generic: {
     request: (account, provider) => {
@@ -278,13 +338,29 @@ const buildStandardRequest = (account, provider, credential, secretVariables = {
   return { url, method: String(config.method || 'GET').toUpperCase(), headers, body: hasBody ? body : undefined };
 };
 
-async function queryAccount(account, provider, credential, fetcher = fetch, secretVariables = {}) {
+// 瞬时网络错误自动重试：默认共尝试 3 次（1 秒 / 2 秒退避），重试耗尽后把原始报错翻译成中文提示。
+// options.retryDelaysMs 仅供测试注入零退避，生产调用不传。
+async function queryAccount(account, provider, credential, fetcher = fetch, secretVariables = {}, options = {}) {
+  const delays = Array.isArray(options.retryDelaysMs) ? options.retryDelaysMs : RETRY_DELAYS_MS;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await queryAccountOnce(account, provider, credential, fetcher, secretVariables);
+    } catch (error) {
+      if (!isTransientNetworkError(error)) throw error;
+      if (attempt > delays.length) throw new Error(describeNetworkError(error, attempt));
+      await sleep(delays[attempt - 1]);
+    }
+  }
+}
+
+async function queryAccountOnce(account, provider, credential, fetcher = fetch, secretVariables = {}) {
   const config = provider.requestConfig || {};
+  const timeoutMs = accountTimeoutMs(account);
   // CLI 凭据类订阅是专属适配：凭据来自本机各官方 CLI 登录态，不走标准映射/脚本模板
-  if (config.adapterMode === 'grok') return queryGrokSubscription(fetcher);
-  if (config.adapterMode === 'claude') return queryClaudeQuota(fetcher, meter);
-  if (config.adapterMode === 'codex') return queryCodexQuota(fetcher, meter);
-  if (config.adapterMode === 'gemini') return queryGeminiQuota(fetcher, meter);
+  if (config.adapterMode === 'grok') return queryGrokSubscription(fetcher, timeoutMs);
+  if (config.adapterMode === 'claude') return queryClaudeQuota(fetcher, meter, timeoutMs);
+  if (config.adapterMode === 'codex') return queryCodexQuota(fetcher, meter, timeoutMs);
+  if (config.adapterMode === 'gemini') return queryGeminiQuota(fetcher, meter, timeoutMs);
   const credentialRequired = config.adapterMode === 'script' ? config.credentialRequired === true : config.auth !== 'none';
   if (!credential && credentialRequired) throw new Error('缺少凭据，请在「设置 → 账号与凭据」中编辑该账号填写 API Token');
   const scripted = config.adapterMode === 'script' && config.script ? runScriptAdapter(account, provider, credential, null, secretVariables) : null;
@@ -293,7 +369,7 @@ async function queryAccount(account, provider, credential, fetcher = fetch, secr
   const request = scripted?.request || standard;
   if (!request.url || !/^https?:\/\//i.test(request.url)) throw new Error('额度接口地址无效');
   const headers = scripted || standard ? { Accept: 'application/json', ...request.headers } : buildHeaders(request.auth, credential);
-  const response = await fetcher(request.url, { method: request.method || 'GET', headers, body: request.body ? JSON.stringify(request.body) : undefined, signal: AbortSignal.timeout(15_000) });
+  const response = await fetcher(request.url, { method: request.method || 'GET', headers, body: request.body ? JSON.stringify(request.body) : undefined, signal: AbortSignal.timeout(timeoutMs) });
   if (response.status === 401 || response.status === 403) throw new Error('凭据已失效，请在「设置 → 账号与凭据」中编辑该账号，更新 API Token 后重新保存');
   if (!response.ok) throw new Error(`额度接口返回 HTTP ${response.status}`);
   const payload = await response.json();
@@ -438,7 +514,7 @@ const grokWindowKey = (startsAt, resetsAt, nowSeconds) => {
   return 'monthly';
 };
 
-async function queryGrokSubscription(fetcher = fetch) {
+async function queryGrokSubscription(fetcher = fetch, timeoutMs = DEFAULT_TIMEOUT_MS) {
   if (!fs.existsSync(grokAuthPath())) {
     throw new Error('未检测到 grok CLI 登录信息，请先安装 grok CLI 并运行 grok login');
   }
@@ -465,7 +541,7 @@ async function queryGrokSubscription(fetcher = fetch) {
       'User-Agent': 'quota-desk',
     },
     body,
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (response.status === 401 || response.status === 403) throw new Error('Grok 凭据被拒绝，请重新 grok login');
   if (!response.ok) throw new Error(`Grok 计费接口返回 HTTP ${response.status}`);
@@ -481,4 +557,4 @@ async function queryGrokSubscription(fetcher = fetch) {
   })];
 }
 
-module.exports = { definitions, queryAccount, __grok: { selectGrokAuthEntry, parseGrokBilling, grokWindowKey } };
+module.exports = { definitions, queryAccount, __grok: { selectGrokAuthEntry, parseGrokBilling, grokWindowKey }, __network: { accountTimeoutMs, isTransientNetworkError, describeNetworkError } };

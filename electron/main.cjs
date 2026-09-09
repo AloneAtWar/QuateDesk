@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, nativeImage, net, Notification, screen, shell, Tray } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, nativeImage, net, Notification, screen, session, shell, Tray } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { DesktopStore } = require('./storage.cjs');
@@ -196,6 +196,30 @@ const runtimeStatus = () => ({
   startedAt: pollStartedAt,
   nextPollAt,
 });
+
+// ── 网络代理设置 ────────────────────────────────────────────────────────────
+// 额度轮询走 net.fetch（默认会话的 Chromium 网络栈），setProxy 即对所有账号的请求生效。
+// 三种模式：direct=直连、system=跟随系统代理（默认）、manual=手动指定代理规则。
+const normalizeProxyRules = (value) => {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return '';
+  // 允许 host:port 简写（补 http:// 前缀）；http(s)/socks5 标准写法与 Chromium 的
+  // "scheme=host:port;..." 分协议规则原样透传
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) || trimmed.includes('=')) return trimmed;
+  return `http://${trimmed}`;
+};
+
+function applyProxySetting() {
+  const settings = store?.loadState()?.settings || {};
+  const mode = ['direct', 'system', 'manual'].includes(settings.proxyMode) ? settings.proxyMode : 'system';
+  let config = { mode };
+  if (mode === 'manual') {
+    const proxyRules = normalizeProxyRules(settings.proxyUrl);
+    config = proxyRules ? { proxyRules } : { mode: 'system' };
+  }
+  return session.defaultSession.setProxy(config)
+    .catch((error) => console.error('[Quota Desk] 应用代理设置失败', error.message));
+}
 
 const sendState = (state) => {
   for (const window of [mainWindow, widgetWindow]) {
@@ -497,6 +521,7 @@ function registerIpc() {
     const saved = store.saveState(cleanState(state));
     // 账号被删除时连同它的额度历史一起清掉
     store.pruneHistoryAccounts((saved.accounts || []).map((account) => account.id), historyRetentionDays());
+    applyProxySetting();
     schedulePolling();
     sendState(saved);
     refreshTray();
@@ -524,6 +549,28 @@ function registerIpc() {
       checkedAt: account.lastChecked,
       state: { ...state, runtime: runtimeStatus() },
     };
+  });
+  // 表单草稿连通性测试：不保存账号/凭据，直接按草稿跑一次查询；留空的凭据/密钥回退到已存值
+  ipcMain.handle('quota:test-draft', async (_event, { accountId, account, providerId, credential, secretVariables }) => {
+    const state = migrateState(store.loadState());
+    const provider = (state?.providers || []).find((item) => item.id === providerId);
+    if (!provider) throw new Error('找不到厂商配置');
+    let secret = String(credential || '').trim();
+    const secrets = { ...(secretVariables || {}) };
+    if (accountId) {
+      const stored = store.getSecrets(accountId);
+      if (!secret) secret = stored.credential || '';
+      for (const [key, value] of Object.entries(stored.variables || {})) {
+        if (!String(secrets[key] || '').trim()) secrets[key] = value;
+      }
+    }
+    const checkedAt = new Date().toISOString();
+    try {
+      const windows = await queryAccount({ ...(account || {}), providerId }, provider, secret, net.fetch, secrets);
+      return { ok: true, message: formatWindowSummary(windows), checkedAt };
+    } catch (error) {
+      return { ok: false, message: error.message, checkedAt };
+    }
   });
   ipcMain.handle('widget:set-visible', (_event, visible) => setWidgetVisible(Boolean(visible)));
   ipcMain.handle('widget:get-visible', () => Boolean(widgetWindow?.isVisible()));
@@ -640,6 +687,7 @@ else {
   app.on('second-instance', () => { mainWindow?.show(); mainWindow?.focus(); });
   app.whenReady().then(() => {
     store = new DesktopStore();
+    applyProxySetting();
     registerIpc();
     createMainWindow();
     const state = store.loadState();

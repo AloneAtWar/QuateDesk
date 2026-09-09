@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  AlertCircle, ArrowLeft, Bell, Check, ChevronDown, ChevronRight, CircleGauge, Clock3, Download, Eye, ExternalLink, History, LayoutGrid,
+  AlertCircle, ArrowLeft, Bell, Check, ChevronDown, ChevronRight, CircleGauge, Clock3, Download, Eye, ExternalLink, Globe, History, LayoutGrid,
   KeyRound, Monitor, Plus, Power, RefreshCw, Rows3, Settings2, ShieldCheck, SlidersHorizontal,
   Pencil, Pin, Sparkles, SunMoon, Tag, Trash2, UploadCloud, X, Zap,
 } from 'lucide-react';
@@ -103,6 +103,11 @@ const clampWidgetLength = (value) => {
   const length = Math.round(Number(value) * 20) / 20;
   return Number.isFinite(length) ? Math.min(WIDGET_MAX_LENGTH, Math.max(WIDGET_MIN_LENGTH, length)) : 1;
 };
+// 账号请求超时（秒）：5–120 收敛，缺省 15（与主进程 poller 的 accountTimeoutMs 保持一致）
+const clampAccountTimeout = (value) => {
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds > 0 ? Math.min(120, Math.max(5, Math.round(seconds))) : 15;
+};
 const normalizeSettings = (value = {}) => {
   const legacySize = { small: 240, medium: 280, large: 336 }[value.widgetSize];
   const byWidth = Number(value.widgetWidth) ? Number(value.widgetWidth) / WIDGET_BASE_SIZE.width : undefined;
@@ -118,6 +123,8 @@ const normalizeSettings = (value = {}) => {
     historyDays: [3, 7, 15, 30, 60, 90].includes(Number(value.historyDays)) ? Number(value.historyDays) : 7,
     widgetScale: clampWidgetScale(value.widgetScale ?? byWidth ?? (legacySize ? legacySize / WIDGET_BASE_SIZE.width : 0.9)),
     widgetLength: clampWidgetLength(value.widgetLength ?? 0.9),
+    proxyMode: ['direct', 'system', 'manual'].includes(value.proxyMode) ? value.proxyMode : 'system',
+    proxyUrl: String(value.proxyUrl ?? ''),
     widgetSize: undefined,
     widgetWidth: undefined,
     widgetHeight: undefined,
@@ -607,6 +614,7 @@ function Toggle({ checked, onChange, label, description }) {
 }
 
 function SettingsDrawer({ accounts, providers, settings, setSettings, onClose, openModal, onDeleteAccount, onTestAccount, testingAccountId, onEditProvider, autoLaunch, onToggleAutoLaunch, appVersion, update, onOpenUpdate, onCheckUpdate, onClearHistory }) {
+  const proxyMode = ['direct', 'system', 'manual'].includes(settings.proxyMode) ? settings.proxyMode : 'system';
   return <><div className="drawer-shade" onClick={onClose} /><aside className="settings-drawer" aria-label="设置">
     <div className="drawer-scroll">
       <section className="drawer-section"><div className="drawer-section-title"><Bell size={16} /><span>刷新提醒规则</span><button className="mini-add" onClick={() => setSettings((old) => ({ ...old, reminderRules: [...(old.reminderRules || []), { id: `rule-${Date.now()}`, beforeMinutes: 120, minRemaining: 50 }] }))}><Plus size={14} /> 新增规则</button></div><Toggle checked={settings.alerts !== false} onChange={(value) => setSettings((old) => ({ ...old, alerts: value }))} label="启用提醒" description="关闭后不发送桌面通知，也不标记命中规则" />{(settings.reminderRules || []).length === 0 ? <div className="settings-empty">当前没有运行规则</div> : (settings.reminderRules || []).map((rule, index) => <div className="rule-editor" key={rule.id}><label><span>刷新前多久（分钟）<small>窗口重置倒计时小于该值才提醒</small></span><input type="number" min="1" value={rule.beforeMinutes} onChange={(event) => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, beforeMinutes: event.target.value } : item) }))} /></label><label><span>剩余至少（百分比）<small>剩余额度不低于该值才提醒</small></span><input type="number" min="0" max="100" value={rule.minRemaining} onChange={(event) => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, minRemaining: event.target.value } : item) }))} /></label><button className="icon-button danger rule-delete" title="删除规则" aria-label={`删除 ${rule.label || '规则'}`} onClick={() => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.filter((item) => item.id !== rule.id) }))}><Trash2 size={13} /></button></div>)}<small className="drawer-help">满足“刷新前多久”且“剩余至少”时，额度窗口会标记该规则。可以一条规则都没有。</small><div className="setting-select"><span><b>轮询间隔</b><small>所有账号统一检查频率</small></span><select value={settings.pollMinutes} onChange={(event) => setSettings((old) => ({ ...old, pollMinutes: event.target.value }))}><option value="5">5 分钟</option><option value="10">10 分钟</option><option value="15">15 分钟</option><option value="30">30 分钟</option></select></div></section>
@@ -615,6 +623,7 @@ function SettingsDrawer({ accounts, providers, settings, setSettings, onClose, o
       <section className="drawer-section"><div className="drawer-section-title"><History size={16} /><span>额度历史</span></div><div className="setting-select"><span><b>保留时长</b><small>每次成功刷新都会记录一条，用于账号卡片的趋势图</small></span><select value={settings.historyDays} onChange={(event) => setSettings((old) => ({ ...old, historyDays: Number(event.target.value) }))}><option value={3}>3 天</option><option value={7}>7 天（默认）</option><option value={15}>15 天</option><option value={30}>30 天</option><option value={60}>60 天</option><option value={90}>3 个月（最长）</option></select></div><button className="outline-button full" onClick={onClearHistory}><Trash2 size={14} /> 清除全部历史记录</button><small className="drawer-help">删除账号时会一并删除该账号的额度历史；超过保留时长的记录会自动清理。</small></section>
       <section className="drawer-section"><div className="drawer-section-title"><ShieldCheck size={16} /><span>账号与凭据</span><button className="mini-add" onClick={() => openModal('account')}><Plus size={14} /> 添加账号</button></div><div className="settings-list">{accounts.length === 0 && <div className="settings-empty">还没有账号</div>}{accounts.map((account) => { const provider = providers.find((item) => item.id === account.providerId); const testing = testingAccountId === account.id; return <div className="settings-account" key={account.id}><Logo provider={provider} size="sm" /><div><b title={account.name}>{account.name}</b><small className={account.status === 'warning' ? 'warning-copy' : ''} title={account.status === 'warning' ? (account.lastError || '') : ''}>{account.status === 'warning' ? account.lastError : `${provider?.name} · ${account.windows.length} 个额度窗口`}</small></div><button className="row-icon-button" title="编辑账号" aria-label={`编辑 ${account.name}`} onClick={() => openModal({ type: 'account-edit', account })}><Pencil size={13} /></button><button className="row-icon-button" disabled={testing} title="刷新" aria-label={`刷新 ${account.name} 额度`} onClick={() => onTestAccount(account)}><RefreshCw size={13} className={testing ? 'spinning' : ''} /></button><button className="row-icon-button danger" title="删除账号" aria-label={`删除 ${account.name}`} onClick={() => onDeleteAccount(account)}><Trash2 size={13} /></button><span className={`status-dot ${account.status}`} /></div>; })}</div>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button full drawer-import-button" onClick={() => openModal('import-ccswitch')}><Download size={14} /> 从 cc-switch 导入账号</button>}</section>
       <section className="drawer-section"><div className="drawer-section-title"><LayoutGrid size={16} /><span>厂商适配器</span><button className="mini-add" onClick={() => openModal('provider')}><Plus size={14} /> 新增厂商</button></div><div className="settings-list providers-list">{providers.map((provider) => <div className="settings-account" key={provider.id}><Logo provider={provider} size="sm" /><div><b title={provider.name}>{provider.name}</b><small>{provider.requestConfig?.adapterMode === 'script' ? '脚本适配' : provider.requestConfig?.adapterMode === 'grok' ? '专属适配' : '标准映射'}</small></div><button className="row-icon-button" title="编辑厂商" aria-label={`编辑 ${provider.name}`} onClick={() => onEditProvider(provider)}><Pencil size={13} /></button><span className="adapter-state"><Check size={13} /></span></div>)}</div></section>
+      <section className="drawer-section"><div className="drawer-section-title"><Globe size={16} /><span>网络代理</span></div><div className="setting-select"><span><b>代理模式</b><small>所有账号的额度请求共用，保存后立即生效</small></span><select value={proxyMode} onChange={(event) => setSettings((old) => ({ ...old, proxyMode: event.target.value }))}><option value="system">跟随系统（默认）</option><option value="manual">手动输入</option><option value="direct">不使用代理</option></select></div>{proxyMode === 'manual' && <label className="field drawer-proxy-field"><span>代理地址 <small>留空时退回跟随系统</small></span><input value={settings.proxyUrl ?? ''} onChange={(event) => setSettings((old) => ({ ...old, proxyUrl: event.target.value }))} placeholder="http://127.0.0.1:7897 或 socks5://127.0.0.1:7898" spellCheck="false" autoComplete="off" /></label>}<small className="drawer-help">访问 Claude、Codex、Gemini、Grok 等境外厂商直连常被中断，建议配置可用代理。地址以代理工具实际监听的端口为准（Clash Verge Rev 默认 mixed-port 7897）；只填 host:port 时按 http 代理处理。切换代理模式后建议点账号行的「刷新」验证效果。</small></section>
       <section className="drawer-section"><div className="drawer-section-title"><Power size={16} /><span>系统与更新</span></div><Toggle checked={autoLaunch} onChange={onToggleAutoLaunch} label="开机自启" description="登录 Windows 后自动启动 Quota Desk" /><Toggle checked={settings.autoUpdate !== false} onChange={(value) => setSettings((old) => ({ ...old, autoUpdate: value }))} label="自动检查更新" description="启动时及每小时自动检查 GitHub 上是否有新版本" /><div className="setting-select"><span><b>版本更新</b><small>当前版本 v{appVersion || '-'}</small></span>{update && ['available', 'downloading', 'downloaded'].includes(update.status) ? <button className="outline-button" onClick={onOpenUpdate}>v{update.version} 可用</button> : <button className="outline-button" disabled={update?.status === 'checking'} onClick={onCheckUpdate}>{update?.status === 'checking' ? '正在检查…' : '检查更新'}</button>}</div></section>
     </div>
   </aside></>;
@@ -796,7 +805,7 @@ function ProviderModal({ provider, onClose, onSave }) {
   return <div className="modal-backdrop" onClick={onClose}><form className="modal provider-modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">{isGeneric ? '通用 JSON 适配器' : '内置厂商配置'}</span><h2>{provider ? '编辑厂商' : '新增厂商'}</h2></div></div><div className="logo-upload">{logo ? <span className="upload-preview"><img src={logo} alt="Logo 预览" /></span> : <span className="upload-mark"><UploadCloud size={19} /></span>}<div><b>{logo ? 'Logo 已准备好' : '上传厂商 Logo'}</b><small>PNG / SVG / WebP，建议 64 × 64</small></div><label className="outline-button file-button"><UploadCloud size={13} /> {logo ? '更换' : '选择文件'}<input type="file" accept="image/png,image/svg+xml,image/webp" onChange={readLogo} /></label></div><div className="form-grid"><label className="field"><span>厂商名称</span><input required value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：Acme Coding" /></label><label className="field"><span>接口 Base URL</span><input required value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.example.com" /></label></div><div className="form-grid"><label className="field"><span>默认额度接口</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder="/v1/usage 或完整 URL" /></label><label className="field"><span>认证方式</span><select value={auth} onChange={(event) => setAuth(event.target.value)}><option value="bearer">Bearer Token</option><option value="token">原始 Token</option><option value="cookie">Cookie</option></select></label></div><label className="field"><span>高级适配脚本 <small>可覆盖内置请求和响应解析，返回 request + extractor</small></span><textarea value={script} onChange={(event) => setScript(event.target.value)} placeholder="({ request: { url: '{{baseUrl}}/v1/usage', method: 'GET', headers: { Authorization: 'Bearer {{apiKey}}' } }, extractor(response) { return { key: 'weekly', remaining: 50, total: 100, reset_at: response?.rate_limits?.[0]?.reset_at, unit: '%' }; } })" /></label>{isGeneric && <div className="adapter-config"><span className="eyebrow">响应字段映射</span><div className="form-grid"><label className="field"><span>数据路径</span><input value={listPath} onChange={(event) => setListPath(event.target.value)} placeholder="data.limits 或 data.quota" /></label><label className="field"><span>数据形态</span><select value={collectionMode} onChange={(event) => setCollectionMode(event.target.value)}><option value="auto">自动判断</option><option value="single">单个对象</option><option value="array">数组</option><option value="object-entries">对象键作为窗口</option></select></label></div><div className="form-grid"><label className="field"><span>窗口字段</span><input value={windowField} onChange={(event) => setWindowField(event.target.value)} placeholder="window / name / type" /></label><label className="field"><span>默认窗口</span><select value={defaultWindow} onChange={(event) => setDefaultWindow(event.target.value)}><option value="five_hour">5 小时</option><option value="daily">1 天</option><option value="weekly">7 天</option><option value="monthly">1个月</option><option value="balance">余额</option></select></label></div><label className="field"><span>窗口值映射</span><textarea value={windowMapText} onChange={(event) => setWindowMapText(event.target.value)} /></label><div className="form-grid mapping-grid"><label className="field"><span>总量路径</span><input value={totalPath} onChange={(event) => setTotalPath(event.target.value)} /></label><label className="field"><span>剩余路径</span><input value={remainingPath} onChange={(event) => setRemainingPath(event.target.value)} /></label><label className="field"><span>已用路径</span><input value={usedPath} onChange={(event) => setUsedPath(event.target.value)} /></label><label className="field"><span>百分比路径</span><input value={percentagePath} onChange={(event) => setPercentagePath(event.target.value)} /></label></div><label className="field"><span>刷新时间路径</span><input value={resetPath} onChange={(event) => setResetPath(event.target.value)} /></label></div>}<div className="adapter-note"><Sparkles size={15} /><span>脚本适配器支持复杂认证、请求方法、请求头、请求体和任意响应提取逻辑。</span></div><div className="modal-actions"><button type="button" className="outline-button" onClick={onClose}>取消</button><button className="primary-button" type="submit"><Pencil size={15} /> {provider ? '保存厂商' : '新增厂商'}</button></div></form></div>;
 }
 
-function AccountModalV2({ providers, onClose, onSave }) {
+function AccountModalV2({ providers, onClose, onSave, onTestDraft }) {
   const [providerId, setProviderId] = useState(providers[0]?.id || '');
   const [name, setName] = useState('');
   const [identity, setIdentity] = useState('');
@@ -805,46 +814,82 @@ function AccountModalV2({ providers, onClose, onSave }) {
   const [endpoint, setEndpoint] = useState(() => defaultEndpoint(providers[0]));
   const [selected, setSelected] = useState(() => providers[0] ? providerWindowKeys(providers[0]) : []);
   const [variableValues, setVariableValues] = useState(() => defaultVariableValues(providers[0]));
+  const [timeoutSeconds, setTimeoutSeconds] = useState('15');
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
   const provider = providers.find((item) => item.id === providerId);
   const availableWindows = providerWindowKeys(provider);
   const variableDefinitions = providerVariableDefinitions(provider);
   const credentialRequired = provider?.requestConfig?.adapterMode === 'script' ? false : provider?.requestConfig?.auth !== 'none';
   const missingRequiredVariables = variableDefinitions.some((item) => item.required && !String(variableValues[item.key] ?? '').trim());
   const toggle = (key) => setSelected((old) => old.includes(key) ? old.filter((item) => item !== key) : [...old, key]);
+  const accountEndpoint = provider?.requestConfig?.adapterMode === 'script' ? String(variableValues.endpoint || provider.requestConfig.endpoint || '') : endpoint.trim();
+  // 草稿连通性测试：不保存账号与凭据，直接用当前表单值查一次
+  const runTest = async () => {
+    if ((credentialRequired && !credential.trim()) || missingRequiredVariables || !selected.length || !accountEndpoint) return;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const { publicVariables, secretVariables } = splitVariableValues(provider, variableValues);
+      setTestResult(await onTestDraft({ account: { endpoint: accountEndpoint, variables: publicVariables, windowKeys: selected, timeoutSeconds: clampAccountTimeout(timeoutSeconds) }, providerId, credential: credential.trim(), secretVariables }));
+    } finally { setTesting(false); }
+  };
   const submit = async (event) => {
     event.preventDefault();
-    const accountEndpoint = provider?.requestConfig?.adapterMode === 'script' ? String(variableValues.endpoint || provider.requestConfig.endpoint || '') : endpoint.trim();
     if ((credentialRequired && !credential.trim()) || missingRequiredVariables || !selected.length || !accountEndpoint) return;
     setSaving(true);
     const { publicVariables, secretVariables } = splitVariableValues(provider, variableValues);
-    try { await onSave({ providerId, name: name.trim() || provider?.name || '新账号', identity: identity.trim(), tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean), windowKeys: selected, credential: credential.trim(), endpoint: accountEndpoint, variables: publicVariables, secretVariables }); }
+    try { await onSave({ providerId, name: name.trim() || provider?.name || '新账号', identity: identity.trim(), tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean), windowKeys: selected, credential: credential.trim(), endpoint: accountEndpoint, timeoutSeconds: clampAccountTimeout(timeoutSeconds), variables: publicVariables, secretVariables }); }
     finally { setSaving(false); }
   };
-  return <div className="modal-backdrop" onClick={onClose}><form className="modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">新账号</span><h2>连接一个账号</h2></div></div><label className="field"><span>厂商</span><select value={providerId} onChange={(event) => { const next = providers.find((item) => item.id === event.target.value); setProviderId(event.target.value); setEndpoint(defaultEndpoint(next)); setSelected(providerWindowKeys(next)); setVariableValues(defaultVariableValues(next)); }}>{providers.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><div className="form-grid"><label className="field"><span>账号名</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder={provider?.name || '账号名称'} /></label><label className="field"><span>标识</span><input value={identity} onChange={(event) => setIdentity(event.target.value)} placeholder="邮箱、用户名或币种" /></label></div><label className="field"><span>标签 <small>用逗号分隔，可留空</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="日常, 主力" /></label>{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && <label className="field"><span>详细额度接口路径</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder="https://api.example.com/v1/usage" /></label>}<div className="field"><span>额度窗口</span><div className="window-choice">{availableWindows.map((key) => <button type="button" key={key} className={`window-choice-item ${selected.includes(key) ? 'selected' : ''}`} onClick={() => toggle(key)}><span>{selected.includes(key) ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>)}</div></div>{variableDefinitions.length > 0 && <div className="adapter-config account-variables"><span className="eyebrow">厂商变量</span><div className="form-grid">{variableDefinitions.map((item) => <label className="field" key={item.key}><span>{item.label || item.key}{item.required && <small> 必填</small>}</span><input type={item.secret ? 'password' : 'text'} required={item.required} value={variableValues[item.key] ?? ''} onChange={(event) => setVariableValues((old) => ({ ...old, [item.key]: event.target.value }))} placeholder={item.defaultValue || item.key} /></label>)}</div></div>}{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && <label className="field"><span>{credentialRequired ? 'API Token' : '凭据（可选）'}</span><input type="password" required={credentialRequired} value={credential} onChange={(event) => setCredential(event.target.value)} placeholder={credentialRequired ? '凭据只会加密保存在本机' : '此接口无需凭据'} /></label>}<div className="modal-actions"><button type="button" className="outline-button" onClick={onClose}>取消</button><button className="primary-button" type="submit" disabled={saving || (credentialRequired && !credential.trim()) || missingRequiredVariables || !selected.length}>{saving ? '正在测试' : '保存并测试'}</button></div></form></div>;
+  return <div className="modal-backdrop" onClick={onClose}><form className="modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">新账号</span><h2>连接一个账号</h2></div></div><label className="field"><span>厂商</span><select value={providerId} onChange={(event) => { const next = providers.find((item) => item.id === event.target.value); setProviderId(event.target.value); setEndpoint(defaultEndpoint(next)); setSelected(providerWindowKeys(next)); setVariableValues(defaultVariableValues(next)); }}>{providers.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><div className="form-grid"><label className="field"><span>账号名</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder={provider?.name || '账号名称'} /></label><label className="field"><span>标识</span><input value={identity} onChange={(event) => setIdentity(event.target.value)} placeholder="邮箱、用户名或币种" /></label></div><label className="field"><span>标签 <small>用逗号分隔，可留空</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="日常, 主力" /></label>{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && <label className="field"><span>详细额度接口路径</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder="https://api.example.com/v1/usage" /></label>}<div className="form-grid"><label className="field"><span>请求超时（秒）<small>5–120，默认 15；跨境或代理网络可调大</small></span><input type="number" min="5" max="120" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.target.value)} /></label></div><div className="field"><span>额度窗口</span><div className="window-choice">{availableWindows.map((key) => <button type="button" key={key} className={`window-choice-item ${selected.includes(key) ? 'selected' : ''}`} onClick={() => toggle(key)}><span>{selected.includes(key) ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>)}</div></div>{variableDefinitions.length > 0 && <div className="adapter-config account-variables"><span className="eyebrow">厂商变量</span><div className="form-grid">{variableDefinitions.map((item) => <label className="field" key={item.key}><span>{item.label || item.key}{item.required && <small> 必填</small>}</span><input type={item.secret ? 'password' : 'text'} required={item.required} value={variableValues[item.key] ?? ''} onChange={(event) => setVariableValues((old) => ({ ...old, [item.key]: event.target.value }))} placeholder={item.defaultValue || item.key} /></label>)}</div></div>}{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && <label className="field"><span>{credentialRequired ? 'API Token' : '凭据（可选）'}</span><input type="password" required={credentialRequired} value={credential} onChange={(event) => setCredential(event.target.value)} placeholder={credentialRequired ? '凭据只会加密保存在本机' : '此接口无需凭据'} /></label>}{testResult && <div className={`draft-test-result ${testResult.ok ? 'ok' : 'fail'}`}><span>{testResult.ok ? '测试通过' : '测试失败'} · {testResult.message}</span></div>}<div className="modal-actions"><button type="button" className="outline-button" onClick={onClose}>取消</button><button type="button" className="outline-button" disabled={testing || (credentialRequired && !credential.trim()) || missingRequiredVariables || !selected.length || !accountEndpoint} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" type="submit" disabled={saving || (credentialRequired && !credential.trim()) || missingRequiredVariables || !selected.length}>{saving ? '正在保存' : '保存'}</button></div></form></div>;
 }
 
-function CredentialModalV2({ account, provider, onClose, onSave }) {
+function CredentialModalV2({ account, provider, onClose, onSave, onTestDraft }) {
   const [credential, setCredential] = useState('');
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+  // 草稿连通性测试：输入框留空时由主进程回退到已保存的凭据
+  const runTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try { setTestResult(await onTestDraft({ accountId: account.id, account, providerId: account.providerId, credential: credential.trim() })); }
+    finally { setTesting(false); }
+  };
   const submit = async (event) => { event.preventDefault(); setSaving(true); try { await onSave({ account, credential: credential.trim() }); } finally { setSaving(false); } };
-  return <div className="modal-backdrop" onClick={onClose}><form className="modal compact-modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">Windows 安全凭据</span><h2>更新 {account.name}</h2></div></div><label className="field"><span>{'新 API Token'} <small>原凭据不会被读取或显示</small></span><input autoFocus type="password" value={credential} onChange={(event) => setCredential(event.target.value)} /></label><div className="adapter-note"><ShieldCheck size={15} /><span>保存后由 Windows DPAPI 加密，并立即检查一次该账号。留空则保留原凭据，仅重新检查。</span></div><div className="modal-actions"><button type="button" className="outline-button" onClick={onClose}>取消</button><button className="primary-button" disabled={saving}>{saving ? '正在验证' : '保存并检查'}</button></div></form></div>;
+  return <div className="modal-backdrop" onClick={onClose}><form className="modal compact-modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">Windows 安全凭据</span><h2>更新 {account.name}</h2></div></div><label className="field"><span>{'新 API Token'} <small>原凭据不会被读取或显示</small></span><input autoFocus type="password" value={credential} onChange={(event) => setCredential(event.target.value)} /></label><div className="adapter-note"><ShieldCheck size={15} /><span>保存后由 Windows DPAPI 加密。可先「测试」当前输入（留空则测试原凭据），通过后再保存。</span></div>{testResult && <div className={`draft-test-result ${testResult.ok ? 'ok' : 'fail'}`}><span>{testResult.ok ? '测试通过' : '测试失败'} · {testResult.message}</span></div>}<div className="modal-actions"><button type="button" className="outline-button" onClick={onClose}>取消</button><button type="button" className="outline-button" disabled={testing} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" disabled={saving}>{saving ? '正在保存' : '保存'}</button></div></form></div>;
 }
 
-function AccountEditModalV2({ account, provider, onClose, onSave }) {
+function AccountEditModalV2({ account, provider, onClose, onSave, onTestDraft }) {
   const [name, setName] = useState(account.name || '');
   const [identity, setIdentity] = useState(account.identity || '');
   const [tags, setTags] = useState((account.tags || []).join(', '));
   const [endpoint, setEndpoint] = useState(account.endpoint || defaultEndpoint(provider));
   const [credential, setCredential] = useState('');
+  const [timeoutSeconds, setTimeoutSeconds] = useState(account.timeoutSeconds ? String(account.timeoutSeconds) : '');
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
   const variableDefinitions = providerVariableDefinitions(provider);
   const [variableValues, setVariableValues] = useState(() => Object.fromEntries(variableDefinitions.map((item) => [item.key, item.secret ? '' : (account.variables?.[item.key] ?? item.defaultValue ?? '')])));
   const [selected, setSelected] = useState(account.windowKeys?.length ? account.windowKeys : (account.windows || []).map((item) => item.key));
-  const [saving, setSaving] = useState(false);
   const availableWindows = providerWindowKeys(provider);
   const toggle = (key) => setSelected((old) => old.includes(key) ? old.filter((item) => item !== key) : [...old, key]);
-  const submit = async (event) => { event.preventDefault(); const accountEndpoint = provider?.requestConfig?.adapterMode === 'script' ? String(variableValues.endpoint || provider.requestConfig.endpoint || '') : endpoint.trim(); if (!name.trim() || !accountEndpoint || !selected.length) return; const { publicVariables, secretVariables } = splitVariableValues(provider, variableValues); setSaving(true); try { await onSave({ account, name: name.trim(), identity: identity.trim(), tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean), endpoint: accountEndpoint, windowKeys: selected, credential: credential.trim(), variables: publicVariables, secretVariables }); } finally { setSaving(false); } };
-  return <div className="modal-backdrop" onClick={onClose}><form className="modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">账号配置</span><h2>编辑 {account.name}</h2></div></div><div className="form-grid"><label className="field"><span>账号名</span><input required value={name} onChange={(event) => setName(event.target.value)} /></label><label className="field"><span>标识</span><input value={identity} onChange={(event) => setIdentity(event.target.value)} /></label></div><label className="field"><span>标签 <small>用逗号分隔，可留空</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} /></label>{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && <label className="field"><span>详细额度接口路径</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} /></label>}<div className="field"><span>额度窗口</span><div className="window-choice">{availableWindows.map((key) => <button type="button" key={key} className={`window-choice-item ${selected.includes(key) ? 'selected' : ''}`} onClick={() => toggle(key)}><span>{selected.includes(key) ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>)}</div></div>{variableDefinitions.length > 0 && <div className="adapter-config account-variables"><span className="eyebrow">厂商变量</span><div className="form-grid">{variableDefinitions.map((item) => <label className="field" key={item.key}><span>{item.label || item.key}{item.secret && <small> 留空保留原值</small>}</span><input type={item.secret ? 'password' : 'text'} required={item.required && !item.secret} value={variableValues[item.key] ?? ''} onChange={(event) => setVariableValues((old) => ({ ...old, [item.key]: event.target.value }))} placeholder={item.secret ? '未修改' : (item.defaultValue || item.key)} /></label>)}</div></div>}{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && <label className="field"><span>{'新 API Token'} <small>留空保留原凭据</small></span><input type="password" value={credential} onChange={(event) => setCredential(event.target.value)} /></label>}<div className="modal-actions"><button type="button" className="outline-button" onClick={onClose}>取消</button><button className="primary-button" disabled={saving || !selected.length}>{saving ? '正在保存并测试' : '保存并测试'}</button></div></form></div>;
+  const accountEndpoint = provider?.requestConfig?.adapterMode === 'script' ? String(variableValues.endpoint || provider.requestConfig.endpoint || '') : endpoint.trim();
+  // 草稿连通性测试：不保存任何修改；留空的凭据/密钥由主进程回退到已存值
+  const runTest = async () => {
+    if (!name.trim() || !accountEndpoint || !selected.length) return;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const { publicVariables, secretVariables } = splitVariableValues(provider, variableValues);
+      setTestResult(await onTestDraft({ accountId: account.id, account: { ...account, endpoint: accountEndpoint, variables: publicVariables, windowKeys: selected, timeoutSeconds: clampAccountTimeout(timeoutSeconds) }, providerId: provider?.id, credential: credential.trim(), secretVariables }));
+    } finally { setTesting(false); }
+  };
+  const submit = async (event) => { event.preventDefault(); if (!name.trim() || !accountEndpoint || !selected.length) return; const { publicVariables, secretVariables } = splitVariableValues(provider, variableValues); setSaving(true); try { await onSave({ account, name: name.trim(), identity: identity.trim(), tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean), endpoint: accountEndpoint, windowKeys: selected, credential: credential.trim(), timeoutSeconds: clampAccountTimeout(timeoutSeconds), variables: publicVariables, secretVariables }); } finally { setSaving(false); } };
+  return <div className="modal-backdrop" onClick={onClose}><form className="modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">账号配置</span><h2>编辑 {account.name}</h2></div></div><div className="form-grid"><label className="field"><span>账号名</span><input required value={name} onChange={(event) => setName(event.target.value)} /></label><label className="field"><span>标识</span><input value={identity} onChange={(event) => setIdentity(event.target.value)} /></label></div><label className="field"><span>标签 <small>用逗号分隔，可留空</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} /></label>{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && <label className="field"><span>详细额度接口路径</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} /></label>}<div className="form-grid"><label className="field"><span>请求超时（秒）<small>5–120，默认 15；跨境或代理网络可调大</small></span><input type="number" min="5" max="120" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.target.value)} placeholder="15" /></label></div><div className="field"><span>额度窗口</span><div className="window-choice">{availableWindows.map((key) => <button type="button" key={key} className={`window-choice-item ${selected.includes(key) ? 'selected' : ''}`} onClick={() => toggle(key)}><span>{selected.includes(key) ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>)}</div></div>{variableDefinitions.length > 0 && <div className="adapter-config account-variables"><span className="eyebrow">厂商变量</span><div className="form-grid">{variableDefinitions.map((item) => <label className="field" key={item.key}><span>{item.label || item.key}{item.secret && <small> 留空保留原值</small>}</span><input type={item.secret ? 'password' : 'text'} required={item.required && !item.secret} value={variableValues[item.key] ?? ''} onChange={(event) => setVariableValues((old) => ({ ...old, [item.key]: event.target.value }))} placeholder={item.secret ? '未修改' : (item.defaultValue || item.key)} /></label>)}</div></div>}{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && <label className="field"><span>{'新 API Token'} <small>留空保留原凭据</small></span><input type="password" value={credential} onChange={(event) => setCredential(event.target.value)} /></label>}{testResult && <div className={`draft-test-result ${testResult.ok ? 'ok' : 'fail'}`}><span>{testResult.ok ? '测试通过' : '测试失败'} · {testResult.message}</span></div>}<div className="modal-actions"><button type="button" className="outline-button" onClick={onClose}>取消</button><button type="button" className="outline-button" disabled={testing || !name.trim() || !accountEndpoint || !selected.length} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" disabled={saving || !selected.length}>{saving ? '正在保存' : '保存'}</button></div></form></div>;
 }
 
 function ProviderModalV2({ provider, onClose, onSave }) {
@@ -1168,23 +1213,26 @@ function App() {
       return { ok: false, message: error.message };
     } finally { setTestingAccountId(null); }
   };
+  // 表单草稿连通性测试：走主进程 quota:test-draft，不保存任何东西；网页演示模式模拟通过
+  const testDraft = async (draft) => {
+    if (bridge?.testDraft) {
+      try { return await bridge.testDraft(draft); }
+      catch (error) { return { ok: false, message: error.message }; }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    return { ok: true, message: '模拟测试通过（网页演示模式）' };
+  };
   const saveAccount = async (draft) => {
     const id = `${draft.providerId}-${Date.now()}`;
-    const account = { id, providerId: draft.providerId, name: draft.name, identity: draft.identity, tags: draft.tags, endpoint: draft.endpoint, variables: draft.variables || {}, windowKeys: draft.windowKeys, status: 'warning', lastChecked: new Date().toISOString(), lastError: '等待首次连接测试', windows: [] };
+    const account = { id, providerId: draft.providerId, name: draft.name, identity: draft.identity, tags: draft.tags, endpoint: draft.endpoint, variables: draft.variables || {}, windowKeys: draft.windowKeys, timeoutSeconds: clampAccountTimeout(draft.timeoutSeconds), status: 'warning', lastChecked: new Date().toISOString(), lastError: '等待首次连接测试', windows: [] };
     const nextAccounts = [...accounts, account];
     if (bridge) {
       if (draft.credential || Object.keys(draft.secretVariables || {}).length) await bridge.saveCredential(id, draft.credential, draft.secretVariables || {});
       const state = serializableState({ accounts: nextAccounts });
       lastSaved.current = JSON.stringify(state);
       await bridge.saveState(state);
-      setAccounts(nextAccounts);
-      try {
-        const result = await bridge.testAccount(id);
-        setAccounts(result.state.accounts); setLastSync(result.state.lastSync);
-        setTestResults((old) => ({ ...old, [id]: result }));
-        if (!result.ok) setDesktopError(`${account.name}：${result.message}`);
-      } catch (error) { setDesktopError(error.message); }
-    } else setAccounts(nextAccounts);
+    }
+    setAccounts(nextAccounts);
     setModal(null);
   };
   const updateCredential = async ({ account, credential }) => {
@@ -1194,25 +1242,18 @@ function App() {
       const state = serializableState({ accounts: nextAccounts });
       lastSaved.current = JSON.stringify(state);
       await bridge.saveState(state);
-      const result = await bridge.testAccount(account.id);
-      setAccounts(result.state.accounts); setLastSync(result.state.lastSync);
-      setTestResults((old) => ({ ...old, [account.id]: result }));
-      if (!result.ok) setDesktopError(`${account.name}：${result.message}`);
-    } else setAccounts(nextAccounts);
+    }
     setModal(null);
   };
-  const updateAccount = async ({ account, name, identity, tags, endpoint, windowKeys, credential, variables, secretVariables }) => {
-    const nextAccounts = accounts.map((item) => item.id === account.id ? { ...item, name, identity, tags, endpoint, variables: variables || {}, windowKeys } : item);
+  const updateAccount = async ({ account, name, identity, tags, endpoint, windowKeys, credential, timeoutSeconds, variables, secretVariables }) => {
+    const nextAccounts = accounts.map((item) => item.id === account.id ? { ...item, name, identity, tags, endpoint, variables: variables || {}, windowKeys, timeoutSeconds: clampAccountTimeout(timeoutSeconds) } : item);
     if (bridge) {
       if (credential || Object.keys(secretVariables || {}).length) await bridge.saveCredential(account.id, credential, secretVariables || {});
       const state = serializableState({ accounts: nextAccounts });
       lastSaved.current = JSON.stringify(state);
       await bridge.saveState(state);
-      const result = await bridge.testAccount(account.id);
-      setAccounts(result.state.accounts); setLastSync(result.state.lastSync);
-      setTestResults((old) => ({ ...old, [account.id]: result }));
-      if (!result.ok) setDesktopError(`${name}：${result.message}`);
-    } else setAccounts(nextAccounts);
+    }
+    setAccounts(nextAccounts);
     setModal(null);
   };
   const deleteAccount = async (account) => {
@@ -1255,9 +1296,9 @@ function App() {
     {settingsOpen && <SettingsDrawer accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)} openModal={setModal} onDeleteAccount={deleteAccount} onTestAccount={testAccount} testingAccountId={testingAccountId} onEditProvider={editProvider} autoLaunch={autoLaunch} onToggleAutoLaunch={toggleAutoLaunch} appVersion={appVersion} update={update} onOpenUpdate={() => setUpdateOpen(true)} onCheckUpdate={onCheckUpdate} onClearHistory={clearHistory} />}
     {updateOpen && update && <UpdateModal update={update} version={appVersion} onClose={() => setUpdateOpen(false)} />}
     {settings.widgetPreview && <WidgetPreview account={currentWidgetAccount} provider={currentWidgetProvider} tagLimit={Number(settings.widgetTagLimit ?? 2)} scale={settings.widgetScale} length={settings.widgetLength} onClose={() => setSettings((old) => ({ ...old, widgetPreview: false }))} />}
-    {modal === 'account' && <AccountModalV2 providers={providers} onClose={() => setModal(null)} onSave={saveAccount} />}
-    {modal?.type === 'account-edit' && <AccountEditModalV2 account={modal.account} provider={providers.find((item) => item.id === modal.account.providerId)} onClose={() => setModal(null)} onSave={updateAccount} />}
-    {modal?.type === 'credential' && <CredentialModalV2 account={modal.account} provider={providers.find((item) => item.id === modal.account.providerId)} onClose={() => setModal(null)} onSave={updateCredential} />}
+    {modal === 'account' && <AccountModalV2 providers={providers} onClose={() => setModal(null)} onSave={saveAccount} onTestDraft={testDraft} />}
+    {modal?.type === 'account-edit' && <AccountEditModalV2 account={modal.account} provider={providers.find((item) => item.id === modal.account.providerId)} onClose={() => setModal(null)} onSave={updateAccount} onTestDraft={testDraft} />}
+    {modal?.type === 'credential' && <CredentialModalV2 account={modal.account} provider={providers.find((item) => item.id === modal.account.providerId)} onClose={() => setModal(null)} onSave={updateCredential} onTestDraft={testDraft} />}
     {modal === 'provider' && <ProviderModalV2 onClose={() => setModal(null)} onSave={saveProvider} />}
     {modal?.type === 'provider-edit' && <ProviderModalV2 provider={modal.provider} onClose={() => setModal(null)} onSave={saveProvider} />}
     {modal === 'import-ccswitch' && <ImportCcswitchModal onClose={() => setModal(null)} onApplied={(result) => {

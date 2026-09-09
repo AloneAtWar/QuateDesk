@@ -290,3 +290,55 @@ test('wlbclub 接口暂未返回 1d 行时仍只解析 7 天窗口', async () =>
   assert.equal(windows[0].key, 'weekly');
   assert.equal(windows[0].remaining, 50);
 });
+
+// ── 网络层兜底：瞬时错误自动重试 + 中文提示 + 账号级超时 ─────────────────────
+const { __network } = require('../electron/poller.cjs');
+
+test('连接被中断的瞬时错误会自动重试并最终成功', async () => {
+  const payload = { code: 200, success: true, data: { limits: [{ type: 'TOKENS_LIMIT', unit: 6, number: 1, percentage: 57 }] } };
+  let calls = 0;
+  const fetcher = async () => {
+    calls += 1;
+    if (calls < 3) throw new Error('net::ERR_CONNECTION_CLOSED at https://open.bigmodel.cn');
+    return { ok: true, status: 200, json: async () => payload };
+  };
+  const windows = await queryAccount(account, provider, 'test-token', fetcher, {}, { retryDelaysMs: [0, 0] });
+  assert.equal(calls, 3);
+  assert.equal(windows[0].key, 'weekly');
+  assert.equal(windows[0].remaining, 43);
+});
+
+test('超时重试耗尽后翻译成可行动的中文提示', async () => {
+  let calls = 0;
+  const fetcher = async () => { calls += 1; throw new Error('The operation was aborted due to timeout'); };
+  await assert.rejects(
+    () => queryAccount(account, provider, 'test-token', fetcher, {}, { retryDelaysMs: [0, 0] }),
+    /连接超时.*自动重试 3 次/,
+  );
+  assert.equal(calls, 3);
+});
+
+test('连接中断重试耗尽后提示配置代理', async () => {
+  const fetcher = async () => { throw new Error('net::ERR_CONNECTION_CLOSED at https://grok.com'); };
+  await assert.rejects(
+    () => queryAccount(account, provider, 'test-token', fetcher, {}, { retryDelaysMs: [0, 0] }),
+    /网络连接被中断.*网络代理/,
+  );
+});
+
+test('凭据失效不属于瞬时错误，不重试', async () => {
+  let calls = 0;
+  const fetcher = async () => { calls += 1; return { ok: false, status: 401 }; };
+  await assert.rejects(() => queryAccount(account, provider, 'expired', fetcher, {}, { retryDelaysMs: [0, 0] }), /凭据已失效/);
+  assert.equal(calls, 1);
+});
+
+test('账号超时秒数收敛到 5–120，缺省 15 秒', () => {
+  assert.equal(__network.accountTimeoutMs({}), 15_000);
+  assert.equal(__network.accountTimeoutMs({ timeoutSeconds: 30 }), 30_000);
+  assert.equal(__network.accountTimeoutMs({ timeoutSeconds: '20' }), 20_000);
+  assert.equal(__network.accountTimeoutMs({ timeoutSeconds: 3 }), 5_000);
+  assert.equal(__network.accountTimeoutMs({ timeoutSeconds: 999 }), 120_000);
+  assert.equal(__network.isTransientNetworkError(new Error('net::ERR_CONNECTION_RESET')), true);
+  assert.equal(__network.isTransientNetworkError(new Error('额度接口返回 HTTP 500')), false);
+});

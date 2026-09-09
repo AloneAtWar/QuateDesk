@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const TIMEOUT = 15_000;
+const DEFAULT_TIMEOUT_MS = 15_000;
 const homeFile = (...parts) => path.join(os.homedir(), ...parts);
 
 const readJsonFile = (filePath) => {
@@ -30,7 +30,7 @@ const readClaudeToken = () => {
 
 const CLAUDE_WINDOW_KEYS = { five_hour: 'five_hour', seven_day: 'weekly', seven_day_opus: 'weekly', seven_day_sonnet: 'weekly' };
 
-async function queryClaudeQuota(fetcher, meter) {
+async function queryClaudeQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const credential = readClaudeToken();
   if (!credential) throw new Error('未检测到 Claude CLI 登录信息，请先安装 Claude Code 并登录');
   if (credential.expiresAt && new Date(credential.expiresAt).getTime() < Date.now()) {
@@ -38,7 +38,7 @@ async function queryClaudeQuota(fetcher, meter) {
   }
   const response = await fetcher('https://api.anthropic.com/api/oauth/usage', {
     headers: { Authorization: `Bearer ${credential.token}`, 'anthropic-beta': 'oauth-2025-04-20', Accept: 'application/json' },
-    signal: AbortSignal.timeout(TIMEOUT),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (response.status === 401 || response.status === 403) throw new Error('Claude 凭据被拒绝，请重新登录 Claude CLI');
   if (!response.ok) throw new Error(`Claude 用量接口返回 HTTP ${response.status}`);
@@ -56,13 +56,13 @@ async function queryClaudeQuota(fetcher, meter) {
 }
 
 // Codex CLI 凭据：{ tokens: { access_token, account_id }, OPENAI_API_KEY }；订阅额度只走 ChatGPT OAuth
-async function queryCodexQuota(fetcher, meter) {
+async function queryCodexQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const auth = readJsonFile(homeFile('.codex', 'auth.json'));
   const token = auth?.tokens?.access_token;
   if (!token) throw new Error('未检测到 Codex 的 ChatGPT 登录（~/.codex/auth.json 无 OAuth tokens），API Key 模式无法查询订阅额度');
   const headers = { Authorization: `Bearer ${token}`, 'User-Agent': 'codex-cli', Accept: 'application/json' };
   if (auth.tokens.account_id) headers['ChatGPT-Account-Id'] = auth.tokens.account_id;
-  const response = await fetcher('https://chatgpt.com/backend-api/wham/usage', { headers, signal: AbortSignal.timeout(TIMEOUT) });
+  const response = await fetcher('https://chatgpt.com/backend-api/wham/usage', { headers, signal: AbortSignal.timeout(timeoutMs) });
   if (response.status === 401 || response.status === 403) throw new Error('Codex 凭据被拒绝，请重新登录 Codex CLI');
   if (!response.ok) throw new Error(`Codex 用量接口返回 HTTP ${response.status}`);
   const payload = await response.json();
@@ -80,7 +80,7 @@ async function queryCodexQuota(fetcher, meter) {
 }
 
 // Gemini CLI 凭据：{ access_token, refresh_token, expiry_date(毫秒) }
-async function queryGeminiQuota(fetcher, meter) {
+async function queryGeminiQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const auth = readJsonFile(homeFile('.gemini', 'oauth_creds.json'));
   const token = auth?.access_token;
   if (!token) throw new Error('未检测到 Gemini CLI 登录信息，请先安装 Gemini CLI 并登录');
@@ -91,7 +91,7 @@ async function queryGeminiQuota(fetcher, meter) {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ metadata: { ideType: 'GEMINI_CLI', pluginType: 'GEMINI' } }),
-    signal: AbortSignal.timeout(TIMEOUT),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (loadResponse.status === 401 || loadResponse.status === 403) throw new Error('Gemini 凭据被拒绝，请重新登录 Gemini CLI');
   if (!loadResponse.ok) throw new Error(`Gemini loadCodeAssist 返回 HTTP ${loadResponse.status}`);
@@ -102,7 +102,7 @@ async function queryGeminiQuota(fetcher, meter) {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(projectId ? { project: projectId } : {}),
-    signal: AbortSignal.timeout(TIMEOUT),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!quotaResponse.ok) throw new Error(`Gemini retrieveUserQuota 返回 HTTP ${quotaResponse.status}`);
   const quotaPayload = await quotaResponse.json();

@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('quotaDesk', {
   getHistory: (accountId) => ipcRenderer.invoke('history:get', accountId),
   clearHistory: () => ipcRenderer.invoke('history:clear'),
   testAccount: (accountId) => ipcRenderer.invoke('quota:test-account', accountId),
+  testDraft: (draft) => ipcRenderer.invoke('quota:test-draft', draft),
   setWidgetVisible: (visible) => ipcRenderer.invoke('widget:set-visible', visible),
   getWidgetVisible: () => ipcRenderer.invoke('widget:get-visible'),
   setWidgetSize: (size) => ipcRenderer.invoke('widget:set-size', size),
