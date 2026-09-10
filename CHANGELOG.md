@@ -2,6 +2,22 @@
 
 Quota Desk 的版本更新记录。
 
+## [0.3.9] - 2026-09-10
+
+### 新增
+
+- CLI 官方订阅（Codex / Claude Code / Gemini CLI）多账号监控：每个账号可保存独立的登录快照（Windows DPAPI 加密），额度查询不再依赖本机 CLI 当前激活的登录——在 cc-switch 等工具里切换 profile 后，各账号额度照常刷新。设置 → 账号与凭据新增「导入本机 CLI 登录」：把当前本机登录一键收录为独立账号；想加第二个账号，在 CLI / cc-switch 里登录或切换过去后再回来导入一次即可（同一登录按账号指纹自动去重）。
+- CLI 登录令牌自动续期：Codex（auth.openai.com）、Claude（console.anthropic.com）、Gemini（oauth2.googleapis.com）的账号快照会用各自的 refresh_token 在临期或 401 时自动续期并写回加密存储，后台账号不再因 access token 过期而失效。若该账号恰好是本机 CLI 当前激活的登录，续期结果还会原子写回 `~/.codex/auth.json` 等本机文件（写回前校验 refresh_token 未被切换工具改动，绝不覆盖 cc-switch 刚切换进去的 profile）。
+- cc-switch 导入新增官方 OAuth 登录识别：Codex 官方登录条目（含完整 token bundle）现在也能导入为独立账号（此前只迁移 API Key），导入后同样自动续期。
+- 设置抽屉账号行新增「本机激活」徽标：标出本机 CLI 当前使用的正是哪个账号；跟随本机登录的镜像账号标识会随切换自动更新。
+- 「导入本机 CLI 登录」支持在导入前编辑账号信息：账号名默认就是渠道名（如 Codex，留空回退），标签可编辑（默认「日常」），标识自动取登录邮箱。
+- 「添加账号」表单不再列出 Claude / Codex / Gemini 官方订阅，统一走「导入本机 CLI 登录」收录，避免两套入口混淆；表单底部提供「去导入」快捷入口。官方订阅账号的编辑表单同步隐藏「详细额度接口路径」与「新 API Token」字段（专属适配器不使用这两项）。
+
+### 改进
+
+- Codex 凭据路径遵循 `CODEX_HOME` 环境变量，与 codex CLI 自身行为一致。
+- CLI 类账号的标识自动维护：优先显示登录邮箱（从官方 id_token 提取），用户手动填写的标识不会被覆盖。
+
 ## [0.3.8] - 2026-09-09
 
 ### 新增
