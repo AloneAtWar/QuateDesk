@@ -1,25 +1,18 @@
-// CLI 凭据类厂商的专属额度适配（与 Grok 同模式）：复用本机 CLI 登录态，用户无需填凭据。
-// 实现参考 cc-switch 的 subscription.rs：
-// - Claude: ~/.claude/.credentials.json → api.anthropic.com/api/oauth/usage（5小时/7天窗口）
+// CLI 凭据类厂商的专属额度适配：优先复用账号自己的登录快照（支持多账号、不受 cc-switch
+// 切换影响），没有快照时回落本机 CLI 登录态。实现参考 cc-switch 的 subscription.rs：
+// - Claude: .credentials.json / 快照 → api.anthropic.com/api/oauth/usage（5小时/7天窗口）
 // - Codex:  ~/.codex/auth.json (ChatGPT OAuth tokens) → chatgpt.com/backend-api/wham/usage
 // - Gemini: ~/.gemini/oauth_creds.json → cloudcode-pa.googleapis.com 两步查询（按模型分桶）
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
+// token 过期时用账号快照里的 refresh_token 自动续期（见 cli-auth.cjs），无需 CLI 在场。
+const { resolveCliAuth, refreshTokenOf, accessTokenExpiryMs, fetchWithCliAuth } = require('./cli-auth.cjs');
 
 const DEFAULT_TIMEOUT_MS = 15_000;
-const homeFile = (...parts) => path.join(os.homedir(), ...parts);
 
-const readJsonFile = (filePath) => {
-  try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); }
-  catch { return null; }
-};
-
-// Claude CLI 凭据：{ claudeOauth: { accessToken, expiresAt } }（防御式：找第一个带 accessToken 的对象）
-const readClaudeToken = () => {
-  const data = readJsonFile(homeFile('.claude', '.credentials.json'));
-  if (!data || typeof data !== 'object') return null;
-  for (const value of [data.claudeOauth, ...Object.values(data)]) {
+// Claude 凭据形态（live 文件或快照同构）：{ claudeOauth: { accessToken, refreshToken, expiresAt } }；
+// 防御式：找第一个带 accessToken 的对象
+const claudeTokenOf = (auth) => {
+  if (!auth || typeof auth !== 'object') return null;
+  for (const value of [auth.claudeOauth, ...Object.values(auth)]) {
     if (value && typeof value === 'object') {
       const token = value.accessToken || value.access_token;
       if (token) return { token, expiresAt: value.expiresAt || value.expires_at || null };
@@ -30,17 +23,23 @@ const readClaudeToken = () => {
 
 const CLAUDE_WINDOW_KEYS = { five_hour: 'five_hour', seven_day: 'weekly', seven_day_opus: 'weekly', seven_day_sonnet: 'weekly' };
 
-async function queryClaudeQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS) {
-  const credential = readClaudeToken();
-  if (!credential) throw new Error('未检测到 Claude CLI 登录信息，请先安装 Claude Code 并登录');
-  if (credential.expiresAt && new Date(credential.expiresAt).getTime() < Date.now()) {
-    throw new Error('Claude 访问令牌已过期，运行一次 Claude CLI 让其自动刷新，或重新登录');
+async function queryClaudeQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS, ctx = {}) {
+  const resolved = resolveCliAuth('claude', ctx.variables);
+  const credential = resolved && claudeTokenOf(resolved.auth);
+  if (!credential) throw new Error('未检测到 Claude CLI 登录信息。请先安装 Claude Code 并登录，或在「设置 → 账号与凭据」导入本机登录保存为独立账号快照');
+  // 令牌过期且没有 refresh_token 时提前给出可行动提示（能续期的交给 fetchWithCliAuth）
+  if (credential.expiresAt && new Date(credential.expiresAt).getTime() < Date.now() && !refreshTokenOf('claude', resolved.auth)) {
+    throw new Error('Claude 访问令牌已过期且无法自动续期，请运行一次 Claude CLI 或重新登录');
   }
-  const response = await fetcher('https://api.anthropic.com/api/oauth/usage', {
-    headers: { Authorization: `Bearer ${credential.token}`, 'anthropic-beta': 'oauth-2025-04-20', Accept: 'application/json' },
-    signal: AbortSignal.timeout(timeoutMs),
+  const response = await fetchWithCliAuth('claude', {
+    auth: resolved.auth,
+    source: resolved.source,
+    fetcher,
+    timeoutMs,
+    buildRequest: (auth) => ({ url: 'https://api.anthropic.com/api/oauth/usage', init: { headers: { Authorization: `Bearer ${claudeTokenOf(auth)?.token}`, 'anthropic-beta': 'oauth-2025-04-20', Accept: 'application/json' } } }),
+    onAuthUpdate: ctx.onAuthUpdate,
   });
-  if (response.status === 401 || response.status === 403) throw new Error('Claude 凭据被拒绝，请重新登录 Claude CLI');
+  if (response.status === 401 || response.status === 403) throw new Error('Claude 凭据被拒绝（自动续期后仍无效），请重新登录该账号并更新快照');
   if (!response.ok) throw new Error(`Claude 用量接口返回 HTTP ${response.status}`);
   const payload = await response.json();
   const windows = [];
@@ -55,15 +54,23 @@ async function queryClaudeQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS) 
   return windows;
 }
 
-// Codex CLI 凭据：{ tokens: { access_token, account_id }, OPENAI_API_KEY }；订阅额度只走 ChatGPT OAuth
-async function queryCodexQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS) {
-  const auth = readJsonFile(homeFile('.codex', 'auth.json'));
-  const token = auth?.tokens?.access_token;
-  if (!token) throw new Error('未检测到 Codex 的 ChatGPT 登录（~/.codex/auth.json 无 OAuth tokens），API Key 模式无法查询订阅额度');
-  const headers = { Authorization: `Bearer ${token}`, 'User-Agent': 'codex-cli', Accept: 'application/json' };
-  if (auth.tokens.account_id) headers['ChatGPT-Account-Id'] = auth.tokens.account_id;
-  const response = await fetcher('https://chatgpt.com/backend-api/wham/usage', { headers, signal: AbortSignal.timeout(timeoutMs) });
-  if (response.status === 401 || response.status === 403) throw new Error('Codex 凭据被拒绝，请重新登录 Codex CLI');
+// Codex 凭据形态：{ tokens: { access_token, refresh_token, account_id, id_token }, OPENAI_API_KEY }；订阅额度只走 ChatGPT OAuth
+async function queryCodexQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS, ctx = {}) {
+  const resolved = resolveCliAuth('codex', ctx.variables);
+  if (!resolved) throw new Error('未检测到 Codex 的 ChatGPT 登录（~/.codex/auth.json 无 OAuth tokens），API Key / 中转模式没有订阅额度。可把官方登录「导入本机 CLI 登录」保存为独立账号快照');
+  const response = await fetchWithCliAuth('codex', {
+    auth: resolved.auth,
+    source: resolved.source,
+    fetcher,
+    timeoutMs,
+    buildRequest: (auth) => {
+      const headers = { Authorization: `Bearer ${auth.tokens?.access_token}`, 'User-Agent': 'codex-cli', Accept: 'application/json' };
+      if (auth.tokens?.account_id) headers['ChatGPT-Account-Id'] = auth.tokens.account_id;
+      return { url: 'https://chatgpt.com/backend-api/wham/usage', init: { headers } };
+    },
+    onAuthUpdate: ctx.onAuthUpdate,
+  });
+  if (response.status === 401 || response.status === 403) throw new Error('Codex 凭据被拒绝（自动续期后仍无效），请重新登录该账号并更新快照');
   if (!response.ok) throw new Error(`Codex 用量接口返回 HTTP ${response.status}`);
   const payload = await response.json();
   const secondsToKey = { 18000: 'five_hour', 604800: 'weekly', 2592000: 'monthly' };
@@ -79,28 +86,40 @@ async function queryCodexQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS) {
   return windows;
 }
 
-// Gemini CLI 凭据：{ access_token, refresh_token, expiry_date(毫秒) }
-async function queryGeminiQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS) {
-  const auth = readJsonFile(homeFile('.gemini', 'oauth_creds.json'));
-  const token = auth?.access_token;
-  if (!token) throw new Error('未检测到 Gemini CLI 登录信息，请先安装 Gemini CLI 并登录');
-  if (auth.expiry_date && Number(auth.expiry_date) < Date.now()) {
-    throw new Error('Gemini 访问令牌已过期，运行一次 Gemini CLI 让其自动刷新，或重新登录');
+// Gemini 凭据形态（live 文件或快照同构）：{ access_token, refresh_token, expiry_date(毫秒), id_token }
+async function queryGeminiQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS, ctx = {}) {
+  const resolved = resolveCliAuth('gemini', ctx.variables);
+  if (!resolved) throw new Error('未检测到 Gemini CLI 登录信息。请先安装 Gemini CLI 并登录，或在「设置 → 账号与凭据」导入本机登录保存为独立账号快照');
+  const expiry = accessTokenExpiryMs('gemini', resolved.auth);
+  if (expiry && expiry < Date.now() && !refreshTokenOf('gemini', resolved.auth)) {
+    throw new Error('Gemini 访问令牌已过期且无法自动续期，请运行一次 Gemini CLI 或重新登录');
   }
-  const loadResponse = await fetcher('https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ metadata: { ideType: 'GEMINI_CLI', pluginType: 'GEMINI' } }),
-    signal: AbortSignal.timeout(timeoutMs),
+  // 两步查询共用同一份会随续期更新的凭据；只有第一步带 401 续期重试，避免一次轮询刷新两次
+  let effective = resolved.auth;
+  const trackAuth = async (...args) => {
+    effective = args[1];
+    if (ctx.onAuthUpdate) await ctx.onAuthUpdate(...args);
+  };
+  const authHeaders = (auth) => ({ Authorization: `Bearer ${auth.access_token}`, 'Content-Type': 'application/json' });
+  const loadResponse = await fetchWithCliAuth('gemini', {
+    auth: resolved.auth,
+    source: resolved.source,
+    fetcher,
+    timeoutMs,
+    buildRequest: (auth) => ({
+      url: 'https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist',
+      init: { method: 'POST', headers: authHeaders(auth), body: JSON.stringify({ metadata: { ideType: 'GEMINI_CLI', pluginType: 'GEMINI' } }) },
+    }),
+    onAuthUpdate: trackAuth,
   });
-  if (loadResponse.status === 401 || loadResponse.status === 403) throw new Error('Gemini 凭据被拒绝，请重新登录 Gemini CLI');
+  if (loadResponse.status === 401 || loadResponse.status === 403) throw new Error('Gemini 凭据被拒绝（自动续期后仍无效），请重新登录该账号并更新快照');
   if (!loadResponse.ok) throw new Error(`Gemini loadCodeAssist 返回 HTTP ${loadResponse.status}`);
   const loadPayload = await loadResponse.json();
   const project = loadPayload?.cloudaicompanionProject;
   const projectId = typeof project === 'string' ? project : (project?.id || project?.projectId || null);
   const quotaResponse = await fetcher('https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota', {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: authHeaders(effective),
     body: JSON.stringify(projectId ? { project: projectId } : {}),
     signal: AbortSignal.timeout(timeoutMs),
   });

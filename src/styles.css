@@ -504,9 +504,16 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .widget-preview-window .widget-row { border: 1px solid var(--widget-row-border); }
 /* cc-switch 导入 */
 .drawer-import-button { margin-top: 10px; }
-.import-list { max-height: 240px; overflow-y: auto; }
+.import-list { max-height: 320px; overflow-y: auto; }
 .import-row { cursor: pointer; }
 .import-row input { flex: 0 0 auto; margin: 0; }
+/* 本机 CLI 登录导入：每个渠道一行检测结果 + 可编辑的账号名 / 标签草稿 */
+.import-cli-item + .import-cli-item { border-top: 1px solid var(--line); }
+.import-cli-draft { padding: 2px 0 10px; }
+.import-cli-draft .field { margin-bottom: 0; }
+/* 添加账号表单底部：CLI 官方订阅引导脚注（轻量，不打断表单视觉） */
+.cli-import-hint { display: flex; align-items: center; gap: 6px; margin: -4px 0 14px; color: var(--faint); font-size: 10px; }
+.cli-import-hint .text-button { margin-left: auto; }
 /* 厂商弹窗 New API 模板预设 */
 .preset-grid { grid-template-columns: auto 1fr; align-items: center; margin: 0 0 14px; }
 .preset-hint { color: var(--faint); font-size: 10px; }

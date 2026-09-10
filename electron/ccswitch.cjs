@@ -1,11 +1,26 @@
-// cc-switch 数据导入：只迁移 API key，不适配额度脚本。
+// cc-switch 数据导入：迁移 API key 与官方 OAuth 登录（Codex）。
 // 数据源 ~/.cc-switch/cc-switch.db（SQLite providers 表）。
 // 凭据不经过渲染进程：扫描结果只下发脱敏预览，应用时主进程重新提取。
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { cliIdentity } = require('./cli-auth.cjs');
 
 const ccswitchDbPath = () => path.join(os.homedir(), '.cc-switch', 'cc-switch.db');
+
+// 从 codex 官方登录条目的 settings_config.auth 提取完整 OAuth token bundle
+// （形态：{ auth: { auth_mode: "chatgpt", tokens: { id_token, access_token, refresh_token, account_id } }, config }），
+// 还原为 ~/.codex/auth.json 的结构供快照存储
+const extractCodexOauth = (appType, settingsConfig) => {
+  if (appType !== 'codex') return null;
+  let cfg;
+  try { cfg = JSON.parse(settingsConfig || '{}'); }
+  catch { return null; }
+  const auth = cfg?.auth;
+  const tokens = auth?.tokens;
+  if (!tokens || typeof tokens !== 'object' || !tokens.access_token) return null;
+  return { OPENAI_API_KEY: auth.OPENAI_API_KEY ?? null, tokens, last_refresh: auth.last_refresh ?? null };
+};
 
 // 从 settings_config 提取 (baseUrl, apiKey)，覆盖 cc-switch 各 app_type 的存储形态：
 // claude/openclaw: { env: { ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN } } 或顶层 { baseUrl, apiKey }
@@ -92,7 +107,7 @@ const scanCcswitch = (providers) => {
   let rows;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
-    rows = db.prepare('SELECT id, name, settings_config FROM providers').all();
+    rows = db.prepare('SELECT id, app_type, name, settings_config FROM providers').all();
     db.close();
   } catch (error) {
     try { db?.close(); } catch {}
@@ -101,9 +116,30 @@ const scanCcswitch = (providers) => {
   const candidates = [];
   const unsupported = [];
   const seenKeys = new Set();
+  const seenFingerprints = new Set();
   for (const row of rows) {
+    // 官方 OAuth 登录（目前只有 Codex 条目保存完整 token bundle）：收录为可自动续期的独立账号
+    const bundle = extractCodexOauth(row.app_type, row.settings_config);
+    if (bundle) {
+      const identity = cliIdentity('codex', bundle);
+      if (!identity) continue;
+      const duplicateInBatch = seenFingerprints.has(identity.fingerprint);
+      seenFingerprints.add(identity.fingerprint);
+      candidates.push({
+        key: String(row.id),
+        kind: 'oauth',
+        name: row.name || 'Codex 官方登录',
+        providerId: 'codex',
+        keyTail: identity.display || `…${identity.fingerprint.slice(-6)}`,
+        oauthDisplay: identity.display,
+        fingerprint: identity.fingerprint,
+        duplicateInBatch,
+        bundle,
+      });
+      continue;
+    }
     const credential = extractCredential(row.settings_config);
-    if (!credential) continue; // 没有 API key 的条目（如官方 OAuth 登录）不迁移
+    if (!credential) continue; // 既没有 API key 也没有官方 OAuth 登录的条目不迁移
     const providerId = matchProviderId(credential.baseUrl, providers);
     if (!providerId) {
       unsupported.push({ name: row.name || '(未命名)', baseUrl: credential.baseUrl || '未知域名' });
@@ -123,4 +159,4 @@ const scanCcswitch = (providers) => {
   return { candidates, unsupported };
 };
 
-module.exports = { ccswitchDbPath, extractCredential, hostOf, matchProviderId, scanCcswitch };
+module.exports = { ccswitchDbPath, extractCredential, extractCodexOauth, hostOf, matchProviderId, scanCcswitch };

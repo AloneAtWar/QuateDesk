@@ -340,11 +340,13 @@ const buildStandardRequest = (account, provider, credential, secretVariables = {
 
 // 瞬时网络错误自动重试：默认共尝试 3 次（1 秒 / 2 秒退避），重试耗尽后把原始报错翻译成中文提示。
 // options.retryDelaysMs 仅供测试注入零退避，生产调用不传。
+// options.onCliAuth：CLI 登录态自动续期成功后的回调（kind, nextAuth, previousAuth, source），
+// 由主进程把新 token 写回加密存储 / 本机 live 文件。
 async function queryAccount(account, provider, credential, fetcher = fetch, secretVariables = {}, options = {}) {
   const delays = Array.isArray(options.retryDelaysMs) ? options.retryDelaysMs : RETRY_DELAYS_MS;
   for (let attempt = 1; ; attempt++) {
     try {
-      return await queryAccountOnce(account, provider, credential, fetcher, secretVariables);
+      return await queryAccountOnce(account, provider, credential, fetcher, secretVariables, options);
     } catch (error) {
       if (!isTransientNetworkError(error)) throw error;
       if (attempt > delays.length) throw new Error(describeNetworkError(error, attempt));
@@ -353,14 +355,20 @@ async function queryAccount(account, provider, credential, fetcher = fetch, secr
   }
 }
 
-async function queryAccountOnce(account, provider, credential, fetcher = fetch, secretVariables = {}) {
+async function queryAccountOnce(account, provider, credential, fetcher = fetch, secretVariables = {}, options = {}) {
   const config = provider.requestConfig || {};
   const timeoutMs = accountTimeoutMs(account);
-  // CLI 凭据类订阅是专属适配：凭据来自本机各官方 CLI 登录态，不走标准映射/脚本模板
+  // CLI 凭据类订阅是专属适配：凭据优先来自账号自己的登录快照（variables 里，DPAPI 加密），
+  // 没有快照时回落本机 CLI 登录态；令牌临期/失效时用 refresh_token 自动续期。
+  // 每次尝试（含网络重试）都重新取凭据：上一次尝试可能已续期并轮换 refresh_token
+  if (['claude', 'codex', 'gemini'].includes(config.adapterMode)) {
+    const variables = options.getSecretVariables ? options.getSecretVariables() : secretVariables;
+    const cliContext = { variables, onAuthUpdate: options.onCliAuth ? (kind, next, previous, source) => options.onCliAuth({ account, kind, next, previous, source }) : undefined };
+    if (config.adapterMode === 'claude') return queryClaudeQuota(fetcher, meter, timeoutMs, cliContext);
+    if (config.adapterMode === 'codex') return queryCodexQuota(fetcher, meter, timeoutMs, cliContext);
+    return queryGeminiQuota(fetcher, meter, timeoutMs, cliContext);
+  }
   if (config.adapterMode === 'grok') return queryGrokSubscription(fetcher, timeoutMs);
-  if (config.adapterMode === 'claude') return queryClaudeQuota(fetcher, meter, timeoutMs);
-  if (config.adapterMode === 'codex') return queryCodexQuota(fetcher, meter, timeoutMs);
-  if (config.adapterMode === 'gemini') return queryGeminiQuota(fetcher, meter, timeoutMs);
   const credentialRequired = config.adapterMode === 'script' ? config.credentialRequired === true : config.auth !== 'none';
   if (!credential && credentialRequired) throw new Error('缺少凭据，请在「设置 → 账号与凭据」中编辑该账号填写 API Token');
   const scripted = config.adapterMode === 'script' && config.script ? runScriptAdapter(account, provider, credential, null, secretVariables) : null;

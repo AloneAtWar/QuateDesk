@@ -6,6 +6,7 @@ const { queryAccount } = require('./poller.cjs');
 const { clampRetentionDays } = require('./history.cjs');
 const { builtinConfigs } = require('./builtin-configs.cjs');
 const { scanCcswitch } = require('./ccswitch.cjs');
+const { CLI_KINDS, SNAPSHOT_KEY, readLiveAuth, cliIdentity, resolveCliAuth, writeLiveIfCurrent } = require('./cli-auth.cjs');
 
 app.setName('Quota Desk');
 app.setAppUserModelId('com.quotadesk.app');
@@ -195,7 +196,48 @@ const runtimeStatus = () => ({
   checking: pollInProgress,
   startedAt: pollStartedAt,
   nextPollAt,
+  // 各本机 CLI 登录的当前指纹：UI 用来给「本机激活」的账号打徽标（profile 切换后指纹即变）
+  cliLive: { ...cliLiveIdentities },
 });
+
+// ── CLI 登录态：账号快照 + 自动续期 + 本机 live 指纹 ─────────────────────────
+// 多账号参考 cc-switch 的「OAuth 授权中心」：每个账号把 token bundle 存进自己的加密凭据，
+// 额度查询用快照里的 token 并在临期/失效时自动用 refresh_token 续期，不依赖本机 CLI
+// 当前激活的是哪个 profile；本机 live 文件只在「确属同一账号」时才写回续期结果。
+let cliLiveIdentities = Object.fromEntries(CLI_KINDS.map((kind) => [kind, null]));
+
+const refreshLiveIdentities = () => {
+  for (const kind of CLI_KINDS) {
+    const auth = readLiveAuth(kind);
+    const identity = auth && cliIdentity(kind, auth);
+    cliLiveIdentities[kind] = identity ? identity.fingerprint : null;
+  }
+};
+
+// CLI 登录续期成功后的统一落盘：账号快照写回加密存储；本机 live 文件仍是同一账号时同步更新
+const persistCliAuthUpdate = (accountId, { kind, next, previous, source }) => {
+  try {
+    if (source === 'snapshot') store.saveCredential(accountId, '', { [SNAPSHOT_KEY]: JSON.stringify(next) });
+    writeLiveIfCurrent(kind, previous, next);
+    refreshLiveIdentities();
+  } catch (error) {
+    console.error('[Quota Desk] CLI 登录态续期落盘失败', error.message);
+  }
+};
+
+// CLI 专属适配账号的身份维护：镜像账号（无快照）的标识跟随本机当前登录；
+// 快照账号只在标识为空时自动填一次，用户手填的标识不被覆盖
+const cliIdentityPatch = (account, kind, secrets) => {
+  if (!CLI_KINDS.includes(kind)) return null;
+  const resolved = resolveCliAuth(kind, secrets.variables);
+  const identity = resolved && cliIdentity(kind, resolved.auth);
+  if (!identity) return null;
+  return {
+    cliAuthSource: resolved.source,
+    cliFingerprint: identity.fingerprint,
+    identity: (resolved.source === 'snapshot' && account.identity) ? account.identity : (identity.display || account.identity || ''),
+  };
+};
 
 // ── 网络代理设置 ────────────────────────────────────────────────────────────
 // 额度轮询走 net.fetch（默认会话的 Chromium 网络栈），setProxy 即对所有账号的请求生效。
@@ -337,9 +379,15 @@ async function pollState(accountIds = null) {
     }
     try {
       const secrets = store.getSecrets(account.id);
-      const windows = await queryAccount(account, provider, secrets.credential, net.fetch, secrets.variables);
+      const windows = await queryAccount(account, provider, secrets.credential, net.fetch, secrets.variables, {
+        onCliAuth: ({ kind, next, previous, source }) => persistCliAuthUpdate(account.id, { kind, next, previous, source }),
+        // 网络重试时重新读凭据：上一次尝试可能已续期并轮换 refresh_token，继续用旧值会被判复用
+        getSecretVariables: () => store.getSecrets(account.id).variables,
+      });
       const checkedAt = new Date().toISOString();
-      const updated = { ...account, windows, status: 'active', lastError: null, lastChecked: checkedAt, lastTestAt: checkedAt };
+      // 查询成功后刷新身份信息（续期后的最新凭据重新解析一次）
+      const identityPatch = cliIdentityPatch(account, provider.requestConfig?.adapterMode, store.getSecrets(account.id));
+      const updated = { ...account, ...(identityPatch || {}), windows, status: 'active', lastError: null, lastChecked: checkedAt, lastTestAt: checkedAt };
       nextAccounts.push(updated);
       store.appendHistory(account.id, windows, historyRetentionDays());
       notifyWaste(current, updated, provider);
@@ -351,6 +399,7 @@ async function pollState(accountIds = null) {
   const next = cleanState({ ...current, accounts: nextAccounts, lastSync: new Date().toISOString() });
   store.saveState(next);
   pollInProgress = false;
+  refreshLiveIdentities();
   sendState(next);
   return next;
 }
@@ -566,7 +615,12 @@ function registerIpc() {
     }
     const checkedAt = new Date().toISOString();
     try {
-      const windows = await queryAccount({ ...(account || {}), providerId }, provider, secret, net.fetch, secrets);
+      const windows = await queryAccount({ ...(account || {}), providerId }, provider, secret, net.fetch, secrets, {
+        // 已保存的账号在草稿测试中续期成功也要落盘，避免白白消耗一次 refresh；
+        // 重试时同样重取凭据，防止用已轮换的旧 refresh_token 二次续期
+        onCliAuth: accountId ? ({ kind, next, previous, source }) => persistCliAuthUpdate(accountId, { kind, next, previous, source }) : undefined,
+        getSecretVariables: accountId ? () => ({ ...store.getSecrets(accountId).variables, ...Object.fromEntries(Object.entries(secrets).filter(([, value]) => String(value || '').trim())) }) : undefined,
+      });
       return { ok: true, message: formatWindowSummary(windows), checkedAt };
     } catch (error) {
       return { ok: false, message: error.message, checkedAt };
@@ -583,7 +637,56 @@ function registerIpc() {
   ipcMain.handle('app:get-auto-launch', () => getAutoLaunch());
   ipcMain.handle('app:set-auto-launch', (_event, enabled) => { const result = setAutoLaunch(enabled); refreshTray(); return result; });
   ipcMain.handle('app:set-auto-update', (_event, enabled) => { setAutoUpdateEnabled(Boolean(enabled)); return true; });
-  // 从 cc-switch 导入：扫描结果不含 API key，应用时主进程重新提取并写凭据
+  // 从本机 CLI 登录导入：把当前 live 登录快照为独立账号（多账号监控的基础）。
+  // 只下发指纹/展示名，token 全程留在主进程
+  ipcMain.handle('cli:read-live', () => Object.fromEntries(CLI_KINDS.map((kind) => {
+    const auth = readLiveAuth(kind);
+    const identity = auth && cliIdentity(kind, auth);
+    return [kind, identity ? { ok: true, display: identity.display, fingerprint: identity.fingerprint } : { ok: false }];
+  })));
+  ipcMain.handle('cli:import-live', async (_event, kind, options = {}) => {
+    if (!CLI_KINDS.includes(kind)) throw new Error('不支持的 CLI 类型');
+    const state = migrateState(store.loadState());
+    if (!state) throw new Error('桌面状态尚未初始化');
+    const provider = (state.providers || []).find((item) => item.id === kind);
+    if (!provider) throw new Error(`找不到厂商配置：${kind}`);
+    const auth = readLiveAuth(kind);
+    const identity = auth && cliIdentity(kind, auth);
+    if (!identity) {
+      throw new Error(kind === 'codex'
+        ? '本机没有可导入的 Codex ChatGPT 登录（当前可能切到了中转 profile，请先切回官方登录再导入）'
+        : `本机没有可导入的 ${provider.name} 登录，请先在对应 CLI 登录`);
+    }
+    // 指纹去重：同一登录已收录为独立账号时不重复导入
+    const existing = (state.accounts || []).find((account) => account.providerId === kind && account.cliAuthSource === 'snapshot' && account.cliFingerprint === identity.fingerprint);
+    if (existing) return { imported: 0, duplicate: true, name: existing.name, state: migrateState(store.loadState()) };
+    const id = `cli-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    store.saveCredential(id, '', { [SNAPSHOT_KEY]: JSON.stringify(auth) });
+    const windowKeys = provider.requestConfig?.windows?.length ? provider.requestConfig.windows : ['five_hour', 'weekly'];
+    // 账号信息来自导入表单：账号名默认就是渠道名（如 Codex），标识固定为登录邮箱，标签用户可编辑
+    const customName = String(options?.name || '').trim();
+    const customTags = (Array.isArray(options?.tags) ? options.tags : []).map((tag) => String(tag).trim()).filter(Boolean);
+    const account = {
+      id,
+      providerId: kind,
+      name: customName || provider.name,
+      identity: identity.display || '',
+      tags: customTags,
+      cliAuthSource: 'snapshot',
+      cliFingerprint: identity.fingerprint,
+      windowKeys,
+      windows: [],
+      status: 'active',
+      lastError: null,
+      lastChecked: null,
+      lastTestAt: null,
+    };
+    const saved = store.saveState(cleanState({ ...state, accounts: [...(state.accounts || []), account] }));
+    sendState(saved);
+    await pollState([id]).catch(() => {});
+    return { imported: 1, duplicate: false, name: account.name, state: migrateState(store.loadState()) };
+  });
+  // 从 cc-switch 导入：扫描结果不含 API key / OAuth token，应用时主进程重新提取并写凭据
   ipcMain.handle('import:scan-ccswitch', () => {
     const state = migrateState(store.loadState());
     const providers = state?.providers || [];
@@ -592,15 +695,22 @@ function registerIpc() {
     for (const candidate of result.candidates) {
       candidate.providerName = providers.find((item) => item.id === candidate.providerId)?.name || candidate.providerId;
     }
-    // 已有账号凭据去重：同一把 key 已存在于任一账号时标记「已存在」
+    // 已有账号凭据去重：同一把 key 或同一份 OAuth 登录（指纹）已存在于任一账号时标记「已存在」
     const existingKeys = new Set();
+    const existingFingerprints = new Set();
     for (const account of state.accounts || []) {
       const credential = store.getCredential(account.id);
       if (credential) existingKeys.add(credential);
+      if (account.cliFingerprint) existingFingerprints.add(account.cliFingerprint);
     }
     for (const candidate of result.candidates) {
-      candidate.duplicateOfExisting = existingKeys.has(candidate.apiKey);
-      delete candidate.apiKey;
+      if (candidate.kind === 'oauth') {
+        candidate.duplicateOfExisting = existingFingerprints.has(candidate.fingerprint);
+        candidate.bundle = undefined;
+      } else {
+        candidate.duplicateOfExisting = existingKeys.has(candidate.apiKey);
+        delete candidate.apiKey;
+      }
     }
     return result;
   });
@@ -611,18 +721,44 @@ function registerIpc() {
     if (scan.error) throw new Error(scan.error);
     const selected = new Set(selectedIds || []);
     const usedKeys = new Set();
+    const usedFingerprints = new Set();
     for (const account of state.accounts || []) {
       const credential = store.getCredential(account.id);
       if (credential) usedKeys.add(credential);
+      if (account.cliFingerprint) usedFingerprints.add(account.cliFingerprint);
     }
     const nextAccounts = [...(state.accounts || [])];
     const importedIds = [];
     for (const candidate of scan.candidates) {
-      if (!selected.has(candidate.key) || usedKeys.has(candidate.apiKey)) continue;
-      usedKeys.add(candidate.apiKey);
+      if (!selected.has(candidate.key)) continue;
       const provider = providers.find((item) => item.id === candidate.providerId);
-      const windows = provider?.requestConfig?.windows?.length ? provider.requestConfig.windows : ['five_hour', 'weekly', 'monthly', 'balance'];
+      if (!provider) continue;
       const id = `ccs-${Date.now().toString(36)}-${importedIds.length}-${Math.random().toString(36).slice(2, 7)}`;
+      if (candidate.kind === 'oauth') {
+        // 官方 OAuth 条目：完整 token bundle 快照进加密凭据，之后由应用自动续期
+        if (!candidate.bundle || usedFingerprints.has(candidate.fingerprint)) continue;
+        usedFingerprints.add(candidate.fingerprint);
+        store.saveCredential(id, '', { [SNAPSHOT_KEY]: JSON.stringify(candidate.bundle) });
+        importedIds.push(id);
+        nextAccounts.push({
+          id,
+          providerId: candidate.providerId,
+          name: candidate.name,
+          identity: candidate.oauthDisplay || '',
+          tags: ['cc-switch'],
+          cliAuthSource: 'snapshot',
+          cliFingerprint: candidate.fingerprint,
+          windowKeys: provider.requestConfig?.windows?.length ? provider.requestConfig.windows : ['five_hour', 'weekly', 'monthly', 'balance'],
+          windows: [],
+          status: 'active',
+          lastError: null,
+          lastChecked: null,
+        });
+        continue;
+      }
+      if (usedKeys.has(candidate.apiKey)) continue;
+      usedKeys.add(candidate.apiKey);
+      const windows = provider.requestConfig?.windows?.length ? provider.requestConfig.windows : ['five_hour', 'weekly', 'monthly', 'balance'];
       store.saveCredential(id, candidate.apiKey);
       importedIds.push(id);
       nextAccounts.push({
@@ -688,6 +824,7 @@ else {
   app.whenReady().then(() => {
     store = new DesktopStore();
     applyProxySetting();
+    refreshLiveIdentities();
     registerIpc();
     createMainWindow();
     const state = store.loadState();

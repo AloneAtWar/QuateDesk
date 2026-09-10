@@ -85,16 +85,22 @@ Quota Desk 专注解决这件事：把多个服务商、多个账号、多个周
 
 Claude、Codex、Gemini 和 Grok 不需要在 Quota Desk 中重复填写 Token，但使用前需要先在对应 CLI 中完成登录。New API 是兼容站点模板，不限定某一个中转站域名。
 
+### CLI 官方订阅的多账号监控
+
+CLI 服务商默认跟随本机 CLI 的当前登录（适合单账号）。要同时监控多个官方账号（例如多个 ChatGPT 账号的 Codex 订阅），在设置 → 账号与凭据点击「导入本机 CLI 登录」，把当前登录保存为独立账号快照（Windows DPAPI 加密）；之后在 CLI 或 cc-switch 里登录 / 切换到另一个账号，再回来导入一次即可，同一登录会按账号指纹自动去重。
+
+快照账号的额度查询不依赖本机当前激活的是哪个 profile——即使 cc-switch 把 `~/.codex/auth.json` 切换成中转配置也不影响；令牌会在临期或失效时用 refresh_token 自动续期并写回加密存储，若该账号恰好是本机当前激活的登录，续期结果还会安全地同步回本机 CLI 的凭据文件。设置抽屉的账号行会用「本机激活」徽标标出当前正在本机使用的账号。
+
 ## 快速开始
 
 1. 从 [Releases](https://github.com/AloneAtWar/QuateDesk/releases) 下载对应平台的安装包。
-2. 打开 Quota Desk，在设置中添加账号。API 服务商填写 API Token；CLI 服务商先完成对应 CLI 登录。
+2. 打开 Quota Desk，在设置中添加账号。API 服务商填写 API Token；CLI 服务商先完成对应 CLI 登录，或直接「导入本机 CLI 登录」。
 3. 保存后应用会立即测试账号并开始轮询。根据自己的使用习惯设置轮询间隔和提醒规则。
 4. 打开桌面浮窗，让额度信息持续显示在桌面上；需要集中查看时切换到总览、行式明细或周期明细。
 
 ### 从 cc-switch 导入
 
-在设置中点击“从 cc-switch 导入账号”。应用会读取本机 `~/.cc-switch/cc-switch.db`，列出可以匹配到 Quota Desk 服务商的账号供选择。导入过程只迁移 API Key，凭据会由 Quota Desk 重新加密保存；重复的 Key 不会重复导入，cc-switch 中无法匹配的自定义服务商需要手动配置。
+在设置中点击“从 cc-switch 导入账号”。应用会读取本机 `~/.cc-switch/cc-switch.db`，列出可以匹配到 Quota Desk 服务商的账号供选择。导入内容包含 API Key 与 Codex 官方 OAuth 登录（导入为独立账号快照，自动续期），凭据会由 Quota Desk 重新加密保存；重复的 Key / 登录不会重复导入，cc-switch 中无法匹配的自定义服务商需要手动配置。
 
 ## 下载与平台
 
