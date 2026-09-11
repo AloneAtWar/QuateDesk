@@ -3,6 +3,7 @@
 // - Claude: .credentials.json / 快照 → api.anthropic.com/api/oauth/usage（5小时/7天窗口）
 // - Codex:  ~/.codex/auth.json (ChatGPT OAuth tokens) → chatgpt.com/backend-api/wham/usage
 // - Gemini: ~/.gemini/oauth_creds.json → cloudcode-pa.googleapis.com 两步查询（按模型分桶）
+// - Kimi:   扫码登录的网页会话快照 → www.kimi.com GetSubscriptionStats（5小时/7天/月度，含月额度）
 // token 过期时用账号快照里的 refresh_token 自动续期（见 cli-auth.cjs），无需 CLI 在场。
 const { resolveCliAuth, refreshTokenOf, accessTokenExpiryMs, fetchWithCliAuth } = require('./cli-auth.cjs');
 
@@ -140,4 +141,53 @@ async function queryGeminiQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS, 
   return windows;
 }
 
-module.exports = { queryClaudeQuota, queryCodexQuota, queryGeminiQuota };
+// Kimi 凭据形态（扫码登录快照）：{ accessToken, refreshToken, userId, authHost }，没有本机 live 文件。
+// 月额度只在网页会员服务里（coding 域的 /coding/v1/usages 对订阅用户 totalQuota 恒为空），
+// GetSubscriptionStats 一个接口同时返回 5 小时 / 7 天 / 月订阅三个窗口（协议为 connect-rpc + JSON）。
+const KIMI_BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36';
+const kimiStatsUrl = (auth) => {
+  const host = String(auth?.authHost || 'https://auth.kimi.com');
+  return `${host.includes('.kimi.ai') ? 'https://www.kimi.ai' : 'https://www.kimi.com'}/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats`;
+};
+
+// ratio 字段是 0–1 的「已用比例」，换算成剩余百分比。
+// proto3 零值省略：用量为 0（剩余 100%）时 ratio 字段不返回，窗口对象仍在（enabled/resetTime），
+// 因此 ratio 缺失按 0 处理，只有窗口对象整体缺失或 enabled=false 才跳过
+const kimiRatioRow = (key, item) => {
+  if (!item || item.enabled === false) return null;
+  const used = item.ratio === undefined ? 0 : Number(item.ratio);
+  if (!Number.isFinite(used)) return null;
+  return { key, remaining: Math.max(0, Math.min(100, 100 - used * 100)), resetAt: item.resetTime || null };
+};
+
+async function queryKimiWebQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS, ctx = {}) {
+  const resolved = resolveCliAuth('kimi', ctx.variables);
+  if (!resolved) throw new Error('未检测到 Kimi 订阅登录。请在「导入订阅登录」中用手机扫码登录');
+  const response = await fetchWithCliAuth('kimi', {
+    auth: resolved.auth,
+    source: resolved.source,
+    fetcher,
+    timeoutMs,
+    buildRequest: (auth) => ({
+      url: kimiStatsUrl(auth),
+      init: { method: 'POST', headers: { Authorization: `Bearer ${auth.accessToken}`, 'Content-Type': 'application/json', Accept: 'application/json', 'User-Agent': KIMI_BROWSER_UA }, body: '{}' },
+    }),
+    onAuthUpdate: ctx.onAuthUpdate,
+  });
+  if (response.status === 401 || response.status === 403) throw new Error('Kimi 订阅凭据被拒绝（自动续期后仍无效），请重新扫码「导入订阅登录」');
+  if (!response.ok) throw new Error(`Kimi 订阅用量接口返回 HTTP ${response.status}`);
+  const payload = await response.json();
+  const rows = [
+    kimiRatioRow('five_hour', payload?.ratelimitCode5h),
+    kimiRatioRow('weekly', payload?.ratelimitCode7d),
+  ];
+  // 月度窗口取 coding 专属口径 kimiCodeUsedRatio，缺失时退到整个会员池的 amountUsedRatio
+  const balance = payload?.subscriptionBalance;
+  const monthlyUsed = Number(balance?.kimiCodeUsedRatio ?? balance?.amountUsedRatio);
+  if (Number.isFinite(monthlyUsed)) rows.push({ key: 'monthly', remaining: Math.max(0, Math.min(100, 100 - monthlyUsed * 100)), resetAt: balance.expireTime || null });
+  const windows = rows.filter(Boolean).map((row) => meter(row.key, row.remaining, 100, '%', row.resetAt));
+  if (!windows.length) throw new Error('Kimi 订阅响应中没有可识别的额度窗口');
+  return windows;
+}
+
+module.exports = { queryClaudeQuota, queryCodexQuota, queryGeminiQuota, queryKimiWebQuota };

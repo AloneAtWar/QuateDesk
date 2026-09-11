@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, Menu, nativeImage, net, Notification, screen, session, shell, Tray } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const { DesktopStore } = require('./storage.cjs');
 const { queryAccount } = require('./poller.cjs');
 const { clampRetentionDays } = require('./history.cjs');
@@ -271,6 +272,7 @@ const sendState = (state) => {
 
 const builtinLogos = {
   kimi: './logos/kimi.png',
+  'kimi-subscription': './logos/kimi.png',
   zai: './logos/zai.svg',
   deepseek: './logos/deepseek.png',
   grok: './logos/grok.png',
@@ -282,6 +284,7 @@ const builtinLogos = {
 // 内置厂商的默认官网；仅在厂商从未设置过官网时补齐，用户清空后不再强制回填
 const builtinWebsites = {
   kimi: 'https://www.kimi.com/',
+  'kimi-subscription': 'https://www.kimi.com/',
   zai: 'https://bigmodel.cn/',
   deepseek: 'https://www.deepseek.com/',
   wlb: 'https://www.wlbclub.com/',
@@ -299,6 +302,7 @@ const ensureCliProviders = (providers) => {
     { id: 'claude', name: 'Claude', legalName: 'Claude Code', monogram: 'C', tone: 'coral', adapter: 'claude', logo: './logos/claude.jpg' },
     { id: 'codex', name: 'Codex', legalName: 'OpenAI Codex', monogram: 'O', tone: 'mint', adapter: 'codex', logo: './logos/codex.svg' },
     { id: 'gemini', name: 'Gemini', legalName: 'Gemini CLI', monogram: 'G', tone: 'sky', adapter: 'gemini', logo: './logos/gemini.svg' },
+    { id: 'kimi-subscription', name: 'Kimi 订阅', legalName: 'Kimi for Coding 订阅', monogram: 'K', tone: 'sky', adapter: 'kimi', logo: './logos/kimi.png' },
   ];
   const existing = new Set(providers.map((item) => item.id));
   const additions = cliProviders
@@ -675,6 +679,124 @@ function registerIpc() {
       cliAuthSource: 'snapshot',
       cliFingerprint: identity.fingerprint,
       windowKeys,
+      windows: [],
+      status: 'active',
+      lastError: null,
+      lastChecked: null,
+      lastTestAt: null,
+    };
+    const saved = store.saveState(cleanState({ ...state, accounts: [...(state.accounts || []), account] }));
+    sendState(saved);
+    await pollState([id]).catch(() => {});
+    return { imported: 1, duplicate: false, name: account.name, display: identity.display || '', state: migrateState(store.loadState()) };
+  });
+  // ── Kimi 订阅扫码登录（auth.kimi.com account.gateway.v1.AuthService，connect-rpc + JSON）──
+  // 二维码内容是 kimi.com 的网页链接（微信 / Kimi App 扫码确认），登录成功后网页会话的
+  // token bundle 快照为独立账号；与 CLI 导入一致，token 全程只留在主进程，不进渲染层。
+  const KIMI_QR_REGIONS = [
+    { authHost: 'https://auth.kimi.com', site: 'https://www.kimi.com' },
+    { authHost: 'https://auth.kimi.ai', site: 'https://www.kimi.ai' },
+  ];
+  const KIMI_BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36';
+  // code → { authHost, site, auth?, createdAt }；扫码会话只保留 10 分钟
+  const kimiPendingQr = new Map();
+  const kimiQrCleaner = setInterval(() => {
+    for (const [code, entry] of kimiPendingQr) {
+      if (Date.now() - entry.createdAt > 10 * 60_000) kimiPendingQr.delete(code);
+    }
+  }, 60_000);
+  kimiQrCleaner.unref?.();
+
+  const postKimiConnect = async (authHost, servicePath, body) => {
+    const response = await net.fetch(`${authHost.replace(/\/$/, '')}${servicePath}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'User-Agent': KIMI_BROWSER_UA },
+      body: JSON.stringify(body || {}),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(`Kimi 登录接口返回 HTTP ${response.status}`);
+    return payload;
+  };
+  const kimiDeviceId = () => Array.from(crypto.randomBytes(10)).map((byte) => byte % 10).join('');
+
+  ipcMain.handle('kimi:qr-start', async () => {
+    let lastError = null;
+    for (const region of KIMI_QR_REGIONS) {
+      try {
+        const payload = await postKimiConnect(region.authHost, '/api/account.gateway.v1.AuthService/CreateLoginQRCode', {});
+        const code = typeof payload?.code === 'string' ? payload.code : '';
+        if (!code) throw new Error('二维码响应中没有 code');
+        kimiPendingQr.set(code, { ...region, createdAt: Date.now() });
+        return { code, qr: `${region.site}/wechat/mp/auth?id=${encodeURIComponent(code)}&device_id=${kimiDeviceId()}` };
+      } catch (error) { lastError = error; }
+    }
+    throw new Error(`创建 Kimi 登录二维码失败：${lastError?.message || '网络错误'}`);
+  });
+  ipcMain.handle('kimi:qr-poll', async (_event, code) => {
+    const entry = kimiPendingQr.get(String(code || ''));
+    if (!entry) return { status: 'expired' };
+    let payload;
+    try { payload = await postKimiConnect(entry.authHost, '/api/account.gateway.v1.AuthService/GetLoginQRCodeStatus', { code }); }
+    catch (error) { return { status: 'pending', error: error.message }; }
+    const raw = String(payload?.status || '');
+    if (raw === 'STATUS_SUCCESS' && payload?.accessToken && payload?.refreshToken) {
+      // 登录成功：令牌暂存主进程内存，等渲染层带着账号名/标签来导入
+      entry.auth = { accessToken: payload.accessToken, refreshToken: payload.refreshToken, userId: String(payload.userId || ''), authHost: entry.authHost };
+      const identity = cliIdentity('kimi', entry.auth);
+      return { status: 'success', display: identity?.display || '' };
+    }
+    if (raw === 'STATUS_EXPIRED') { kimiPendingQr.delete(String(code)); return { status: 'expired' }; }
+    return { status: raw === 'STATUS_SCANNED' ? 'scanned' : 'pending' };
+  });
+  ipcMain.handle('kimi:qr-import', async (_event, code, options = {}) => {
+    const entry = kimiPendingQr.get(String(code || ''));
+    kimiPendingQr.delete(String(code || ''));
+    if (!entry?.auth) throw new Error('登录会话已失效，请重新扫码');
+    const state = migrateState(store.loadState());
+    if (!state) throw new Error('桌面状态尚未初始化');
+    const provider = (state.providers || []).find((item) => item.id === 'kimi-subscription');
+    if (!provider) throw new Error('找不到厂商配置：kimi-subscription');
+    const identity = cliIdentity('kimi', entry.auth);
+    if (!identity) throw new Error('Kimi 登录信息不完整，请重新扫码');
+    // 重新登录已有账号（token 失效后的「重新扫码」）：新快照写回原账号，配置全部保留；
+    // 扫出来的登录属于另一个已收录账号时拒绝覆盖，避免两个账号共用同一份登录
+    const reloginId = String(options?.accountId || '');
+    if (reloginId) {
+      const target = (state.accounts || []).find((account) => account.id === reloginId && account.providerId === 'kimi-subscription');
+      if (!target) throw new Error('找不到要重新登录的 Kimi 订阅账号');
+      const conflict = (state.accounts || []).find((account) => account.id !== reloginId && account.providerId === 'kimi-subscription' && account.cliAuthSource === 'snapshot' && account.cliFingerprint === identity.fingerprint);
+      if (conflict) return { imported: 0, duplicate: true, name: conflict.name, state: migrateState(store.loadState()) };
+      store.saveCredential(reloginId, '', { [SNAPSHOT_KEY]: JSON.stringify(entry.auth) });
+      // 账号名 / 标签允许在重登弹窗里顺手改（留空 / 未传则保留原值）
+      const customName = String(options?.name || '').trim();
+      const customTags = Array.isArray(options?.tags) ? options.tags.map((tag) => String(tag).trim()).filter(Boolean) : null;
+      // 自动生成的标识（… 尾号）跟随新登录更新，用户手填的标识不动
+      const nextIdentity = (!target.identity || target.identity.startsWith('…')) ? (identity.display || target.identity) : target.identity;
+      const updatedAccounts = (state.accounts || []).map((account) => account.id === reloginId
+        ? { ...account, identity: nextIdentity, ...(customName ? { name: customName } : {}), ...(customTags ? { tags: customTags } : {}), cliAuthSource: 'snapshot', cliFingerprint: identity.fingerprint, status: 'active', lastError: null }
+        : account);
+      const saved = store.saveState(cleanState({ ...state, accounts: updatedAccounts }));
+      sendState(saved);
+      await pollState([reloginId]).catch(() => {});
+      return { imported: 1, duplicate: false, relogin: true, name: customName || target.name, display: identity.display || '', state: migrateState(store.loadState()) };
+    }
+    // 指纹去重：同一登录已收录为独立账号时不重复导入
+    const existing = (state.accounts || []).find((account) => account.providerId === 'kimi-subscription' && account.cliAuthSource === 'snapshot' && account.cliFingerprint === identity.fingerprint);
+    if (existing) return { imported: 0, duplicate: true, name: existing.name, state: migrateState(store.loadState()) };
+    const id = `kimi-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    store.saveCredential(id, '', { [SNAPSHOT_KEY]: JSON.stringify(entry.auth) });
+    const customName = String(options?.name || '').trim();
+    const customTags = (Array.isArray(options?.tags) ? options.tags : []).map((tag) => String(tag).trim()).filter(Boolean);
+    const account = {
+      id,
+      providerId: 'kimi-subscription',
+      name: customName || provider.name,
+      identity: identity.display || '',
+      tags: customTags,
+      cliAuthSource: 'snapshot',
+      cliFingerprint: identity.fingerprint,
+      windowKeys: provider.requestConfig?.windows?.length ? provider.requestConfig.windows : ['five_hour', 'weekly', 'monthly'],
       windows: [],
       status: 'active',
       lastError: null,

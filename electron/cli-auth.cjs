@@ -6,12 +6,15 @@
 // - Codex:  POST auth.openai.com/oauth/token（JSON：client_id + grant_type=refresh_token）
 // - Claude: POST console.anthropic.com/v1/oauth/token（JSON：client_id + grant_type=refresh_token）
 // - Gemini: POST oauth2.googleapis.com/token（表单：client_id + client_secret + refresh_token）
+// - Kimi:   POST auth.kimi.com/api/account.gateway.v1.AuthService/RefreshToken（connect-rpc JSON）。
+//           Kimi 网页会话与 kimi CLI 的 coding OAuth 是两套体系（HS512 vs ES256），月额度只在
+//           网页会员服务里，因此订阅凭据通过扫码登录获得，没有本机 live 文件可回落。
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const CLI_KINDS = ['claude', 'codex', 'gemini'];
+const CLI_KINDS = ['claude', 'codex', 'gemini', 'kimi'];
 // 快照在加密凭据 variables 里的键名；只在主进程读写，不进渲染进程
 const SNAPSHOT_KEY = 'cliAuthTokenBundle';
 // access token 剩余寿命低于该值时先刷新再用（cc-switch 为 60s，这里留足一次轮询的余量）
@@ -28,6 +31,10 @@ const CLAUDE_TOKEN_URL = 'https://console.anthropic.com/v1/oauth/token';
 const GEMINI_CLIENT_ID = ['681255809395-oo8ft2oprdrnp9e3aqf6', 'av3hmdib135j.apps.googleusercon', 'tent.com'].join('');
 const GEMINI_CLIENT_SECRET = ['GOCSPX-4uHgMPm-', '1o7Sk-geV6', 'Cu5clXFsxl'].join('');
 const GEMINI_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+// Kimi 网页会话（account.gateway.v1.AuthService，connect-rpc + JSON）。国内 kimi.com / 海外 kimi.ai；
+// 实际使用的 host 记在快照的 authHost 里，刷新时优先按快照记录的区域走
+const KIMI_AUTH_HOST = 'https://auth.kimi.com';
+const KIMI_REFRESH_PATH = '/api/account.gateway.v1.AuthService/RefreshToken';
 
 const readJsonFile = (filePath) => {
   try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); }
@@ -65,6 +72,7 @@ const hasTokens = (kind, auth) => {
   if (!auth || typeof auth !== 'object') return false;
   if (kind === 'codex') return Boolean(auth.tokens?.access_token || auth.tokens?.refresh_token);
   if (kind === 'claude') return Boolean(auth.claudeOauth?.accessToken || auth.claudeOauth?.refreshToken);
+  if (kind === 'kimi') return Boolean(auth.accessToken || auth.refreshToken);
   return Boolean(auth.access_token || auth.refresh_token);
 };
 
@@ -82,6 +90,9 @@ const cliIdentity = (kind, auth) => {
     // Claude 凭据没有账号标识字段：access token 是 JWT 时取 sub 声明（续期轮换也稳定），否则退到 refresh_token 指纹
     const claims = parseJwtClaims(auth.claudeOauth?.accessToken);
     fingerprint = String(claims?.sub || claims?.user_id || '') || shaTag(auth.claudeOauth?.refreshToken || auth.claudeOauth?.accessToken);
+  } else if (kind === 'kimi') {
+    // Kimi 网页会话没有邮箱等展示字段：userId 是稳定账号标识，展示退到指纹尾号
+    fingerprint = String(auth.userId || '') || shaTag(auth.refreshToken);
   } else {
     const claims = parseJwtClaims(auth.id_token || auth.access_token);
     email = String(claims?.email || '').toLowerCase();
@@ -113,6 +124,7 @@ const resolveCliAuth = (kind, secretVariables = {}) => {
 const refreshTokenOf = (kind, auth) => {
   if (kind === 'codex') return auth?.tokens?.refresh_token || '';
   if (kind === 'claude') return auth?.claudeOauth?.refreshToken || '';
+  if (kind === 'kimi') return auth?.refreshToken || '';
   return auth?.refresh_token || '';
 };
 
@@ -126,6 +138,11 @@ const accessTokenExpiryMs = (kind, auth) => {
     const raw = auth?.claudeOauth?.expiresAt || auth?.claudeOauth?.expires_at;
     const ms = new Date(raw).getTime();
     return Number.isFinite(ms) ? ms : null;
+  }
+  if (kind === 'kimi') {
+    // 网页会话的 access_token 是 HS512 JWT（exp = iat + 900s），读 exp 声明
+    const claims = parseJwtClaims(auth?.accessToken);
+    return claims?.exp ? Number(claims.exp) * 1000 : null;
   }
   const ms = Number(auth?.expiry_date);
   return Number.isFinite(ms) && ms > 0 ? ms : null;
@@ -236,10 +253,33 @@ async function refreshGeminiAuth(auth, fetcher, timeoutMs) {
   return next;
 }
 
+async function refreshKimiWebAuth(auth, fetcher, timeoutMs) {
+  if (!auth.refreshToken) throw new CliRefreshError('Kimi 订阅快照缺少 refreshToken，无法续期', { permanent: true });
+  const host = String(auth.authHost || KIMI_AUTH_HOST).replace(/\/$/, '');
+  let response;
+  let payload;
+  try {
+    response = await postTokenRequest(fetcher, `${host}${KIMI_REFRESH_PATH}`, {
+      json: { refreshToken: auth.refreshToken },
+      headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36' },
+      timeoutMs,
+    });
+    payload = await response.json();
+  } catch (error) { throw asRefreshError('Kimi', error); }
+  if (!response.ok) {
+    const permanent = response.status === 401 || response.status === 403;
+    throw new CliRefreshError(`Kimi 订阅续期被拒绝（HTTP ${response.status}），请重新扫码「导入订阅登录」`, { permanent });
+  }
+  if (!payload?.accessToken || !payload?.refreshToken) throw new CliRefreshError('Kimi 订阅续期响应缺少令牌', { permanent: false });
+  // 软轮换：响应同时返回新的成对令牌，旧 refresh_token 有宽限期但仍以最新一对为准
+  return { ...auth, accessToken: payload.accessToken, refreshToken: payload.refreshToken };
+}
+
 const refreshCliAuth = async (kind, auth, fetcher, timeoutMs = 15_000) => {
   if (kind === 'codex') return refreshCodexAuth(auth, fetcher, timeoutMs);
   if (kind === 'claude') return refreshClaudeAuth(auth, fetcher, timeoutMs);
   if (kind === 'gemini') return refreshGeminiAuth(auth, fetcher, timeoutMs);
+  if (kind === 'kimi') return refreshKimiWebAuth(auth, fetcher, timeoutMs);
   throw new Error(`未知的 CLI 类型：${kind}`);
 };
 
@@ -300,5 +340,5 @@ module.exports = {
   refreshCliAuth,
   writeLiveIfCurrent,
   fetchWithCliAuth,
-  __constants: { CODEX_CLIENT_ID, CODEX_TOKEN_URL, CLAUDE_CLIENT_ID, CLAUDE_TOKEN_URL, GEMINI_CLIENT_ID, GEMINI_CLIENT_SECRET, GEMINI_TOKEN_URL },
+  __constants: { CODEX_CLIENT_ID, CODEX_TOKEN_URL, CLAUDE_CLIENT_ID, CLAUDE_TOKEN_URL, GEMINI_CLIENT_ID, GEMINI_CLIENT_SECRET, GEMINI_TOKEN_URL, KIMI_AUTH_HOST, KIMI_REFRESH_PATH },
 };

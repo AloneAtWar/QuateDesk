@@ -277,3 +277,149 @@ test('cc-switch 官方 OAuth 条目识别：还原为 auth.json 形态，非 cod
   assert.equal(extractCodexOauth('claude', JSON.stringify({ auth: bundle })), null);
   assert.equal(extractCodexOauth('codex', JSON.stringify({ auth: { OPENAI_API_KEY: 'sk-x' } })), null);
 });
+
+// ── Kimi 订阅（网页会话快照）：解析 / 身份 / 续期 / 额度查询 ───────────────────
+const kimiSnapshot = (overrides = {}) => ({
+  accessToken: fakeJwt({ exp: Math.floor(Date.now() / 1000) + 600 }),
+  refreshToken: 'krt-old',
+  userId: 'd71ngibacc4d5ga9klk0',
+  authHost: 'https://auth.kimi.com',
+  ...overrides,
+});
+const kimiStatsPayload = {
+  ratelimitCode5h: { ratio: 0.4534, enabled: true, resetTime: '2026-09-10T12:58:06.442945Z' },
+  ratelimitCode7d: { ratio: 0.3768, enabled: true, resetTime: '2026-09-14T01:58:06.442945Z' },
+  subscriptionBalance: { feature: 'FEATURE_OMNI', amountUsedRatio: 0.0884, kimiCodeUsedRatio: 0.0752, expireTime: '2026-10-10T00:00:00Z' },
+};
+const kimiProvider = { id: 'kimi-subscription', name: 'Kimi 订阅', requestConfig: builtinConfigs['kimi-subscription'] };
+
+test('Kimi 快照解析与身份：userId 是稳定指纹，展示退到尾号，exp 读自 JWT', () => {
+  const snapshot = kimiSnapshot();
+  assert.equal(parseCliSnapshot('kimi', { [SNAPSHOT_KEY]: JSON.stringify(snapshot) }).userId, 'd71ngibacc4d5ga9klk0');
+  assert.equal(parseCliSnapshot('kimi', { [SNAPSHOT_KEY]: JSON.stringify({ userId: 'u1' }) }), null);
+  const identity = cliIdentity('kimi', snapshot);
+  assert.equal(identity.fingerprint, 'd71ngibacc4d5ga9klk0');
+  assert.equal(identity.display, '…a9klk0');
+  assert.ok(Math.abs(cliAuth.accessTokenExpiryMs('kimi', snapshot) - (Math.floor(Date.now() / 1000) + 600) * 1000) < 5000);
+  // 没有本机 live 文件可回落
+  assert.equal(resolveCliAuth('kimi', {}), null);
+});
+
+test('Kimi 续期：connect-rpc 端点与 JSON 形态正确，软轮换成对更新', async () => {
+  const calls = [];
+  const fetcher = async (url, init) => {
+    calls.push({ url, init });
+    return { ok: true, status: 200, json: async () => ({ accessToken: 'at-new', refreshToken: 'krt-new' }) };
+  };
+  const next = await refreshCliAuth('kimi', kimiSnapshot(), fetcher, 5000);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, `${__constants.KIMI_AUTH_HOST}${__constants.KIMI_REFRESH_PATH}`);
+  assert.equal(calls[0].init.headers['Content-Type'], 'application/json');
+  assert.deepEqual(JSON.parse(calls[0].init.body), { refreshToken: 'krt-old' });
+  assert.equal(next.accessToken, 'at-new');
+  assert.equal(next.refreshToken, 'krt-new');
+  assert.equal(next.userId, 'd71ngibacc4d5ga9klk0');
+  assert.equal(next.authHost, 'https://auth.kimi.com');
+  // 海外区快照按记录的 authHost 续期
+  const oversea = await refreshCliAuth('kimi', kimiSnapshot({ authHost: 'https://auth.kimi.ai' }), fetcher, 5000);
+  assert.equal(calls[1].url, `https://auth.kimi.ai${__constants.KIMI_REFRESH_PATH}`);
+  assert.ok(oversea);
+});
+
+test('Kimi 续期被拒绝标记为永久失败，网络错误保持瞬时', async () => {
+  const refused = async () => ({ ok: false, status: 401, json: async () => ({ code: 'unauthenticated' }) });
+  await assert.rejects(
+    () => refreshCliAuth('kimi', kimiSnapshot(), refused, 5000),
+    (error) => error instanceof CliRefreshError && error.permanent === true && /重新扫码/.test(error.message),
+  );
+  const unreachable = async () => { throw new Error('fetch failed'); };
+  await assert.rejects(
+    () => refreshCliAuth('kimi', kimiSnapshot(), unreachable, 5000),
+    (error) => error instanceof CliRefreshError && error.permanent === false,
+  );
+});
+
+test('Kimi 订阅额度查询：一个接口出三个窗口，ratio 换算为剩余百分比，月度取 coding 口径', async () => {
+  const seen = [];
+  const fetcher = async (url, init) => {
+    seen.push({ url, method: init.method, authorization: init.headers.Authorization });
+    return { ok: true, status: 200, json: async () => kimiStatsPayload };
+  };
+  const snapshot = kimiSnapshot();
+  const windows = await queryAccount({ id: 'k1' }, kimiProvider, '', fetcher, { [SNAPSHOT_KEY]: JSON.stringify(snapshot) });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].url, 'https://www.kimi.com/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats');
+  assert.equal(seen[0].method, 'POST');
+  assert.equal(seen[0].authorization, `Bearer ${snapshot.accessToken}`);
+  assert.deepEqual(windows.map((item) => item.key), ['five_hour', 'weekly', 'monthly']);
+  assert.equal(windows[0].remaining, 54.66);
+  assert.equal(windows[1].remaining, 62.32);
+  assert.equal(windows[2].remaining, 92.48);
+  assert.equal(windows[2].resetAt, '2026-10-10T00:00:00Z');
+});
+
+test('Kimi 订阅额度查询：401 自动续期后重试，并把新凭据回传主进程', async () => {
+  const events = [];
+  const fetcher = async (url, init) => {
+    if (url === `${__constants.KIMI_AUTH_HOST}${__constants.KIMI_REFRESH_PATH}`) {
+      return { ok: true, status: 200, json: async () => ({ accessToken: 'at-new', refreshToken: 'krt-new' }) };
+    }
+    const first = events.length === 0;
+    return first
+      ? { ok: false, status: 401, json: async () => ({ code: 'unauthenticated' }) }
+      : { ok: true, status: 200, json: async () => kimiStatsPayload };
+  };
+  const windows = await queryAccount({ id: 'k1' }, kimiProvider, '', fetcher, { [SNAPSHOT_KEY]: JSON.stringify(kimiSnapshot()) }, {
+    onCliAuth: (event) => events.push(event),
+  });
+  assert.equal(windows.length, 3);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].kind, 'kimi');
+  assert.equal(events[0].source, 'snapshot');
+  assert.equal(events[0].next.refreshToken, 'krt-new');
+  // 续期被拒后仍 401 → 提示重新扫码
+  const always401 = async () => ({ ok: false, status: 401, json: async () => ({ code: 'unauthenticated' }) });
+  await assert.rejects(
+    () => queryAccount({ id: 'k1' }, kimiProvider, '', always401, { [SNAPSHOT_KEY]: JSON.stringify(kimiSnapshot()) }),
+    (error) => /重新扫码/.test(error.message),
+  );
+});
+
+test('Kimi 订阅额度查询：无订阅时只剩 5 小时 / 7 天窗口也成立，enabled=false 的窗口跳过', async () => {
+  const fetcher = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ ratelimitCode5h: { ratio: 0.2, enabled: false }, ratelimitCode7d: { ratio: 0.5, enabled: true, resetTime: '2026-09-14T01:58:06Z' } }),
+  });
+  const windows = await queryAccount({ id: 'k1' }, kimiProvider, '', fetcher, { [SNAPSHOT_KEY]: JSON.stringify(kimiSnapshot()) });
+  assert.deepEqual(windows.map((item) => item.key), ['weekly']);
+  assert.equal(windows[0].remaining, 50);
+  // 没有任何可识别窗口时给出可行动提示
+  const empty = async () => ({ ok: true, status: 200, json: async () => ({}) });
+  await assert.rejects(
+    () => queryAccount({ id: 'k1' }, kimiProvider, '', empty, { [SNAPSHOT_KEY]: JSON.stringify(kimiSnapshot()) }),
+    (error) => /没有可识别的额度窗口/.test(error.message),
+  );
+  // 没有快照时提示扫码登录
+  await assert.rejects(
+    () => queryAccount({ id: 'k1' }, kimiProvider, '', async () => { throw new Error('should not call'); }, {}),
+    (error) => /未检测到 Kimi 订阅登录/.test(error.message),
+  );
+});
+
+test('Kimi 订阅额度查询：用量为 0 时 proto3 省略 ratio 字段，窗口仍按 100% 剩余展示', async () => {
+  const fetcher = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      ratelimitCode5h: { enabled: true, resetTime: '2026-09-11T03:58:05Z' },
+      ratelimitCode7d: { ratio: 0.5802, enabled: true, resetTime: '2026-09-14T01:58:06Z' },
+      subscriptionBalance: { kimiCodeUsedRatio: 0.1153, expireTime: '2026-10-10T00:00:00Z' },
+    }),
+  });
+  const windows = await queryAccount({ id: 'k1' }, kimiProvider, '', fetcher, { [SNAPSHOT_KEY]: JSON.stringify(kimiSnapshot()) });
+  const fiveHour = windows.find((item) => item.key === 'five_hour');
+  assert.ok(fiveHour, 'five_hour 窗口不应因 ratio 缺失被丢弃');
+  assert.equal(fiveHour.remaining, 100);
+  assert.equal(fiveHour.resetAt, '2026-09-11T03:58:05Z');
+});

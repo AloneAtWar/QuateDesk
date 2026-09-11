@@ -73,6 +73,8 @@ const builtinConfigs = {
   claude: { windows: ['five_hour', 'weekly'], adapterMode: 'claude', auth: 'none', credentialRequired: false },
   codex: { windows: ['five_hour', 'weekly', 'monthly'], adapterMode: 'codex', auth: 'none', credentialRequired: false },
   gemini: { windows: ['gemini_pro', 'gemini_flash', 'gemini_flash_lite'], adapterMode: 'gemini', auth: 'none', credentialRequired: false },
+  // Kimi 官方订阅：专属适配（cli-quota.cjs），凭据来自「导入订阅登录」的扫码快照，含月订阅额度
+  'kimi-subscription': { windows: ['five_hour', 'weekly', 'monthly'], adapterMode: 'kimi', auth: 'none', credentialRequired: false },
 };
 
 module.exports = { builtinConfigs };

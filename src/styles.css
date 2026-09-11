@@ -81,7 +81,7 @@ button { cursor: pointer; }
 
 .widget-preview-layer { position: fixed; right: 30px; bottom: 24px; z-index: 30; width: min(580px, calc(100vw - 30px)); padding: 11px 12px 9px; border: 1px solid var(--widget-row-border); border-radius: 12px; color: var(--widget-text); background: var(--widget-bg); box-shadow: 0 22px 60px rgba(30, 41, 42, .26); animation: rise-in .22s ease-out; }.widget-preview-head { display: flex; align-items: center; justify-content: space-between; margin: 0 3px 8px; color: var(--widget-chip-label); font-size: 10px; }.widget-preview-head span { display: inline-flex; align-items: center; gap: 5px; }.widget-preview-head .icon-button { width: 23px; height: 23px; color: var(--widget-chip-label); }.widget-preview-foot { margin: 8px 3px 0; color: var(--widget-chip-sub); font-size: 9px; }.widget-row { display: flex; align-items: center; gap: 9px; min-width: 0; height: 43px; padding: 6px 9px; border-radius: 8px; color: var(--widget-text); background: var(--widget-row); }.widget-row .provider-logo { box-shadow: none; }.widget-account { flex: 0 0 auto; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }.widget-meters { min-width: 0; display: flex; align-items: center; gap: 5px; overflow: hidden; flex: 1; }.widget-meter { display: inline-flex; align-items: baseline; gap: 5px; min-width: max-content; padding: 5px 7px; border-radius: 5px; background: var(--widget-chip); }.widget-meter b { color: var(--widget-chip-label); font: 500 9px 'DM Mono', monospace; }.widget-meter em { color: var(--widget-chip-value); font-style: normal; font-size: 10px; font-weight: 700; }.widget-meter small { color: var(--widget-chip-sub); font-size: 9px; }.widget-meter.off { opacity: .55; }.widget-live { display: inline-flex; align-items: center; gap: 4px; color: var(--widget-live-label); font-size: 9px; }.widget-live i { width: 5px; height: 5px; display: block; border-radius: 50%; background: var(--widget-live); }
 
-.modal-backdrop { position: fixed; z-index: 50; inset: 0; display: grid; place-items: center; padding: 20px; background: var(--backdrop); backdrop-filter: blur(4px); animation: fade-in .18s ease-out; }.modal { width: min(400px, 100%); max-height: min(720px, calc(100vh - 40px)); overflow: auto; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow-strong); animation: rise-in .2s ease-out; }.modal-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 14px; }.modal-head h2 { margin: 8px 0 0; font-size: 21px; letter-spacing: -.03em; }.field { display: grid; gap: 8px; margin-bottom: 16px; }.field > span { color: var(--ink-soft); font-size: 11px; font-weight: 700; }.field > span small { color: var(--faint); font-weight: 400; }.field input, .field select { width: 100%; height: 38px; padding: 0 11px; border: 1px solid var(--line); border-radius: 7px; outline: 0; color: var(--ink); background: var(--control); font-size: 12px; }.field input:focus, .field select:focus { border-color: var(--focus-border); box-shadow: 0 0 0 3px var(--focus-ring); }.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }.input-with-icon { position: relative; display: flex; align-items: center; }.input-with-icon svg { position: absolute; left: 11px; color: var(--faint); }.input-with-icon input { padding-left: 33px; }.window-choice { display: flex; flex-wrap: wrap; gap: 8px; }.window-choice-item { display: inline-flex; align-items: center; gap: 7px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink-soft); background: var(--control); font-size: 11px; }.window-choice-item.selected { border-color: var(--focus-border); color: var(--green-deep); background: var(--green-bg); }.empty-check { width: 14px; height: 14px; display: block; border: 1px solid var(--line-strong); border-radius: 4px; }.credential-placeholder { display: flex; align-items: center; gap: 8px; padding: 11px; border: 1px dashed var(--line-strong); border-radius: 7px; color: var(--muted); background: var(--surface-2); font-size: 11px; }.credential-placeholder svg { color: var(--green); }.credential-placeholder .text-button { margin-left: auto; }.modal-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 23px; padding-top: 17px; border-top: 1px solid var(--line); }.logo-upload { display: flex; align-items: center; gap: 11px; padding: 12px; margin-bottom: 19px; border: 1px dashed var(--line-strong); border-radius: 8px; background: var(--surface-2); }.logo-upload > div:nth-child(2) { display: grid; gap: 4px; flex: 1; }.logo-upload b { font-size: 11px; }.logo-upload small { color: var(--faint); font-size: 10px; }.upload-mark { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 8px; color: var(--green-deep); background: var(--green-bg-2); }.logo-upload .outline-button { padding: 7px 9px; font-size: 10px; }.adapter-note { display: flex; gap: 8px; padding: 10px 11px; border-radius: 7px; color: var(--muted); background: var(--green-bg-2); font-size: 10px; line-height: 1.5; }.adapter-note svg { flex: 0 0 auto; color: var(--coral); margin-top: 1px; }
+.modal-backdrop { position: fixed; z-index: 50; inset: 0; display: grid; place-items: center; padding: 20px; background: var(--backdrop); backdrop-filter: blur(4px); animation: fade-in .18s ease-out; }.modal { width: min(400px, 100%); max-height: min(720px, calc(100vh - 40px)); overflow-y: auto; overflow-x: hidden; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow-strong); animation: rise-in .2s ease-out; }.modal-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 14px; }.modal-head h2 { margin: 8px 0 0; font-size: 21px; letter-spacing: -.03em; }.field { display: grid; gap: 8px; margin-bottom: 16px; }.field > span { color: var(--ink-soft); font-size: 11px; font-weight: 700; }.field > span small { color: var(--faint); font-weight: 400; }.field input, .field select { width: 100%; height: 38px; padding: 0 11px; border: 1px solid var(--line); border-radius: 7px; outline: 0; color: var(--ink); background: var(--control); font-size: 12px; }.field input:focus, .field select:focus { border-color: var(--focus-border); box-shadow: 0 0 0 3px var(--focus-ring); }.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }.input-with-icon { position: relative; display: flex; align-items: center; }.input-with-icon svg { position: absolute; left: 11px; color: var(--faint); }.input-with-icon input { padding-left: 33px; }.window-choice { display: flex; flex-wrap: wrap; gap: 8px; }.window-choice-item { display: inline-flex; align-items: center; gap: 7px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink-soft); background: var(--control); font-size: 11px; }.window-choice-item.selected { border-color: var(--focus-border); color: var(--green-deep); background: var(--green-bg); }.empty-check { width: 14px; height: 14px; display: block; border: 1px solid var(--line-strong); border-radius: 4px; }.credential-placeholder { display: flex; align-items: center; gap: 8px; padding: 11px; border: 1px dashed var(--line-strong); border-radius: 7px; color: var(--muted); background: var(--surface-2); font-size: 11px; }.credential-placeholder svg { color: var(--green); }.credential-placeholder .text-button { margin-left: auto; }.modal-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 23px; padding-top: 17px; border-top: 1px solid var(--line); }.logo-upload { display: flex; align-items: center; gap: 11px; padding: 12px; margin-bottom: 19px; border: 1px dashed var(--line-strong); border-radius: 8px; background: var(--surface-2); }.logo-upload > div:nth-child(2) { display: grid; gap: 4px; flex: 1; }.logo-upload b { font-size: 11px; }.logo-upload small { color: var(--faint); font-size: 10px; }.upload-mark { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 8px; color: var(--green-deep); background: var(--green-bg-2); }.logo-upload .outline-button { padding: 7px 9px; font-size: 10px; }.adapter-note { display: flex; gap: 8px; padding: 10px 11px; border-radius: 7px; color: var(--muted); background: var(--green-bg-2); font-size: 10px; line-height: 1.5; }.adapter-note svg { flex: 0 0 auto; color: var(--coral); margin-top: 1px; }
 
 @keyframes slide-in { from { transform: translateX(30px); opacity: .2; } to { transform: translateX(0); opacity: 1; } }@keyframes rise-in { from { transform: translateY(12px); opacity: .2; } to { transform: translateY(0); opacity: 1; } }@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 
@@ -505,12 +505,65 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 /* cc-switch 导入 */
 .drawer-import-button { margin-top: 10px; }
 .import-list { max-height: 320px; overflow-y: auto; }
+/* 订阅登录导入弹窗：主窗口只有 ~470px 高，行距与留白整体收紧、列表不限高，一屏放下全部渠道 */
+.import-modal { padding: 15px 16px; }
+.import-modal .modal-head { margin-bottom: 9px; }
+.import-modal .modal-head h2 { margin-top: 0; font-size: 18px; }
+.import-modal .modal-actions { margin-top: 10px; padding-top: 11px; }
+/* 订阅登录导入：每个渠道一张等高小卡片（无分隔线），行内留白统一 */
+.import-modal .settings-list.import-list { max-height: none; overflow: visible; gap: 8px; }
+.import-modal .import-cli-item { padding: 3px 12px; border-radius: 10px; background: var(--surface-2); }
+.import-modal .import-cli-item .settings-account { min-height: 52px; padding: 6px 0; }
+.import-modal .import-cli-draft { padding: 0 0 8px; }
+.import-modal .import-cli-draft .field { margin-bottom: 0; }
 .import-row { cursor: pointer; }
 .import-row input { flex: 0 0 auto; margin: 0; }
 /* 本机 CLI 登录导入：每个渠道一行检测结果 + 可编辑的账号名 / 标签草稿 */
-.import-cli-item + .import-cli-item { border-top: 1px solid var(--line); }
+.import-cli-item + .import-cli-item { border-top: none; }
 .import-cli-draft { padding: 2px 0 10px; }
 .import-cli-draft .field { margin-bottom: 0; }
+/* Kimi 订阅扫码登录：居中的二维码舞台 + 状态行（过期/失败给操作按钮） */
+/* 标题旁问号帮助：气泡经 portal + fixed 渲染在 body 顶层，不受弹窗裁剪、不产生横向溢出 */
+.title-help { display: inline-grid; place-items: center; width: 17px; height: 17px; margin-left: 5px; border: 1px solid var(--line); border-radius: 50%; color: var(--muted); cursor: help; vertical-align: -2px; }
+.title-help:focus-visible { border-color: var(--focus-border); }
+.title-help-pop { position: fixed; width: 248px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: 11px; line-height: 1.65; text-align: left; z-index: 300; box-shadow: var(--shadow-strong); pointer-events: none; animation: fade-in .15s ease-out; }
+/* 订阅登录导入弹窗：列表 / 扫码 / 账号设置共用同一个固定尺寸的窗口，切换视图时尺寸不变 */
+.import-window { display: flex; flex-direction: column; min-height: 376px; }
+.import-window > .modal-head, .import-window > .modal-actions { flex: 0 0 auto; }
+.import-window > .settings-list.import-list, .import-window > .kimi-qr-stage, .import-window > .kimi-qr-configure { flex: 1 1 auto; }
+.import-window > .modal-actions { margin-top: auto; padding-top: 13px; }
+/* Kimi 订阅扫码登录：主窗口只有 ~470px 高且 520px 宽（命中 620px 移动端断点）。
+   两步式弹窗：扫码页与账号设置页共用同一固定内容高度，切换步骤时弹窗尺寸不变；
+   账号名 / 标签竖排两行 */
+.kimi-qr-modal .form-grid { grid-template-columns: 1fr; gap: 4px; }
+.kimi-qr-modal .field { gap: 5px; margin-bottom: 6px; }
+.kimi-qr-modal .field input { height: 33px; }
+.kimi-qr-stage, .kimi-qr-configure { min-height: 236px; }
+.kimi-qr-stage { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; padding: 6px 0; }
+.kimi-qr-frame { position: relative; width: 172px; height: 172px; }
+.kimi-qr-image, .kimi-qr-placeholder { width: 172px; height: 172px; border-radius: 14px; background: #fff; display: grid; place-items: center; }
+.kimi-qr-placeholder { color: var(--muted); }
+/* 过期 / 出错：二维码变灰，红色圆形刷新按钮盖在中央，点击即重扫 */
+.kimi-qr-frame.stale img { filter: grayscale(1); opacity: .4; }
+.kimi-qr-refresh { position: absolute; inset: 0; margin: auto; width: 48px; height: 48px; display: grid; place-items: center; border: none; border-radius: 50%; background: var(--coral); color: #fff; cursor: pointer; box-shadow: 0 4px 16px rgba(0, 0, 0, .35); transition: transform .12s ease-out; }
+.kimi-qr-refresh:hover { transform: scale(1.08); }
+.kimi-qr-status { color: var(--muted); text-align: center; }
+.kimi-qr-status.ok { color: var(--green); }
+.kimi-qr-status.fail { color: var(--coral); }
+/* 第二步：扫码确认后的账号信息设置（成功横条 + 账号名 / 标签两行） */
+.kimi-qr-configure { display: flex; flex-direction: column; justify-content: center; gap: 10px; padding: 6px 0; }
+.kimi-qr-ok { display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 9px; background: var(--green-bg-2); }
+.kimi-qr-ok > div { display: grid; gap: 2px; }
+.kimi-qr-ok b { font-size: 12px; }
+.kimi-qr-ok small { color: var(--muted); font-size: 11px; }
+.kimi-qr-done-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; color: var(--green); background: var(--green-bg); flex: 0 0 auto; }
+.kimi-qr-done-icon.duplicate { color: var(--coral-deep); background: var(--coral-bg); }
+/* 导入列表的渠道草稿同样强制双列（620px 断点下默认竖排会让弹窗超高） */
+.import-modal .import-cli-draft { grid-template-columns: 1fr 1fr; gap: 10px; }
+/* 令牌失效后的重新扫码入口：总览卡片的异常图标变成可点按钮，行式视图在「需处理」旁给文字入口 */
+.card-status-icon.relogin { border: none; padding: 0; cursor: pointer; transition: transform .12s ease-out; }
+.card-status-icon.relogin:hover { transform: scale(1.15); }
+.text-button.relogin-link { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto; color: var(--coral); font-size: 10px; }
 /* 添加账号表单底部：CLI 官方订阅引导脚注（轻量，不打断表单视觉） */
 .cli-import-hint { display: flex; align-items: center; gap: 6px; margin: -4px 0 14px; color: var(--faint); font-size: 10px; }
 .cli-import-hint .text-button { margin-left: auto; }
