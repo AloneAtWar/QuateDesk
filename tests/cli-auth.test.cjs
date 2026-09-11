@@ -423,3 +423,215 @@ test('Kimi 订阅额度查询：用量为 0 时 proto3 省略 ratio 字段，窗
   assert.equal(fiveHour.remaining, 100);
   assert.equal(fiveHour.resetAt, '2026-09-11T03:58:05Z');
 });
+
+// ── Grok（xAI）：与 cc-switch 同一 OIDC 路径的续期 ──────────────────────────
+const GROK = cliAuth.__constants;
+const grokAuthFile = (overrides = {}) => ({
+  [`${GROK.GROK_ISSUER}::${GROK.GROK_CLIENT_ID}`]: {
+    key: 'grok-access-old',
+    refresh_token: 'grok-rt-old',
+    expires_at: new Date(Date.now() + 3600_000).toISOString(),
+    email: 'grok@example.com',
+    user_id: 'xai-user-1',
+    ...(overrides.oidc || {}),
+  },
+  'https://accounts.x.ai/sign-in': { key: 'legacy-session', ...(overrides.legacy || {}) },
+});
+const grokSnapshot = (overrides = {}) => {
+  const file = grokAuthFile(overrides);
+  return { [SNAPSHOT_KEY]: JSON.stringify(file) };
+};
+const grokDiscoveryPayload = { issuer: GROK.GROK_ISSUER, token_endpoint: GROK.GROK_TOKEN_URL };
+const grokTokenPayload = (overrides = {}) => ({
+  access_token: 'grok-access-new',
+  refresh_token: 'grok-rt-new',
+  expires_in: 3600,
+  ...overrides,
+});
+const grokRefreshFetcher = (calls, tokenPayload = grokTokenPayload()) => async (url, init) => {
+  calls.push({ url, init });
+  if (url === GROK.GROK_DISCOVERY_URL) return { ok: true, status: 200, json: async () => grokDiscoveryPayload };
+  return { ok: true, status: 200, json: async () => tokenPayload };
+};
+
+test('Grok 快照解析：OIDC 条目优先于 legacy session，scope 作为元数据保留', () => {
+  const snapshot = parseCliSnapshot('grok', grokSnapshot());
+  assert.equal(snapshot.key, 'grok-access-old');
+  assert.equal(snapshot.scopeKey, `${GROK.GROK_ISSUER}::${GROK.GROK_CLIENT_ID}`);
+  // 只有 legacy session 时也能用
+  const legacyOnly = parseCliSnapshot('grok', { [SNAPSHOT_KEY]: JSON.stringify({ 'https://accounts.x.ai/sign-in': { key: 'legacy-session' } }) });
+  assert.equal(legacyOnly.key, 'legacy-session');
+  // 损坏 / 无凭据 → null
+  assert.equal(parseCliSnapshot('grok', { [SNAPSHOT_KEY]: '{broken' }), null);
+  assert.equal(parseCliSnapshot('grok', { [SNAPSHOT_KEY]: JSON.stringify({ foo: { noKey: true } }) }), null);
+  assert.equal(parseCliSnapshot('grok', {}), null);
+});
+
+test('Grok 凭据解析：快照优先，live 回落走 GROK_HOME 且保留 scope', () => {
+  const previousHome = process.env.GROK_HOME;
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'grok-auth-'));
+  try {
+    process.env.GROK_HOME = tempHome;
+    fs.writeFileSync(path.join(tempHome, 'auth.json'), JSON.stringify(grokAuthFile({ oidc: { key: 'live-access', refresh_token: 'live-rt' } })));
+    const live = resolveCliAuth('grok', {});
+    assert.equal(live.source, 'live');
+    assert.equal(live.auth.key, 'live-access');
+    assert.equal(live.scope, `${GROK.GROK_ISSUER}::${GROK.GROK_CLIENT_ID}`);
+    const snapshotted = resolveCliAuth('grok', grokSnapshot());
+    assert.equal(snapshotted.source, 'snapshot');
+    assert.equal(snapshotted.auth.key, 'grok-access-old');
+  } finally {
+    if (previousHome === undefined) delete process.env.GROK_HOME; else process.env.GROK_HOME = previousHome;
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  }
+});
+
+test('Grok 身份指纹：user_id 稳定，email 展示；缺省时退到 JWT sub 与 refresh 指纹', () => {
+  const identity = cliIdentity('grok', grokAuthFile());
+  assert.deepEqual(identity, { fingerprint: 'xai-user-1', display: 'grok@example.com' });
+  const jwtOnly = cliIdentity('grok', { [`${GROK.GROK_ISSUER}::${GROK.GROK_CLIENT_ID}`]: { key: fakeJwt({ sub: 'xai-sub-9', email: 'jwt@example.com' }), refresh_token: 'rt-x' } });
+  assert.deepEqual(jwtOnly, { fingerprint: 'xai-sub-9', display: 'jwt@example.com' });
+  const bare = cliIdentity('grok', { 'https://accounts.x.ai/sign-in': { key: 'opaque', refresh_token: 'rt-y' } });
+  assert.equal(bare.display, `…${bare.fingerprint.slice(-6)}`);
+});
+
+test('Grok 续期：discovery 定位 token endpoint，表单形态正确，轮换 refresh_token 并保留 scope', async () => {
+  const calls = [];
+  const snapshot = parseCliSnapshot('grok', grokSnapshot());
+  const next = await refreshCliAuth('grok', snapshot, grokRefreshFetcher(calls), 1000);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, GROK.GROK_DISCOVERY_URL);
+  assert.equal(calls[1].url, GROK.GROK_TOKEN_URL);
+  assert.equal(calls[1].init.headers['Content-Type'], 'application/x-www-form-urlencoded');
+  const form = new URLSearchParams(calls[1].init.body);
+  assert.equal(form.get('grant_type'), 'refresh_token');
+  assert.equal(form.get('client_id'), GROK.GROK_CLIENT_ID);
+  assert.equal(form.get('refresh_token'), 'grok-rt-old');
+  assert.equal(form.get('scope'), GROK.GROK_SCOPE);
+  assert.equal(next.key, 'grok-access-new');
+  assert.equal(next.refresh_token, 'grok-rt-new');
+  assert.equal(next.scopeKey, `${GROK.GROK_ISSUER}::${GROK.GROK_CLIENT_ID}`);
+  assert.ok(Date.parse(next.expires_at) > Date.now());
+  assert.ok(next.last_refresh);
+  // 响应不轮换时保留旧 refresh_token
+  const kept = await refreshCliAuth('grok', snapshot, grokRefreshFetcher([], grokTokenPayload({ refresh_token: undefined })), 1000);
+  assert.equal(kept.refresh_token, 'grok-rt-old');
+});
+
+test('Grok 续期失败分类：invalid_grant 永久、429 瞬时、discovery 被篡改永久拒绝', async () => {
+  const snapshot = parseCliSnapshot('grok', grokSnapshot());
+  const okDiscovery = async (url) => url === GROK.GROK_DISCOVERY_URL
+    ? { ok: true, status: 200, json: async () => grokDiscoveryPayload }
+    : { ok: false, status: 400, json: async () => ({ error: 'invalid_grant' }) };
+  await assert.rejects(() => refreshCliAuth('grok', snapshot, okDiscovery, 1000),
+    (error) => error instanceof CliRefreshError && error.permanent === true && error.transient !== true);
+  const limited = async (url) => url === GROK.GROK_DISCOVERY_URL
+    ? { ok: true, status: 200, json: async () => grokDiscoveryPayload }
+    : { ok: false, status: 429, json: async () => ({}) };
+  await assert.rejects(() => refreshCliAuth('grok', snapshot, limited, 1000),
+    (error) => error instanceof CliRefreshError && error.transient === true && error.permanent !== true);
+  // issuer 不匹配 / token endpoint 指向第三方：永久拒绝，refresh_token 不外发
+  const evilIssuer = async () => ({ ok: true, status: 200, json: async () => ({ issuer: 'https://evil.example', token_endpoint: GROK.GROK_TOKEN_URL }) });
+  await assert.rejects(() => refreshCliAuth('grok', snapshot, evilIssuer, 1000),
+    (error) => error.permanent === true && /issuer/.test(error.message));
+  let leaked = false;
+  const evilEndpoint = async (url) => {
+    if (url !== GROK.GROK_DISCOVERY_URL) leaked = true;
+    return { ok: true, status: 200, json: async () => ({ issuer: GROK.GROK_ISSUER, token_endpoint: 'https://evil.example/oauth2/token' }) };
+  };
+  await assert.rejects(() => refreshCliAuth('grok', snapshot, evilEndpoint, 1000), (error) => error.permanent === true);
+  assert.equal(leaked, false);
+  // 快照缺 refresh_token：永久失败
+  const noRefresh = parseCliSnapshot('grok', { [SNAPSHOT_KEY]: JSON.stringify({ 'https://accounts.x.ai/sign-in': { key: 'k' } }) });
+  await assert.rejects(() => refreshCliAuth('grok', noRefresh, async () => { throw new Error('不应发出请求'); }, 1000),
+    (error) => error.permanent === true && /refresh_token/.test(error.message));
+});
+
+test('Grok 鉴权失败（gRPC 200 + 鉴权错误）触发续期重试，isAuthFailure 检查 clone 不消费原响应', async () => {
+  const snapshot = parseCliSnapshot('grok', grokSnapshot({ oidc: { expires_at: new Date(Date.now() + 3600_000).toISOString() } }));
+  const auths = [];
+  let cloned = 0;
+  const fetcher = async (url, init) => {
+    if (url === GROK.GROK_DISCOVERY_URL) return { ok: true, status: 200, json: async () => grokDiscoveryPayload };
+    if (url === GROK.GROK_TOKEN_URL) return { ok: true, status: 200, json: async () => grokTokenPayload() };
+    auths.push(init.headers.Authorization);
+    const make = (auth) => ({ ok: true, status: 200, auth, clone() { cloned += 1; return make(this.auth); }, headers: { get: () => '' }, arrayBuffer: async () => new ArrayBuffer(0) });
+    return make(init.headers.Authorization);
+  };
+  let failureChecks = 0;
+  const response = await fetchWithCliAuth('grok', {
+    auth: snapshot,
+    source: 'snapshot',
+    fetcher,
+    timeoutMs: 1000,
+    buildRequest: (auth) => ({ url: 'https://grok.com/billing', init: { headers: { Authorization: `Bearer ${auth.key}` } } }),
+    isAuthFailure: async (res) => { failureChecks += 1; return res.auth === 'Bearer grok-access-old'; },
+  });
+  assert.equal(failureChecks, 1);
+  assert.equal(cloned, 1);
+  assert.deepEqual(auths, ['Bearer grok-access-old', 'Bearer grok-access-new']);
+  assert.equal(response.status, 200);
+});
+
+test('Grok 并发续期去重：同一把旧 refresh_token 的并发请求共享一次刷新', async () => {
+  const snapshot = parseCliSnapshot('grok', grokSnapshot({ oidc: { refresh_token: 'grok-rt-concurrent', expires_at: new Date(Date.now() - 1000).toISOString() } }));
+  let tokenCalls = 0;
+  const updates = [];
+  const fetcher = async (url, init) => {
+    if (url === GROK.GROK_DISCOVERY_URL) return { ok: true, status: 200, json: async () => grokDiscoveryPayload };
+    if (url === GROK.GROK_TOKEN_URL) {
+      tokenCalls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return { ok: true, status: 200, json: async () => grokTokenPayload({ refresh_token: 'grok-rt-concurrent-new' }) };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+  };
+  const args = {
+    auth: snapshot,
+    source: 'snapshot',
+    fetcher,
+    timeoutMs: 1000,
+    buildRequest: (auth) => ({ url: 'https://grok.com/billing', init: { headers: { Authorization: `Bearer ${auth.key}` } } }),
+    onAuthUpdate: (kind, next, previous, source) => updates.push({ next, previous }),
+  };
+  await Promise.all([fetchWithCliAuth('grok', args), fetchWithCliAuth('grok', args), fetchWithCliAuth('grok', args)]);
+  assert.equal(tokenCalls, 1);
+  assert.ok(updates.every((item) => item.previous.refresh_token === 'grok-rt-concurrent' && item.next.refresh_token === 'grok-rt-concurrent-new'));
+});
+
+test('Grok live 写回：只合并原 scope 的条目，其它 profile 原样保留；scope 已换账号时不写', () => {
+  const previousHome = process.env.GROK_HOME;
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'grok-live-'));
+  const livePath = path.join(tempHome, 'auth.json');
+  const oidcScope = `${GROK.GROK_ISSUER}::${GROK.GROK_CLIENT_ID}`;
+  try {
+    process.env.GROK_HOME = tempHome;
+    const before = parseCliSnapshot('grok', grokSnapshot());
+    const next = { ...before, key: 'grok-access-new', refresh_token: 'grok-rt-new' };
+    fs.writeFileSync(livePath, JSON.stringify({ ...grokAuthFile(), 'https://auth.x.ai::other-client': { key: 'other-access', refresh_token: 'other-rt' } }));
+    assert.equal(writeLiveIfCurrent('grok', before, next), true);
+    const written = JSON.parse(fs.readFileSync(livePath, 'utf8'));
+    assert.equal(written[oidcScope].key, 'grok-access-new');
+    assert.equal(written[oidcScope].refresh_token, 'grok-rt-new');
+    assert.equal(written[oidcScope].scopeKey, undefined, 'Quota Desk 元数据不写入 CLI entry');
+    assert.equal(written['https://auth.x.ai::other-client'].key, 'other-access');
+    assert.equal(written['https://accounts.x.ai/sign-in'].key, 'legacy-session');
+    // live 原 scope 已换成别的账号（refresh_token 不同）→ 不写
+    fs.writeFileSync(livePath, JSON.stringify(grokAuthFile({ oidc: { key: 'switched', refresh_token: 'rt-switched' } })));
+    assert.equal(writeLiveIfCurrent('grok', before, next), false);
+    assert.equal(JSON.parse(fs.readFileSync(livePath, 'utf8'))[oidcScope].key, 'switched');
+  } finally {
+    if (previousHome === undefined) delete process.env.GROK_HOME; else process.env.GROK_HOME = previousHome;
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  }
+});
+
+test('Grok authVersionMatches：同 refresh_token 视为同一版本，轮换后不匹配', () => {
+  const { authVersionMatches } = cliAuth;
+  const before = parseCliSnapshot('grok', grokSnapshot());
+  const rotated = { ...before, key: 'k2', refresh_token: 'grok-rt-new' };
+  assert.equal(authVersionMatches('grok', before, before), true);
+  assert.equal(authVersionMatches('grok', { ...before, key: 'k-changed' }, before), true);
+  assert.equal(authVersionMatches('grok', rotated, before), false);
+  assert.equal(authVersionMatches('grok', { ...rotated, scopeKey: 'https://accounts.x.ai/sign-in' }, before), false);
+});

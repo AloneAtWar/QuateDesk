@@ -7,7 +7,7 @@ const { queryAccount } = require('./poller.cjs');
 const { clampRetentionDays } = require('./history.cjs');
 const { builtinConfigs } = require('./builtin-configs.cjs');
 const { scanCcswitch } = require('./ccswitch.cjs');
-const { CLI_KINDS, SNAPSHOT_KEY, readLiveAuth, cliIdentity, resolveCliAuth, writeLiveIfCurrent } = require('./cli-auth.cjs');
+const { CLI_KINDS, SNAPSHOT_KEY, readLiveAuth, cliIdentity, resolveCliAuth, authVersionMatches, writeLiveIfCurrent } = require('./cli-auth.cjs');
 
 app.setName('Quota Desk');
 app.setAppUserModelId('com.quotadesk.app');
@@ -218,7 +218,20 @@ const refreshLiveIdentities = () => {
 // CLI 登录续期成功后的统一落盘：账号快照写回加密存储；本机 live 文件仍是同一账号时同步更新
 const persistCliAuthUpdate = (accountId, { kind, next, previous, source }) => {
   try {
-    if (source === 'snapshot') store.saveCredential(accountId, '', { [SNAPSHOT_KEY]: JSON.stringify(next) });
+    const state = store.loadState();
+    if (!state?.accounts?.some((account) => account.id === accountId)) return;
+    if (source === 'snapshot') {
+      // 轮询可能并发触发同一账号续期；refresh token 轮换后，迟到的旧结果不能覆盖新快照。
+      const stored = store.getSecrets(accountId);
+      const raw = stored.variables?.[SNAPSHOT_KEY];
+      let current = null;
+      try { current = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch {}
+      if (!current || authVersionMatches(kind, current, previous)) {
+        store.saveCredential(accountId, '', { [SNAPSHOT_KEY]: JSON.stringify(next) });
+      } else if (!authVersionMatches(kind, current, next)) {
+        return;
+      }
+    }
     writeLiveIfCurrent(kind, previous, next);
     refreshLiveIdentities();
   } catch (error) {
@@ -660,6 +673,34 @@ function registerIpc() {
       throw new Error(kind === 'codex'
         ? '本机没有可导入的 Codex ChatGPT 登录（当前可能切到了中转 profile，请先切回官方登录再导入）'
         : `本机没有可导入的 ${provider.name} 登录，请先在对应 CLI 登录`);
+    }
+    const reloginId = String(options?.accountId || '').trim();
+    if (reloginId) {
+      const target = (state.accounts || []).find((account) => account.id === reloginId && account.providerId === kind);
+      if (!target) throw new Error(`找不到要重新导入的 ${provider.name} 账号`);
+      const conflict = (state.accounts || []).find((account) => account.id !== reloginId
+        && account.providerId === kind && account.cliAuthSource === 'snapshot' && account.cliFingerprint === identity.fingerprint);
+      if (conflict) return { imported: 0, duplicate: true, name: conflict.name, state: migrateState(store.loadState()) };
+      store.saveCredential(reloginId, '', { [SNAPSHOT_KEY]: JSON.stringify(auth) });
+      const customName = String(options?.name || '').trim();
+      const customTags = Array.isArray(options?.tags) ? options.tags.map((tag) => String(tag).trim()).filter(Boolean) : null;
+      const nextIdentity = (!target.identity || target.identity.startsWith('…')) ? (identity.display || target.identity) : target.identity;
+      const updatedAccounts = (state.accounts || []).map((account) => account.id === reloginId
+        ? {
+          ...account,
+          identity: nextIdentity,
+          ...(customName ? { name: customName } : {}),
+          ...(customTags ? { tags: customTags } : {}),
+          cliAuthSource: 'snapshot',
+          cliFingerprint: identity.fingerprint,
+          status: 'active',
+          lastError: null,
+        }
+        : account);
+      const saved = store.saveState(cleanState({ ...state, accounts: updatedAccounts }));
+      sendState(saved);
+      await pollState([reloginId]).catch(() => {});
+      return { imported: 1, duplicate: false, relogin: true, name: customName || target.name, display: identity.display || '', state: migrateState(store.loadState()) };
     }
     // 指纹去重：同一登录已收录为独立账号时不重复导入
     const existing = (state.accounts || []).find((account) => account.providerId === kind && account.cliAuthSource === 'snapshot' && account.cliFingerprint === identity.fingerprint);

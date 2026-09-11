@@ -1,6 +1,4 @@
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
+const { resolveCliAuth, refreshTokenOf, accessTokenExpiryMs, fetchWithCliAuth, __grok: cliGrok } = require('./cli-auth.cjs');
 
 const numeric = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
 const percent = (remaining, total) => total > 0 ? Number(((remaining / total) * 100).toFixed(2)) : 0;
@@ -148,9 +146,10 @@ const TRANSIENT_NETWORK_ERROR = new RegExp([
   'fetch failed',
   'terminated',
   'Unexpected end of JSON',
+  'grpc-status\\s*(?::|=)\\s*(?:1|4|14)\\b',
 ].join('|'), 'i');
 
-const isTransientNetworkError = (error) => TRANSIENT_NETWORK_ERROR.test(String(error?.message || ''));
+const isTransientNetworkError = (error) => Boolean(error?.transient) || TRANSIENT_NETWORK_ERROR.test(String(error?.message || ''));
 
 // 网络类报错翻译成可行动的中文提示；attempts 为最终失败时的总尝试次数
 const describeNetworkError = (error, attempts) => {
@@ -361,15 +360,15 @@ async function queryAccountOnce(account, provider, credential, fetcher = fetch, 
   // CLI 凭据类订阅是专属适配：凭据优先来自账号自己的登录快照（variables 里，DPAPI 加密），
   // 没有快照时回落本机 CLI 登录态；令牌临期/失效时用 refresh_token 自动续期。
   // 每次尝试（含网络重试）都重新取凭据：上一次尝试可能已续期并轮换 refresh_token
-  if (['claude', 'codex', 'gemini', 'kimi'].includes(config.adapterMode)) {
+  if (['claude', 'codex', 'gemini', 'kimi', 'grok'].includes(config.adapterMode)) {
     const variables = options.getSecretVariables ? options.getSecretVariables() : secretVariables;
     const cliContext = { variables, onAuthUpdate: options.onCliAuth ? (kind, next, previous, source) => options.onCliAuth({ account, kind, next, previous, source }) : undefined };
     if (config.adapterMode === 'claude') return queryClaudeQuota(fetcher, meter, timeoutMs, cliContext);
     if (config.adapterMode === 'codex') return queryCodexQuota(fetcher, meter, timeoutMs, cliContext);
     if (config.adapterMode === 'kimi') return queryKimiWebQuota(fetcher, meter, timeoutMs, cliContext);
+    if (config.adapterMode === 'grok') return queryGrokSubscription(fetcher, timeoutMs, cliContext);
     return queryGeminiQuota(fetcher, meter, timeoutMs, cliContext);
   }
-  if (config.adapterMode === 'grok') return queryGrokSubscription(fetcher, timeoutMs);
   const credentialRequired = config.adapterMode === 'script' ? config.credentialRequired === true : config.auth !== 'none';
   if (!credential && credentialRequired) throw new Error('缺少凭据，请在「设置 → 账号与凭据」中编辑该账号填写 API Token');
   const scripted = config.adapterMode === 'script' && config.script ? runScriptAdapter(account, provider, credential, null, secretVariables) : null;
@@ -402,28 +401,12 @@ async function queryAccountOnce(account, provider, credential, fetcher = fetch, 
 // ── Grok（xAI）订阅额度专属适配 ─────────────────────────────────────────────
 // 实现参考 cc-switch / CodexBar：读取 grok CLI 的 OAuth 凭据，调用 grok.com 的
 // gRPC-web 计费端点 GetGrokCreditsConfig（非公开接口、无 .proto），按字段路径
-// 启发式提取已用百分比与重置时间。token 的刷新由 grok CLI 自己负责。
+// 启发式提取已用百分比与重置时间。令牌续期统一复用 cli-auth.cjs。
 
 const { queryClaudeQuota, queryCodexQuota, queryGeminiQuota, queryKimiWebQuota } = require('./cli-quota.cjs');
 
 const GROK_BILLING_ENDPOINT = 'https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig';
-const GROK_OIDC_SCOPE_PREFIX = 'https://auth.x.ai::';
-const GROK_LEGACY_SESSION_SCOPE = 'https://accounts.x.ai/sign-in';
-
-const grokAuthPath = () => path.join(os.homedir(), '.grok', 'auth.json');
-
-// auth.json 顶层是 scope → 条目 的 map；SuperGrok（OIDC）条目优先，legacy session 兜底
-const selectGrokAuthEntry = (auth) => {
-  if (!auth || typeof auth !== 'object') return null;
-  let oidc = null;
-  let legacy = null;
-  for (const [scope, entry] of Object.entries(auth)) {
-    if (!entry || typeof entry !== 'object' || !entry.key) continue;
-    if (scope.startsWith(GROK_OIDC_SCOPE_PREFIX)) oidc ??= entry;
-    else if (scope === GROK_LEGACY_SESSION_SCOPE || scope.includes('/sign-in')) legacy ??= entry;
-  }
-  return oidc || legacy;
-};
+const selectGrokAuthEntry = cliGrok.selectGrokAuthEntry;
 
 const readGrokVarint = (bytes, index) => {
   let value = 0;
@@ -523,40 +506,87 @@ const grokWindowKey = (startsAt, resetsAt, nowSeconds) => {
   return 'monthly';
 };
 
-async function queryGrokSubscription(fetcher = fetch, timeoutMs = DEFAULT_TIMEOUT_MS) {
-  if (!fs.existsSync(grokAuthPath())) {
-    throw new Error('未检测到 grok CLI 登录信息，请先安装 grok CLI 并运行 grok login');
+const headerValue = (headers, name) => {
+  if (!headers) return '';
+  if (typeof headers.get === 'function') return String(headers.get(name) || '');
+  const wanted = name.toLowerCase();
+  const key = Object.keys(headers).find((candidate) => candidate.toLowerCase() === wanted);
+  return key ? String(headers[key] || '') : '';
+};
+
+const grpcStatusFromData = (data) => {
+  const text = Buffer.from(data || '').toString('latin1');
+  const match = /grpc-status\s*:\s*(\d+)/i.exec(text);
+  return match ? Number(match[1]) : null;
+};
+
+const grpcStatusFromResponse = async (response) => {
+  const headerStatus = headerValue(response?.headers, 'grpc-status');
+  if (headerStatus) return Number(headerStatus);
+  if (response?.grpcStatus != null) return Number(response.grpcStatus);
+  if (typeof response?.arrayBuffer === 'function') {
+    try {
+      const bodyStatus = grpcStatusFromData(await response.arrayBuffer());
+      if (bodyStatus != null) return bodyStatus;
+    } catch {}
   }
-  let auth;
-  try { auth = JSON.parse(fs.readFileSync(grokAuthPath(), 'utf8')); }
-  catch { throw new Error('~/.grok/auth.json 不是有效的 JSON，请重新 grok login'); }
-  const entry = selectGrokAuthEntry(auth);
-  if (!entry) throw new Error('grok 凭据中没有可用的访问令牌，请重新 grok login');
-  if (entry.expires_at && new Date(entry.expires_at).getTime() < Date.now()) {
-    throw new Error('Grok 访问令牌已过期，运行一次 grok CLI 让其自动刷新，或重新 grok login');
+  // Undici/Electron versions that expose HTTP trailers do so as a promise-like property.
+  try {
+    const trailers = typeof response?.trailers?.then === 'function' ? await response.trailers : response?.trailers;
+    const trailerStatus = headerValue(trailers, 'grpc-status');
+    if (trailerStatus) return Number(trailerStatus);
+  } catch {}
+  return null;
+};
+
+// gRPC-Web 鉴权失败有时以 HTTP 200 + trailer(status 16/7) 返回。fetchWithCliAuth
+// 会在这里检查 clone 后的响应，再按与 HTTP 401 相同的逻辑刷新一次。
+const grokGrpcAuthFailure = async (response) => {
+  return [7, 16].includes(await grpcStatusFromResponse(response));
+};
+
+async function queryGrokSubscription(fetcher = fetch, timeoutMs = DEFAULT_TIMEOUT_MS, ctx = {}) {
+  const resolved = resolveCliAuth('grok', ctx.variables);
+  if (!resolved) throw new Error('未检测到 Grok CLI 登录信息。请先运行 grok login，或在「导入订阅登录」中保存本机登录');
+  const expiry = accessTokenExpiryMs('grok', resolved.auth);
+  if (expiry && expiry < Date.now() && !refreshTokenOf('grok', resolved.auth)) {
+    throw new Error('Grok 访问令牌已过期且无法自动续期，请运行 grok login 后重新导入');
   }
   // 空 gRPC-web 帧：1 字节 flags + 4 字节大端长度 0
   const body = new Uint8Array(5);
-  const response = await fetcher(GROK_BILLING_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${entry.key}`,
-      Origin: 'https://grok.com',
-      Referer: 'https://grok.com/?_s=usage',
-      Accept: '*/*',
-      'Content-Type': 'application/grpc-web+proto',
-      'x-grpc-web': '1',
-      'x-user-agent': 'connect-es/2.1.1',
-      'User-Agent': 'quota-desk',
-    },
-    body,
-    signal: AbortSignal.timeout(timeoutMs),
+  const response = await fetchWithCliAuth('grok', {
+    auth: resolved.auth,
+    source: resolved.source,
+    fetcher,
+    timeoutMs,
+    buildRequest: (auth) => ({
+      url: GROK_BILLING_ENDPOINT,
+      init: {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${auth?.key || auth?.access_token || auth?.accessToken || ''}`,
+          Origin: 'https://grok.com',
+          Referer: 'https://grok.com/?_s=usage',
+          Accept: '*/*',
+          'Content-Type': 'application/grpc-web+proto',
+          'x-grpc-web': '1',
+          'x-user-agent': 'connect-es/2.1.1',
+          'User-Agent': 'quota-desk',
+        },
+        body,
+      },
+    }),
+    onAuthUpdate: ctx.onAuthUpdate,
+    isAuthFailure: grokGrpcAuthFailure,
   });
-  if (response.status === 401 || response.status === 403) throw new Error('Grok 凭据被拒绝，请重新 grok login');
+  if (response.status === 401 || response.status === 403) throw new Error('Grok 凭据被拒绝（自动续期后仍无效），请重新 grok login 并再次导入');
   if (!response.ok) throw new Error(`Grok 计费接口返回 HTTP ${response.status}`);
   const data = Buffer.from(await response.arrayBuffer());
-  const trailer = /grpc-status:(\d+)/.exec(data.toString('latin1').slice(-64));
-  if (trailer && trailer[1] !== '0') throw new Error(`Grok 计费 RPC 失败（grpc-status ${trailer[1]}）`);
+  const grpcStatus = grpcStatusFromData(data) ?? await grpcStatusFromResponse(response);
+  if (grpcStatus != null && grpcStatus !== 0) {
+    if ([7, 16].includes(grpcStatus)) throw new Error('Grok 凭据被拒绝（自动续期后仍无效），请重新 grok login 并再次导入');
+    throw new Error(`Grok 计费 RPC 失败（grpc-status ${grpcStatus}）`);
+  }
   const nowSeconds = Math.floor(Date.now() / 1000);
   const { usedPercent, resetsAt, startsAt } = parseGrokBilling(data, nowSeconds);
   const key = grokWindowKey(startsAt, resetsAt, nowSeconds);
@@ -566,4 +596,4 @@ async function queryGrokSubscription(fetcher = fetch, timeoutMs = DEFAULT_TIMEOU
   })];
 }
 
-module.exports = { definitions, queryAccount, __grok: { selectGrokAuthEntry, parseGrokBilling, grokWindowKey }, __network: { accountTimeoutMs, isTransientNetworkError, describeNetworkError } };
+module.exports = { definitions, queryAccount, __grok: { selectGrokAuthEntry, parseGrokBilling, grokWindowKey, grpcStatusFromData }, __network: { accountTimeoutMs, isTransientNetworkError, describeNetworkError } };
