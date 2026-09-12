@@ -49,10 +49,37 @@ test('pruneHistory 清理过期数据与已删除账号', () => {
   assert.deepEqual(Object.keys(pruned), ['keep']);
 });
 
-test('clampRetentionDays 默认 7 天，上限 90 天', () => {
+test('clampRetentionDays 默认 7 天，上限 90 天，0 表示永久', () => {
   assert.equal(clampRetentionDays(undefined), 7);
   assert.equal(clampRetentionDays('abc'), 7);
-  assert.equal(clampRetentionDays(0), 7);
+  assert.equal(clampRetentionDays(0), 0);
   assert.equal(clampRetentionDays(30), 30);
   assert.equal(clampRetentionDays(365), 90);
+});
+
+test('pruneHistory 永久保存（0 天）不按时间裁剪，旧数据降采样为每小时一点', () => {
+  const now = Date.parse('2026-08-20T08:00:00Z');
+  const windowsLocal = [{ key: 'weekly', remaining: 50, unit: '%' }];
+  // 60 天前同一小时内 3 个点 + 下一小时 1 个点 + 最近 1 个点
+  const old1 = new Date(now - 60 * 86_400_000).toISOString();
+  const old2 = new Date(now - 60 * 86_400_000 + 20 * 60_000).toISOString();
+  const old3 = new Date(now - 60 * 86_400_000 + 40 * 60_000).toISOString();
+  const old4 = new Date(now - 60 * 86_400_000 + 70 * 60_000).toISOString();
+  let history = {};
+  for (const at of [old1, old2, old3, old4]) history = appendHistoryPoint(history, 'acc-1', windowsLocal, new Date(at).getTime(), 0);
+  history = appendHistoryPoint(history, 'acc-1', windowsLocal, now, 0);
+  const points = history['acc-1'];
+  assert.equal(points.length, 3); // 同小时 3 点降为 1 点 + 下一小时 1 点 + 最近 1 点
+  assert.equal(points[0].at, old1);
+  assert.equal(points[1].at, old4);
+  assert.equal(points[2].at, new Date(now).toISOString());
+});
+
+test('appendHistoryPoint 永久保存使用更大的点数上限', () => {
+  // 5001 条点：有限保留会裁到 5000，永久保留不裁
+  const now = Date.parse('2026-08-20T08:00:00Z');
+  const windowsLocal = [{ key: 'weekly', remaining: 50, unit: '%' }];
+  let history = {};
+  for (let i = 0; i < 5001; i++) history = appendHistoryPoint(history, 'acc-1', windowsLocal, now - (5001 - i) * 61_000, 0);
+  assert.ok(history['acc-1'].length > 5000);
 });

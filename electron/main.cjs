@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const { DesktopStore } = require('./storage.cjs');
 const { queryAccount } = require('./poller.cjs');
 const { clampRetentionDays } = require('./history.cjs');
+const { resolveWasteWindows } = require('./waste.cjs');
 const { builtinConfigs } = require('./builtin-configs.cjs');
 const { scanCcswitch } = require('./ccswitch.cjs');
 const { CLI_KINDS, SNAPSHOT_KEY, readLiveAuth, cliIdentity, resolveCliAuth, authVersionMatches, writeLiveIfCurrent } = require('./cli-auth.cjs');
@@ -336,8 +337,13 @@ const migrateProvider = (provider) => {
     : provider;
   const website = provider.website === undefined ? (builtinWebsites[provider.id] ?? '') : provider.website;
   const migrated = builtin ? { ...provider, website, baseUrl: undefined, domain: undefined, requestConfig: builtin, logo } : { ...seededVariables, website, baseUrl: undefined, domain: undefined, logo };
-  if (provider.id === 'wlb') return { ...migrated, name: 'wlbclub', legalName: 'wlbclub', monogram: 'W' };
-  return migrated;
+  // 浪费统计预设补齐：存量 state 的 requestConfig 还没有 wasteWindows 字段时用内置预设；
+  // 用户手动设置过（包括空数组 = 明确不做浪费统计）则保留不动
+  const seededWaste = builtinConfig && migrated.requestConfig && !Array.isArray(migrated.requestConfig.wasteWindows)
+    ? { ...migrated, requestConfig: { ...migrated.requestConfig, wasteWindows: builtinConfig.wasteWindows } }
+    : migrated;
+  if (provider.id === 'wlb') return { ...seededWaste, name: 'wlbclub', legalName: 'wlbclub', monogram: 'W' };
+  return seededWaste;
 };
 
 const migrateAccount = (account) => {
@@ -407,6 +413,8 @@ async function pollState(accountIds = null) {
       const updated = { ...account, ...(identityPatch || {}), windows, status: 'active', lastError: null, lastChecked: checkedAt, lastTestAt: checkedAt };
       nextAccounts.push(updated);
       store.appendHistory(account.id, windows, historyRetentionDays());
+      // 周期浪费归档：从该账号历史中提取已结束的周期（周/月等厂商预设窗口），永久保存
+      store.archiveCycles(account.id, resolveWasteWindows(provider.requestConfig));
       notifyWaste(current, updated, provider);
     } catch (error) {
       const checkedAt = new Date().toISOString();
@@ -585,8 +593,9 @@ function registerIpc() {
     // 记录保存前的开关状态：只在“自动检查更新”从关闭切换为开启时补一次立即检查，避免每次保存设置都请求 GitHub
     const autoUpdateWasDisabled = store.loadState()?.settings?.autoUpdate === false;
     const saved = store.saveState(cleanState(state));
-    // 账号被删除时连同它的额度历史一起清掉
+    // 账号被删除时连同它的额度历史与周期档案一起清掉
     store.pruneHistoryAccounts((saved.accounts || []).map((account) => account.id), historyRetentionDays());
+    store.pruneCyclesAccounts((saved.accounts || []).map((account) => account.id));
     applyProxySetting();
     schedulePolling();
     sendState(saved);
@@ -604,7 +613,9 @@ function registerIpc() {
   ipcMain.handle('quota:poll-all', () => pollState());
   ipcMain.handle('quota:poll-account', (_event, accountId) => pollState([accountId]));
   ipcMain.handle('history:get', (_event, accountId) => store.getHistory(String(accountId || ''), historyRetentionDays()));
-  ipcMain.handle('history:clear', () => store.clearHistory());
+  ipcMain.handle('history:clear', () => { store.clearHistory(); return store.clearCycles(); });
+  // 周期浪费档案：永久保留，不受历史保留时长影响
+  ipcMain.handle('cycles:get', (_event, accountId) => store.getCycles(String(accountId || '')));
   ipcMain.handle('quota:test-account', async (_event, accountId) => {
     const state = await pollState([accountId]);
     const account = state.accounts.find((item) => item.id === accountId);

@@ -24,7 +24,7 @@
   --widget-bg: #202c2e; --widget-row: #273638; --widget-row-border: rgba(255, 255, 255, .08);
   --widget-text: #edf5f0; --widget-chip: #334647; --widget-chip-label: #9db0ab; --widget-chip-value: #dcf5e2; --widget-chip-sub: #95a6a2;
   --widget-tag-text: #a9c7b9; --widget-tag-bg: #3b5050; --widget-live: #7bd1a0; --widget-live-label: #9eafa9;
-  --mint: #d8f2df; --violet: #836fe0; --cyan: #48b9c4; --sky: #4b9ddf;
+  --mint: #d8f2df; --violet: #836fe0; --cyan: #48b9c4; --sky: #4b9ddf; --amber: #e0b45c;
 }
 :root[data-theme='light'] {
   color-scheme: light;
@@ -45,6 +45,7 @@
   --widget-bg: #eef1ec; --widget-row: #ffffff; --widget-row-border: rgba(30, 40, 45, .08);
   --widget-text: #263236; --widget-chip: #e3eae2; --widget-chip-label: #7d8a84; --widget-chip-value: #1e5c3d; --widget-chip-sub: #98a29c;
   --widget-tag-text: #47705c; --widget-tag-bg: #d8e9de; --widget-live: #2e8b66; --widget-live-label: #7d8a84;
+  --amber: #a87c24;
 }
 
 * { box-sizing: border-box; }
@@ -81,7 +82,7 @@ button { cursor: pointer; }
 
 .widget-preview-layer { position: fixed; right: 30px; bottom: 24px; z-index: 30; width: min(580px, calc(100vw - 30px)); padding: 11px 12px 9px; border: 1px solid var(--widget-row-border); border-radius: 12px; color: var(--widget-text); background: var(--widget-bg); box-shadow: 0 22px 60px rgba(30, 41, 42, .26); animation: rise-in .22s ease-out; }.widget-preview-head { display: flex; align-items: center; justify-content: space-between; margin: 0 3px 8px; color: var(--widget-chip-label); font-size: 10px; }.widget-preview-head span { display: inline-flex; align-items: center; gap: 5px; }.widget-preview-head .icon-button { width: 23px; height: 23px; color: var(--widget-chip-label); }.widget-preview-foot { margin: 8px 3px 0; color: var(--widget-chip-sub); font-size: 9px; }.widget-row { display: flex; align-items: center; gap: 9px; min-width: 0; height: 43px; padding: 6px 9px; border-radius: 8px; color: var(--widget-text); background: var(--widget-row); }.widget-row .provider-logo { box-shadow: none; }.widget-account { flex: 0 0 auto; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }.widget-meters { min-width: 0; display: flex; align-items: center; gap: 5px; overflow: hidden; flex: 1; }.widget-meter { display: inline-flex; align-items: baseline; gap: 5px; min-width: max-content; padding: 5px 7px; border-radius: 5px; background: var(--widget-chip); }.widget-meter b { color: var(--widget-chip-label); font: 500 9px 'DM Mono', monospace; }.widget-meter em { color: var(--widget-chip-value); font-style: normal; font-size: 10px; font-weight: 700; }.widget-meter small { color: var(--widget-chip-sub); font-size: 9px; }.widget-meter.off { opacity: .55; }.widget-live { display: inline-flex; align-items: center; gap: 4px; color: var(--widget-live-label); font-size: 9px; }.widget-live i { width: 5px; height: 5px; display: block; border-radius: 50%; background: var(--widget-live); }
 
-.modal-backdrop { position: fixed; z-index: 50; inset: 0; display: grid; place-items: center; padding: 20px; background: var(--backdrop); backdrop-filter: blur(4px); animation: fade-in .18s ease-out; }.modal { width: min(400px, 100%); max-height: min(720px, calc(100vh - 40px)); overflow-y: auto; overflow-x: hidden; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow-strong); animation: rise-in .2s ease-out; }.modal-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 14px; }.modal-head h2 { margin: 8px 0 0; font-size: 21px; letter-spacing: -.03em; }.field { display: grid; gap: 8px; margin-bottom: 16px; }.field > span { color: var(--ink-soft); font-size: 11px; font-weight: 700; }.field > span small { color: var(--faint); font-weight: 400; }.field input, .field select { width: 100%; height: 38px; padding: 0 11px; border: 1px solid var(--line); border-radius: 7px; outline: 0; color: var(--ink); background: var(--control); font-size: 12px; }.field input:focus, .field select:focus { border-color: var(--focus-border); box-shadow: 0 0 0 3px var(--focus-ring); }.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }.input-with-icon { position: relative; display: flex; align-items: center; }.input-with-icon svg { position: absolute; left: 11px; color: var(--faint); }.input-with-icon input { padding-left: 33px; }.window-choice { display: flex; flex-wrap: wrap; gap: 8px; }.window-choice-item { display: inline-flex; align-items: center; gap: 7px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink-soft); background: var(--control); font-size: 11px; }.window-choice-item.selected { border-color: var(--focus-border); color: var(--green-deep); background: var(--green-bg); }.empty-check { width: 14px; height: 14px; display: block; border: 1px solid var(--line-strong); border-radius: 4px; }.credential-placeholder { display: flex; align-items: center; gap: 8px; padding: 11px; border: 1px dashed var(--line-strong); border-radius: 7px; color: var(--muted); background: var(--surface-2); font-size: 11px; }.credential-placeholder svg { color: var(--green); }.credential-placeholder .text-button { margin-left: auto; }.modal-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 23px; padding-top: 17px; border-top: 1px solid var(--line); }.logo-upload { display: flex; align-items: center; gap: 11px; padding: 12px; margin-bottom: 19px; border: 1px dashed var(--line-strong); border-radius: 8px; background: var(--surface-2); }.logo-upload > div:nth-child(2) { display: grid; gap: 4px; flex: 1; }.logo-upload b { font-size: 11px; }.logo-upload small { color: var(--faint); font-size: 10px; }.upload-mark { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 8px; color: var(--green-deep); background: var(--green-bg-2); }.logo-upload .outline-button { padding: 7px 9px; font-size: 10px; }.adapter-note { display: flex; gap: 8px; padding: 10px 11px; border-radius: 7px; color: var(--muted); background: var(--green-bg-2); font-size: 10px; line-height: 1.5; }.adapter-note svg { flex: 0 0 auto; color: var(--coral); margin-top: 1px; }
+.modal-backdrop { position: fixed; z-index: 50; inset: 0; display: grid; place-items: center; padding: 20px; background: var(--backdrop); backdrop-filter: blur(4px); animation: fade-in .18s ease-out; }.modal { width: min(400px, 100%); max-height: min(720px, calc(100vh - 96px)); overflow-y: auto; overflow-x: hidden; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow-strong); animation: rise-in .2s ease-out; }.modal-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 14px; }.modal-head h2 { margin: 8px 0 0; font-size: 21px; letter-spacing: -.03em; }.field { display: grid; gap: 8px; margin-bottom: 16px; }.field > span { color: var(--ink-soft); font-size: 11px; font-weight: 700; }.field > span small { color: var(--faint); font-weight: 400; }.field input, .field select { width: 100%; height: 38px; padding: 0 11px; border: 1px solid var(--line); border-radius: 7px; outline: 0; color: var(--ink); background: var(--control); font-size: 12px; }.field input:focus, .field select:focus { border-color: var(--focus-border); box-shadow: 0 0 0 3px var(--focus-ring); }.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }.input-with-icon { position: relative; display: flex; align-items: center; }.input-with-icon svg { position: absolute; left: 11px; color: var(--faint); }.input-with-icon input { padding-left: 33px; }.window-choice { display: flex; flex-wrap: wrap; gap: 8px; }.window-choice-item { display: inline-flex; align-items: center; gap: 7px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink-soft); background: var(--control); font-size: 11px; }.window-choice-item.selected { border-color: var(--focus-border); color: var(--green-deep); background: var(--green-bg); }.empty-check { width: 14px; height: 14px; display: block; border: 1px solid var(--line-strong); border-radius: 4px; }.credential-placeholder { display: flex; align-items: center; gap: 8px; padding: 11px; border: 1px dashed var(--line-strong); border-radius: 7px; color: var(--muted); background: var(--surface-2); font-size: 11px; }.credential-placeholder svg { color: var(--green); }.credential-placeholder .text-button { margin-left: auto; }.modal-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 23px; padding-top: 17px; border-top: 1px solid var(--line); }.logo-upload { display: flex; align-items: center; gap: 11px; padding: 12px; margin-bottom: 19px; border: 1px dashed var(--line-strong); border-radius: 8px; background: var(--surface-2); }.logo-upload > div:nth-child(2) { display: grid; gap: 4px; flex: 1; }.logo-upload b { font-size: 11px; }.logo-upload small { color: var(--faint); font-size: 10px; }.upload-mark { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 8px; color: var(--green-deep); background: var(--green-bg-2); }.logo-upload .outline-button { padding: 7px 9px; font-size: 10px; }.adapter-note { display: flex; gap: 8px; padding: 10px 11px; border-radius: 7px; color: var(--muted); background: var(--green-bg-2); font-size: 10px; line-height: 1.5; }.adapter-note svg { flex: 0 0 auto; color: var(--coral); margin-top: 1px; }
 
 @keyframes slide-in { from { transform: translateX(30px); opacity: .2; } to { transform: translateX(0); opacity: 1; } }@keyframes rise-in { from { transform: translateY(12px); opacity: .2; } to { transform: translateY(0); opacity: 1; } }@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 
@@ -190,7 +191,7 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .mapping-grid { grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .mapping-grid .field { min-width: 0; }
 .mapping-grid .field input { padding: 0 7px; font-size: 10px; }
-.provider-modal { width: min(460px, 100%); }
+.provider-modal { width: min(400px, 100%); }
 .variable-editor-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .variable-row { display: grid; grid-template-columns: 1fr 1fr 1fr auto auto 26px; align-items: center; gap: 6px; margin-bottom: 7px; }
 .variable-row > input { min-width: 0; height: 32px; padding: 0 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--control); font-size: 10px; }
@@ -607,8 +608,9 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .account-title-line .tag-pill { flex: 0 4 auto; min-width: 14px; overflow: hidden; text-overflow: ellipsis; }
 /* 行式/周期视图的账号行可点击进入趋势图 */
 .account-window-row.clickable, .priority-row.clickable { cursor: pointer; }
-/* 历史视图底部返回（在卡片外，左对齐） */
-.history-foot { display: flex; padding: 0 2px; }
+/* 历史视图底部返回（在卡片外，左对齐），右侧一行小字说明 */
+.history-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 2px; }
+.history-foot-note { font-size: 10px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .usage-chart.zoomed svg { cursor: grab; }
 .usage-chart.zoomed svg:active { cursor: grabbing; }
 .chart-tools { display: flex; align-items: center; justify-content: space-between; padding: 0 12px 4px; min-height: 18px; }
@@ -619,3 +621,51 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .chart-legend button:hover { color: var(--ink); }
 .chart-legend button.off { opacity: .38; }
 .chart-legend button em { font-style: normal; font-weight: 700; color: var(--ink); }
+
+/* 额度浪费统计视图（历史页「浪费」分段）：总高度不超过趋势视图，所有文字单行省略 */
+.seg-control { display: flex; flex: 0 0 auto; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 7px; background: var(--control); }
+.seg-control button { border: 0; padding: 3px 10px; border-radius: 5px; color: var(--muted); background: transparent; font-size: 10px; }
+.seg-control button.active { color: var(--ink); background: var(--surface-3); }
+.seg-control button:hover:not(.active) { color: var(--ink-soft); }
+.waste-view { padding: 10px 8px 2px; }
+.waste-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 24px; margin: 0 6px 6px; }
+.waste-label { font-size: 11px; font-weight: 700; color: var(--muted); white-space: nowrap; }
+.waste-stats { display: inline-flex; align-items: center; min-width: 0; font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; }
+.waste-stats b { color: var(--amber); font-weight: 700; }
+.waste-stats span + span::before { content: '·'; margin: 0 5px; color: var(--faint); }
+.waste-detail { display: block; overflow: hidden; text-overflow: ellipsis; font-size: 10px; color: var(--ink-soft); }
+.waste-detail > span { margin-right: 12px; }
+.waste-detail > span:last-child { margin-right: 0; }
+.waste-detail b { color: var(--ink); font-weight: 700; }
+.waste-detail .when { color: var(--ink); font-weight: 600; }
+.waste-detail .warn { color: var(--amber); }
+.waste-scroll { height: 148px; margin: 0 6px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; cursor: grab; border: 1px solid var(--line-inner); border-radius: 8px; background: var(--surface-2); }
+.waste-scroll::-webkit-scrollbar { display: none; }
+.waste-scroll.dragging { cursor: grabbing; }
+/* plot 高度 = 柱区（去掉顶部 10px 留白），网格线/平均线的 bottom 百分比都相对柱区 */
+.waste-plot { position: relative; height: calc(100% - 10px); margin-top: 10px; min-width: 100%; display: flex; align-items: flex-end; gap: 1px; padding: 0 10px; border-bottom: 1px solid var(--line-inner); }
+.waste-gridline { position: absolute; left: 10px; right: 10px; height: 1px; background: var(--line-inner); pointer-events: none; }
+.waste-col { flex: 1 0 8px; min-width: 8px; height: 100%; align-self: flex-end; display: flex; align-items: flex-end; }
+.waste-plot.mo .waste-col { flex: 1 0 26px; min-width: 26px; }
+.waste-bar { width: 100%; max-width: 18px; margin: 0 auto; border-radius: 3px 3px 0 0; min-height: 2px; }
+.waste-plot.mo .waste-bar { max-width: 24px; }
+.waste-plot.wk .waste-bar { background: linear-gradient(180deg, var(--violet), #6f5ee0); }
+.waste-plot.mo .waste-bar { background: linear-gradient(180deg, var(--coral), #d96a62); }
+/* 失真（最后观测距重置过远）：斜纹柱，浪费值只是上界 */
+.waste-plot.wk .waste-col.bad .waste-bar { background: repeating-linear-gradient(-45deg, color-mix(in srgb, var(--violet) 30%, transparent) 0 3px, transparent 3px 6px); border: 1px solid color-mix(in srgb, var(--violet) 55%, transparent); border-bottom: 0; }
+.waste-plot.mo .waste-col.bad .waste-bar { background: repeating-linear-gradient(-45deg, color-mix(in srgb, var(--coral) 30%, transparent) 0 3px, transparent 3px 6px); border: 1px solid color-mix(in srgb, var(--coral) 55%, transparent); border-bottom: 0; }
+/* 厂商提前重置：琥珀色点线框，周期不完整不计入统计 */
+.waste-col.early .waste-bar { background: color-mix(in srgb, var(--amber) 16%, transparent); border: 1px dotted var(--amber); border-bottom: 0; }
+/* 进行中的当前周期：青色虚线框 */
+.waste-col.now .waste-bar { background: color-mix(in srgb, var(--cyan) 15%, transparent); border: 1px dashed var(--cyan); border-bottom: 0; }
+.waste-col.hot .waste-bar { filter: brightness(1.35); }
+.waste-avg { position: absolute; left: 10px; right: 10px; height: 0; border-top: 1px dashed var(--amber); pointer-events: none; }
+.waste-avg em { position: absolute; left: 0; top: -9px; padding: 0 4px; color: var(--amber); background: var(--surface-2); font-size: 9px; font-style: normal; }
+.waste-empty-hint { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: var(--muted); font-size: 11px; text-align: center; pointer-events: none; }
+.waste-empty-hint b { color: var(--ink); }
+.waste-x-labels { display: flex; justify-content: space-between; gap: 8px; margin: 5px 10px 0; color: var(--faint); font-size: 9px; }
+.waste-x-labels span { max-width: 40%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.waste-legend i { width: 11px; height: 8px; border-radius: 2px; }
+.waste-legend i.swatch-early { background: color-mix(in srgb, var(--amber) 16%, transparent); border: 1px dotted var(--amber); }
+.waste-legend i.swatch-now { background: color-mix(in srgb, var(--cyan) 15%, transparent); border: 1px dashed var(--cyan); }
+.waste-legend .legend-right { margin-left: auto; color: var(--faint); }

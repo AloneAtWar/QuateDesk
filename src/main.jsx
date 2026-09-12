@@ -63,6 +63,11 @@ const providerWindowKeys = (provider) => {
   const mapped = [...new Set(rules.flatMap((rule) => [rule.defaultWindow, ...Object.values(rule.windowMap || {})]).filter(Boolean))];
   return mapped.length ? mapped : adapterDefinitions[provider?.adapter]?.windows || ['five_hour', 'weekly', 'monthly', 'balance'];
 };
+// 厂商参与浪费统计的周期窗口：与主进程 electron/waste.cjs 的 resolveWasteWindows 保持一致
+const resolveWasteWindows = (requestConfig) => {
+  if (Array.isArray(requestConfig?.wasteWindows)) return requestConfig.wasteWindows;
+  return (requestConfig?.windows || []).filter((key) => ['weekly', 'monthly'].includes(key));
+};
 // CLI 官方订阅（Claude / Codex / Gemini / Kimi / Grok 订阅）：账号统一走「导入订阅登录」收录，不走普通添加表单
 const CLI_ADAPTER_MODES = ['claude', 'codex', 'gemini', 'kimi', 'grok'];
 const isCliProvider = (provider) => CLI_ADAPTER_MODES.includes(provider?.requestConfig?.adapterMode || provider?.adapter);
@@ -125,7 +130,7 @@ const normalizeSettings = (value = {}) => {
     pollMinutes: [5, 10, 15, 30].includes(pollNumber) ? String(pollNumber) : (pollNumber > 30 ? '30' : '5'),
     reminderRules: Array.isArray(value.reminderRules) ? value.reminderRules : defaultReminderRules,
     theme: value.theme === 'light' ? 'light' : 'dark',
-    historyDays: [3, 7, 15, 30, 60, 90].includes(Number(value.historyDays)) ? Number(value.historyDays) : 7,
+    historyDays: [0, 3, 7, 15, 30, 60, 90].includes(Number(value.historyDays)) ? Number(value.historyDays) : 7,
     widgetScale: clampWidgetScale(value.widgetScale ?? byWidth ?? (legacySize ? legacySize / WIDGET_BASE_SIZE.width : 0.9)),
     widgetLength: clampWidgetLength(value.widgetLength ?? 0.9),
     proxyMode: ['direct', 'system', 'manual'].includes(value.proxyMode) ? value.proxyMode : 'system',
@@ -557,9 +562,132 @@ function UsageChart({ points, hiddenKeys = [] }) {
   </div>;
 }
 
+// ── 浪费统计视图 ──
+// 周期档案的 from/end/observedAt 都是 ISO 字符串，展示时只取 MM/DD
+const formatWasteDay = (iso) => { const d = new Date(iso); return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`; };
+// 由重置时间反推周期起点（仅用于展示区间）：周 = 前 7 天，月 = 前一个月
+const wasteCycleStart = (endIso, windowKey) => {
+  const date = new Date(endIso);
+  if (windowKey === 'monthly') date.setMonth(date.getMonth() - 1);
+  else date.setDate(date.getDate() - 7);
+  return date.toISOString();
+};
+// 失真周期的时间缺口：距重置约 X
+const formatWasteGap = (gapMs) => {
+  const minutes = Math.round(Number(gapMs) / 60000);
+  if (!Number.isFinite(minutes) || minutes < 60) return `${Math.max(1, minutes || 0)} 分钟`;
+  if (minutes < 24 * 60) return `${Math.round(minutes / 60)} 小时`;
+  return `${Math.round(minutes / (24 * 60))} 天`;
+};
+
+// 浪费统计视图：每根柱子是一个周期区间（最新在右），柱高 = 周期末剩余百分比（即浪费率）
+function WasteView({ account, wasteWindows }) {
+  const [cycles, setCycles] = useState(null);
+  const [curWindow, setCurWindow] = useState(wasteWindows[0]);
+  const [hover, setHover] = useState(null);
+  const [dragging, setDragging] = useState(false);
+  const scrollRef = useRef(null);
+  const dragRef = useRef(null);
+  useEffect(() => {
+    let active = true;
+    // 网页演示模式没有周期档案接口，直接降级为空状态
+    if (!window.quotaDesk?.getCycles) { setCycles([]); return undefined; }
+    window.quotaDesk.getCycles(account.id).then((rows) => { if (active) setCycles(rows || []); }).catch(() => { if (active) setCycles([]); });
+    return () => { active = false; };
+  }, [account.id, account.lastChecked]);
+  // 厂商配置变化时收敛到第一个可统计窗口
+  useEffect(() => { if (!wasteWindows.includes(curWindow)) setCurWindow(wasteWindows[0]); }, [wasteWindows, curWindow]);
+  const windowCycles = useMemo(() => (cycles || []).filter((cycle) => cycle.window === curWindow)
+    .sort((a, b) => new Date(a.end).getTime() - new Date(b.end).getTime()), [cycles, curWindow]);
+  // 进行中的当前周期：来自实时额度数据，不在周期档案里
+  const meter = (account.windows || []).find((item) => item.key === curWindow);
+  const nowCycle = useMemo(() => (meter?.resetAt ? {
+    now: true, remaining: Math.max(0, Math.min(100, Math.round(meter.remaining))),
+    from: wasteCycleStart(meter.resetAt, curWindow), end: meter.resetAt,
+  } : null), [meter, curWindow]);
+  const shown = useMemo(() => [...windowCycles, ...(nowCycle ? [nowCycle] : [])], [windowCycles, nowCycle]);
+  // 只有可靠的完整自然周期计入统计；失真周期的浪费值只是上界，提前重置的周期不完整
+  const good = windowCycles.filter((cycle) => cycle.reliable && cycle.kind === 'natural');
+  const avg = good.length ? good.reduce((sum, cycle) => sum + cycle.remaining, 0) / good.length : null;
+  const total = good.reduce((sum, cycle) => sum + cycle.remaining, 0) / 100;
+  const empty = cycles !== null && windowCycles.length === 0;
+  // 周期过多出现横向滚动时，默认停在最右侧（最新周期）
+  useEffect(() => { const el = scrollRef.current; if (el) el.scrollLeft = el.scrollWidth; }, [shown.length, curWindow]);
+  // 单行详情条内容：按周期形态（进行中 / 提前重置 / 失真 / 可靠）组织
+  const renderDetail = (cycle) => {
+    const range = `${formatWasteDay(cycle.from)} → ${formatWasteDay(cycle.end)}`;
+    if (cycle.now) return <>
+      <span className="when">当前周期 {range}</span>
+      <span>已用 <b>{100 - cycle.remaining}%</b> · 若现在重置将浪费 <b>{cycle.remaining}%</b></span>
+      <span>最后记录于 <b>{formatChartStamp(account.lastChecked)}</b> · {formatReset(cycle.end)}重置</span>
+    </>;
+    const observed = <span>记录于 <b>{formatChartStamp(cycle.observedAt)}</b></span>;
+    const amount = Number.isFinite(cycle.amount) && Number.isFinite(cycle.limit) ? <span>剩 <b>{cycle.amount} / {cycle.limit}</b></span> : null;
+    if (cycle.kind === 'early') return <><span className="when">{range} 周期</span><span className="warn">⚡ 厂商提前重置：剩余 {Math.round(cycle.remaining)}% 被清零</span>{observed}</>;
+    if (!cycle.reliable) return <><span className="when">{range} 周期</span><span>浪费 <b>≤{Math.round(cycle.remaining)}%</b></span>{amount}{observed}<span className="warn">可能失真：距重置约 {formatWasteGap(cycle.gapMs)}</span></>;
+    return <><span className="when">{range} 周期</span><span>浪费 <b>{Math.round(cycle.remaining)}%</b> · 已用 {100 - Math.round(cycle.remaining)}%</span>{amount}{observed}</>;
+  };
+  // 周期过多柱宽触底时横向拖动平移
+  const startDrag = (event) => { const el = scrollRef.current; if (!el) return; dragRef.current = { x: event.clientX, left: el.scrollLeft }; el.setPointerCapture?.(event.pointerId); setDragging(true); };
+  const moveDrag = (event) => { const drag = dragRef.current; if (!drag || !scrollRef.current) return; scrollRef.current.scrollLeft = drag.left - (event.clientX - drag.x); };
+  const endDrag = () => { dragRef.current = null; setDragging(false); };
+  const softColor = `color-mix(in srgb, ${CHART_COLORS[curWindow] || 'var(--violet)'} 30%, transparent)`;
+  const mid = windowCycles.length > 2 ? windowCycles[Math.floor(windowCycles.length / 2)] : null;
+  return <div className="waste-view">
+    <div className="waste-row">
+      {wasteWindows.length >= 2
+        ? <div className="seg-control">{wasteWindows.map((key) => <button type="button" key={key} className={curWindow === key ? 'active' : ''} onClick={() => setCurWindow(key)}>{windowCatalog[key]?.label || key} 额度</button>)}</div>
+        : <span className="waste-label">{windowCatalog[curWindow]?.label || curWindow} 额度 · 浪费统计</span>}
+      <span className="waste-stats">{windowCycles.length ? <>
+        <span>{windowCycles.length} 个周期</span><span>平均浪费 <b>{avg != null ? `${avg.toFixed(0)}%` : '—'}</b>（{good.length} 可靠）</span><span>累计 <b>{total.toFixed(1)}</b> 倍额度</span>
+      </> : <><span>0 个周期</span><span>平均浪费 —</span><span>累计 —</span></>}</span>
+    </div>
+    <div className="chart-detail waste-detail">{hover ? renderDetail(hover) : <span className="chart-detail-hint">{empty ? '悬停查看当前周期详情' : '悬停查看周期详情 · 周期过多时可左右拖动'}</span>}</div>
+    <div className={`waste-scroll${dragging ? ' dragging' : ''}`} ref={scrollRef} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag} onPointerLeave={endDrag}>
+      <div className={`waste-plot ${curWindow === 'monthly' ? 'mo' : 'wk'}`}>
+        {!empty && [25, 50, 75].map((value) => <div key={value} className="waste-gridline" style={{ bottom: `${value}%` }} />)}
+        {!empty && avg != null && <div className="waste-avg" style={{ bottom: `${Math.min(100, avg)}%` }}><em>平均 {avg.toFixed(0)}%</em></div>}
+        {empty && <div className="waste-empty-hint"><span>还没有已完成的周期</span><span>第一个周期 <b>{nowCycle ? formatWasteDay(nowCycle.end) : '—'}</b> 重置后自动生成统计</span></div>}
+        {shown.map((cycle, index) => {
+          const classes = ['waste-col', cycle.now ? 'now' : cycle.kind === 'early' ? 'early' : !cycle.reliable ? 'bad' : '', hover === cycle ? 'hot' : ''].filter(Boolean).join(' ');
+          return <div key={cycle.now ? 'now' : `${cycle.end}-${index}`} className={classes} onMouseEnter={() => setHover(cycle)} onMouseLeave={() => setHover(null)}>
+            <div className="waste-bar" style={{ height: `${Math.max(2, Math.min(100, cycle.remaining))}%` }} />
+          </div>;
+        })}
+      </div>
+    </div>
+    <div className="waste-x-labels">
+      <span>{windowCycles.length ? `${formatWasteDay(windowCycles[0].from)} → ${formatWasteDay(windowCycles[0].end)}` : ''}</span>
+      <span>{mid ? `${formatWasteDay(mid.from)} → ${formatWasteDay(mid.end)}` : ''}</span>
+      <span>{nowCycle ? `${formatWasteDay(nowCycle.from)} → ${formatWasteDay(nowCycle.end)}（进行中）` : ''}</span>
+    </div>
+    <div className="chart-legend waste-legend">{empty
+      ? <span><i className="swatch-now" />进行中</span>
+      : <>
+        <span><i style={{ background: CHART_COLORS[curWindow] }} />浪费率</span>
+        <span><i style={{ background: `repeating-linear-gradient(-45deg, ${softColor} 0 3px, transparent 3px 6px)`, border: '1px solid var(--line-strong)' }} />可能失真</span>
+        <span><i className="swatch-early" />提前重置</span>
+        <span><i className="swatch-now" />进行中</span>
+        <span className="legend-right">{windowCycles.length - good.length} 个周期不计入平均</span>
+      </>}</div>
+  </div>;
+}
+
 function HistoryView({ account, provider, onBack }) {
   const [points, setPoints] = useState(null);
   const [hiddenKeys, setHiddenKeys] = useState([]);
+  const [view, setView] = useState('trend');
+  // 该厂商参与浪费统计的周期窗口；为空时不提供「浪费」入口
+  // 再按账号实际追踪的窗口过滤：用户选过窗口用 windowKeys，否则用接口实时返回的窗口；
+  // 账号还没有任何窗口数据时不过滤（避免轮询失败期间入口闪烁）
+  const wasteWindows = useMemo(() => {
+    const base = resolveWasteWindows(provider?.requestConfig);
+    const tracked = Array.isArray(account.windowKeys) && account.windowKeys.length
+      ? account.windowKeys
+      : (account.windows?.length ? account.windows.map((item) => item.key) : null);
+    return tracked ? base.filter((key) => tracked.includes(key)) : base;
+  }, [provider, account]);
+  const showWaste = view === 'waste' && wasteWindows.length > 0;
   useEffect(() => {
     let active = true;
     if (!window.quotaDesk?.getHistory) { setPoints([]); return undefined; }
@@ -586,17 +714,23 @@ function HistoryView({ account, provider, onBack }) {
       <div className="history-head">
         <AccountIdentity account={account} provider={provider} />
         <span className="section-count">{points ? `${points.length} 条记录` : '读取中…'}</span>
+        {wasteWindows.length > 0 && <div className="seg-control">
+          <button type="button" className={view === 'trend' ? 'active' : ''} onClick={() => setView('trend')}>趋势</button>
+          <button type="button" className={view === 'waste' ? 'active' : ''} onClick={() => setView('waste')}>浪费</button>
+        </div>}
       </div>
-      {points === null ? <div className="settings-empty chart-empty">正在读取历史记录…</div>
-        : points.length === 0 ? <div className="settings-empty chart-empty">暂无历史数据，每次成功刷新额度后都会记录一条</div>
-          : <UsageChart points={points} hiddenKeys={hiddenKeys} />}
-      {legendKeys.length > 0 && <div className="chart-legend">{legendKeys.map((key, index) => {
-        const sample = latestSamples[key];
-        const hidden = hiddenKeys.includes(key);
-        return <button type="button" key={key} className={hidden ? 'off' : ''} title={hidden ? '点击显示该折线' : '点击隐藏该折线'} onClick={() => toggleKey(key)}><i style={{ background: chartColor(key, index) }} />{windowCatalog[key]?.label || key}{sample && <em>{formatChartValue(sample, chartValue(sample))}</em>}</button>;
-      })}</div>}
+      {showWaste ? <WasteView account={account} wasteWindows={wasteWindows} /> : <>
+        {points === null ? <div className="settings-empty chart-empty">正在读取历史记录…</div>
+          : points.length === 0 ? <div className="settings-empty chart-empty">暂无历史数据，每次成功刷新额度后都会记录一条</div>
+            : <UsageChart points={points} hiddenKeys={hiddenKeys} />}
+        {legendKeys.length > 0 && <div className="chart-legend">{legendKeys.map((key, index) => {
+          const sample = latestSamples[key];
+          const hidden = hiddenKeys.includes(key);
+          return <button type="button" key={key} className={hidden ? 'off' : ''} title={hidden ? '点击显示该折线' : '点击隐藏该折线'} onClick={() => toggleKey(key)}><i style={{ background: chartColor(key, index) }} />{windowCatalog[key]?.label || key}{sample && <em>{formatChartValue(sample, chartValue(sample))}</em>}</button>;
+        })}</div>}
+      </>}
     </section>
-    <div className="history-foot"><button type="button" className="outline-button" onClick={onBack}><ArrowLeft size={14} /> 返回</button></div>
+    <div className="history-foot"><button type="button" className="outline-button" onClick={onBack}><ArrowLeft size={14} /> 返回</button><span className="history-foot-note">{wasteWindows.length > 0 ? '周期末记录永久归档，不受保留时长影响' : '该账号的额度类型不参与浪费统计'}</span></div>
   </div>;
 }
 
@@ -627,7 +761,7 @@ function SettingsDrawer({ accounts, providers, settings, setSettings, onClose, o
       <section className="drawer-section"><div className="drawer-section-title"><Bell size={16} /><span>刷新提醒规则</span><button className="mini-add" onClick={() => setSettings((old) => ({ ...old, reminderRules: [...(old.reminderRules || []), { id: `rule-${Date.now()}`, beforeMinutes: 120, minRemaining: 50 }] }))}><Plus size={14} /> 新增规则</button></div><Toggle checked={settings.alerts !== false} onChange={(value) => setSettings((old) => ({ ...old, alerts: value }))} label="启用提醒" description="关闭后不发送桌面通知，也不标记命中规则" />{(settings.reminderRules || []).length === 0 ? <div className="settings-empty">当前没有运行规则</div> : (settings.reminderRules || []).map((rule, index) => <div className="rule-editor" key={rule.id}><label><span>刷新前多久（分钟）<small>窗口重置倒计时小于该值才提醒</small></span><input type="number" min="1" value={rule.beforeMinutes} onChange={(event) => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, beforeMinutes: event.target.value } : item) }))} /></label><label><span>剩余至少（百分比）<small>剩余额度不低于该值才提醒</small></span><input type="number" min="0" max="100" value={rule.minRemaining} onChange={(event) => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, minRemaining: event.target.value } : item) }))} /></label><button className="icon-button danger rule-delete" title="删除规则" aria-label={`删除 ${rule.label || '规则'}`} onClick={() => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.filter((item) => item.id !== rule.id) }))}><Trash2 size={13} /></button></div>)}<small className="drawer-help">满足“刷新前多久”且“剩余至少”时，额度窗口会标记该规则。可以一条规则都没有。</small><div className="setting-select"><span><b>轮询间隔</b><small>所有账号统一检查频率</small></span><select value={settings.pollMinutes} onChange={(event) => setSettings((old) => ({ ...old, pollMinutes: event.target.value }))}><option value="5">5 分钟</option><option value="10">10 分钟</option><option value="15">15 分钟</option><option value="30">30 分钟</option></select></div></section>
       <section className="drawer-section"><div className="drawer-section-title"><SunMoon size={16} /><span>主题</span></div><div className="setting-select"><span><b>界面主题</b><small>主窗口与桌面浮窗同步应用</small></span><select value={settings.theme === 'light' ? 'light' : 'dark'} onChange={(event) => setSettings((old) => ({ ...old, theme: event.target.value }))}><option value="dark">暗色</option><option value="light">亮色</option></select></div></section>
       <section className="drawer-section"><div className="drawer-section-title"><Monitor size={16} /><span>桌面浮窗</span></div><Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" description="固定在桌面顶层，双击展开主窗口" /><label className="size-slider"><span>大小</span><input type="range" min={80} max={300} step={5} value={Math.round(clampWidgetScale(settings.widgetScale) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetScale: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetScale(settings.widgetScale) * 100)}%</b></label><label className="size-slider"><span>长度</span><input type="range" min={Math.round(WIDGET_MIN_LENGTH * 100)} max={Math.round(WIDGET_MAX_LENGTH * 100)} step={5} value={Math.round(clampWidgetLength(settings.widgetLength) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetLength: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetLength(settings.widgetLength) * 100)}%</b></label><small className="drawer-help">长度只调整横向宽度（60%–150%）。浮窗会展示账号的全部额度窗口（含 1M）；空间不足时逐级收起：标签先缩成小圆点再隐藏，倒计时按周期从长到短逐个隐藏，最后才收起最长周期的额度——只有一个额度窗口的账号通常不用收起任何内容。名称放不下时显示省略号，悬停可查看完整内容。</small><button type="button" className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetScale: 0.9, widgetLength: 0.9 }))}>恢复默认大小与长度</button><div className="widget-setting-preview"><div style={{ width: Math.round(WIDGET_BASE_SIZE.width * clampWidgetLength(settings.widgetLength)), maxWidth: '100%', margin: '0 auto' }}><WidgetRow account={accounts[0]} provider={providers.find((item) => item.id === accounts[0]?.providerId)} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} /></div></div><button className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetPreview: true }))}><Eye size={15} /> 预览并调整</button></section>
-      <section className="drawer-section"><div className="drawer-section-title"><History size={16} /><span>额度历史</span></div><div className="setting-select"><span><b>保留时长</b><small>每次成功刷新都会记录一条，用于账号卡片的趋势图</small></span><select value={settings.historyDays} onChange={(event) => setSettings((old) => ({ ...old, historyDays: Number(event.target.value) }))}><option value={3}>3 天</option><option value={7}>7 天（默认）</option><option value={15}>15 天</option><option value={30}>30 天</option><option value={60}>60 天</option><option value={90}>3 个月（最长）</option></select></div><button className="outline-button full" onClick={onClearHistory}><Trash2 size={14} /> 清除全部历史记录</button><small className="drawer-help">删除账号时会一并删除该账号的额度历史；超过保留时长的记录会自动清理。</small></section>
+      <section className="drawer-section"><div className="drawer-section-title"><History size={16} /><span>额度历史</span></div><div className="setting-select"><span><b>保留时长</b><small>每次成功刷新都会记录一条，用于账号卡片的趋势图</small></span><select value={settings.historyDays} onChange={(event) => setSettings((old) => ({ ...old, historyDays: Number(event.target.value) }))}><option value={3}>3 天</option><option value={7}>7 天（默认）</option><option value={15}>15 天</option><option value={30}>30 天</option><option value={60}>60 天</option><option value={90}>3 个月（最长）</option><option value={0}>永久</option></select></div><button className="outline-button full" onClick={onClearHistory}><Trash2 size={14} /> 清除全部历史记录</button><small className="drawer-help">删除账号时会一并删除该账号的额度历史；超过保留时长的记录会自动清理；永久保存时超过 30 天的记录会自动降采样为每小时一条。</small></section>
       <section className="drawer-section"><div className="drawer-section-title"><ShieldCheck size={16} /><span>账号与凭据</span><button className="mini-add" onClick={() => openModal('account')}><Plus size={14} /> 添加账号</button></div><div className="settings-list">{accounts.length === 0 && <div className="settings-empty">还没有账号</div>}{accounts.map((account) => { const provider = providers.find((item) => item.id === account.providerId); const testing = testingAccountId === account.id; return <div className="settings-account" key={account.id}><Logo provider={provider} size="sm" /><div><b title={account.name}>{account.name}</b><small className={account.status === 'warning' ? 'warning-copy' : ''} title={account.status === 'warning' ? (account.lastError || '') : ''}>{account.status === 'warning' ? account.lastError : `${provider?.name} · ${account.windows.length} 个额度窗口`}</small></div><button className="row-icon-button" title="编辑账号" aria-label={`编辑 ${account.name}`} onClick={() => openModal({ type: 'account-edit', account })}><Pencil size={13} /></button><button className="row-icon-button" disabled={testing} title="刷新" aria-label={`刷新 ${account.name} 额度`} onClick={() => onTestAccount(account)}><RefreshCw size={13} className={testing ? 'spinning' : ''} /></button><button className="row-icon-button danger" title="删除账号" aria-label={`删除 ${account.name}`} onClick={() => onDeleteAccount(account)}><Trash2 size={13} /></button><span className={`status-dot ${account.status}`} /></div>; })}</div>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button full drawer-import-button" onClick={() => openModal('import-ccswitch')}><Download size={14} /> 从 cc-switch 导入账号</button>}</section>
       <section className="drawer-section"><div className="drawer-section-title"><LayoutGrid size={16} /><span>厂商适配器</span><button className="mini-add" onClick={() => openModal('provider')}><Plus size={14} /> 新增厂商</button></div><div className="settings-list providers-list">{providers.map((provider) => <div className="settings-account" key={provider.id}><Logo provider={provider} size="sm" /><div><b title={provider.name}>{provider.name}</b><small>{provider.requestConfig?.adapterMode === 'script' ? '脚本适配' : provider.requestConfig?.adapterMode === 'grok' ? '专属适配' : '标准映射'}</small></div><button className="row-icon-button" title="编辑厂商" aria-label={`编辑 ${provider.name}`} onClick={() => onEditProvider(provider)}><Pencil size={13} /></button><span className="adapter-state"><Check size={13} /></span></div>)}</div></section>
       <section className="drawer-section"><div className="drawer-section-title"><Globe size={16} /><span>网络代理</span></div><div className="setting-select"><span><b>代理模式</b><small>所有账号的额度请求共用，保存后立即生效</small></span><select value={proxyMode} onChange={(event) => setSettings((old) => ({ ...old, proxyMode: event.target.value }))}><option value="system">跟随系统（默认）</option><option value="manual">手动输入</option><option value="direct">不使用代理</option></select></div>{proxyMode === 'manual' && <label className="field drawer-proxy-field"><span>代理地址 <small>留空时退回跟随系统</small></span><input value={settings.proxyUrl ?? ''} onChange={(event) => setSettings((old) => ({ ...old, proxyUrl: event.target.value }))} placeholder="http://127.0.0.1:7897 或 socks5://127.0.0.1:7898" spellCheck="false" autoComplete="off" /></label>}<small className="drawer-help">访问 Claude、Codex、Gemini、Grok 等境外厂商直连常被中断，建议配置可用代理。地址以代理工具实际监听的端口为准（Clash Verge Rev 默认 mixed-port 7897）；只填 host:port 时按 http 代理处理。切换代理模式后建议点账号行的「刷新」验证效果。</small></section>
@@ -916,6 +1050,8 @@ function AccountEditModalV2({ account, provider, onClose, onSave, onTestDraft })
 function ProviderModalV2({ provider, onClose, onSave }) {
   const existing = provider || {};
   const config = existing.requestConfig || {};
+  // 专属适配厂商（Claude/Codex/Gemini/Kimi 订阅/Grok）：请求与解析内置，编辑时只保留名称/Logo/官网/浪费统计
+  const cliAdapter = isCliProvider(existing);
   const [name, setName] = useState(existing.name || '');
   const [endpoint, setEndpoint] = useState(config.endpoint || adapterDefinitions[existing.adapter]?.endpoint || '/v1/usage');
   const [auth, setAuth] = useState(config.auth || adapterDefinitions[existing.adapter]?.auth || 'bearer');
@@ -946,6 +1082,14 @@ function ProviderModalV2({ provider, onClose, onSave }) {
   const [configError, setConfigError] = useState('');
   const [logo, setLogo] = useState(existing.logo || '');
   const [website, setWebsite] = useState(existing.website || '');
+  // 浪费统计窗口：null = 未手动设置，跟随额度窗口自动判定；勾选后写死为数组（与 waste.cjs 的 resolveWasteWindows 对应）
+  const [wasteWindows, setWasteWindows] = useState(Array.isArray(config.wasteWindows) ? config.wasteWindows.filter((key) => ['weekly', 'monthly'].includes(key)) : null);
+  // 候选只限周期窗口（weekly/monthly）；没有周期窗口的厂商不显示这项配置
+  const wasteCandidates = providerWindowKeys({ adapter: existing.adapter, requestConfig: config }).filter((key) => ['weekly', 'monthly'].includes(key));
+  const toggleWasteWindow = (key) => setWasteWindows((old) => {
+    const current = old ?? wasteCandidates;
+    return current.includes(key) ? current.filter((item) => item !== key) : [...current, key];
+  });
   useEffect(() => {
     if (!advancedEnabled) return;
     setVariables((old) => {
@@ -964,6 +1108,11 @@ function ProviderModalV2({ provider, onClose, onSave }) {
   const submit = (event) => {
     event.preventDefault();
     setConfigError('');
+    // 专属适配厂商：不覆盖内置的请求/解析配置，只保存名称、Logo、官网与浪费统计窗口
+    if (cliAdapter) {
+      onSave({ id: provider?.id, name: name || existing.name || '厂商', adapter: provider?.adapter, logo, website: String(website || '').trim(), requestConfig: { ...config, ...(wasteWindows ? { wasteWindows } : {}) } });
+      return;
+    }
     const windowMap = Object.fromEntries(windowMapText.split('\n').map((line) => line.trim()).filter((line) => line.includes('=')).map((line) => { const [source, target] = line.split('=').map((item) => item.trim()); return [source.toLowerCase(), target]; }));
     let responseRules;
     try { responseRules = responseRulesText.trim() ? JSON.parse(responseRulesText) : undefined; }
@@ -972,23 +1121,27 @@ function ProviderModalV2({ provider, onClose, onSave }) {
     const cleanVariables = variables.map((item) => ({ key: String(item.key || '').trim(), label: String(item.label || '').trim(), defaultValue: item.defaultValue ?? '', required: Boolean(item.required), secret: Boolean(item.secret) })).filter((item) => item.key);
     if (cleanVariables.some((item) => !/^[A-Za-z_][\w.-]*$/.test(item.key))) { setConfigError('变量名只能使用字母、数字、下划线、点和连字符，且不能以数字开头'); return; }
     const endpointVariable = cleanVariables.find((item) => item.key === 'endpoint');
-    onSave({ id: provider?.id, name: name || '新厂商', adapter: provider?.adapter || 'generic', logo, website: String(website || '').trim(), requestConfig: { ...config, adapterMode: ['grok', ...CLI_ADAPTER_MODES].includes(config.adapterMode) ? config.adapterMode : advancedEnabled ? 'script' : 'standard', endpoint: advancedEnabled ? (endpointVariable?.defaultValue || endpoint) : endpoint, method, auth, authHeader, authPrefix, authQuery, headers, body, credentialRequired: advancedEnabled ? false : credentialRequired, variables: advancedEnabled ? cleanVariables : [], script: advancedEnabled ? script.trim() : '', responseRules: advancedEnabled ? undefined : responseRules, collectionMode, listPath, windowField, defaultWindow, windowMap, totalPath, remainingPath, usedPath, percentagePath, percentageMode, availablePath, unit, resetPath } });
+    onSave({ id: provider?.id, name: name || '新厂商', adapter: provider?.adapter || 'generic', logo, website: String(website || '').trim(), requestConfig: { ...config, adapterMode: ['grok', ...CLI_ADAPTER_MODES].includes(config.adapterMode) ? config.adapterMode : advancedEnabled ? 'script' : 'standard', endpoint: advancedEnabled ? (endpointVariable?.defaultValue || endpoint) : endpoint, method, auth, authHeader, authPrefix, authQuery, headers, body, credentialRequired: advancedEnabled ? false : credentialRequired, variables: advancedEnabled ? cleanVariables : [], script: advancedEnabled ? script.trim() : '', responseRules: advancedEnabled ? undefined : responseRules, collectionMode, listPath, windowField, defaultWindow, windowMap, totalPath, remainingPath, usedPath, percentagePath, percentageMode, availablePath, unit, resetPath, ...(wasteWindows ? { wasteWindows } : {}) } });
   };
   return <div className="modal-backdrop" onClick={onClose}><form className={`modal provider-modal ${advancedEnabled ? 'script-mode' : ''}`} onSubmit={submit} onClick={(event) => event.stopPropagation()}>
-    <div className="modal-head"><div><span className="eyebrow">{advancedEnabled ? '脚本适配器' : '通用厂商配置'}</span><h2>{provider ? '编辑厂商' : '新增厂商'}</h2></div></div>
+    <div className="modal-head"><div><span className="eyebrow">{cliAdapter ? '专属适配厂商' : advancedEnabled ? '脚本适配器' : '通用厂商配置'}</span><h2>{provider ? '编辑厂商' : '新增厂商'}</h2></div></div>
     <div className="logo-upload">{logo ? <span className="upload-preview"><img src={logo} alt="Logo 预览" /></span> : <span className="upload-mark"><UploadCloud size={19} /></span>}<div><b>{logo ? 'Logo 已准备好' : '上传厂商 Logo'}</b><small>PNG / SVG / WebP，建议 64 × 64</small></div><label className="outline-button file-button"><UploadCloud size={13} /> {logo ? '更换' : '选择文件'}<input type="file" accept="image/png,image/svg+xml,image/webp" onChange={readLogo} /></label></div>
     <label className="field"><span>厂商名称</span><input required value={name} onChange={(event) => setName(event.target.value)} /></label>
     <label className="field"><span>官网地址 <small>悬停厂商图标可进入官网，留空则不提供入口</small></span><input value={website} onChange={(event) => setWebsite(event.target.value)} placeholder="https://www.example.com" /></label>
-    <Toggle checked={advancedEnabled} onChange={setAdvancedEnabled} label="高级适配脚本" description="开启后脚本独立负责请求与响应解析" />
-    <div className="form-grid preset-grid"><button type="button" className="outline-button" onClick={() => { setAdvancedEnabled(true); setScript(newApiTemplateScript); setVariables([{ key: 'endpoint', label: '站点地址', defaultValue: 'https://your-newapi-site.com', required: true, secret: false, system: false }, { key: 'accessToken', label: '面板 accessToken', defaultValue: '', required: true, secret: true, system: false }, { key: 'userId', label: '面板用户 ID', defaultValue: '', required: true, secret: false, system: false }]); }}><Sparkles size={14} /> New API 站点模板</button><small className="preset-hint">一键填入 New API 系中转站的余额查询脚本</small></div>
-    {advancedEnabled ? <><div className="adapter-config variable-editor"><div className="variable-editor-head"><span className="eyebrow">账号变量</span><button type="button" className="mini-add" onClick={() => setVariables((old) => [...old, { key: '', label: '', defaultValue: '', required: false, secret: false }])}><Plus size={13} /> 新增变量</button></div>{variables.length > 0 && <div className="variable-row variable-row-head"><span>变量名<small>脚本里用 {'{{变量名}}'} 引用</small></span><span>显示名称<small>账号表单上的标签</small></span><span>默认值<small>账号没填时使用</small></span><span>必填</span><span>敏感</span><span /></div>}{variables.length === 0 ? <div className="settings-empty">没有额外变量</div> : variables.map((item, index) => <div className="variable-row" key={`${item.key}-${index}`}><input value={item.key || ''} readOnly={item.system} onChange={(event) => setVariables((old) => old.map((entry, entryIndex) => entryIndex === index ? { ...entry, key: event.target.value } : entry))} placeholder="变量名" /><input value={item.label || ''} readOnly={item.system} onChange={(event) => setVariables((old) => old.map((entry, entryIndex) => entryIndex === index ? { ...entry, label: event.target.value } : entry))} placeholder="显示名称" /><input value={item.defaultValue ?? ''} onChange={(event) => setVariables((old) => old.map((entry, entryIndex) => entryIndex === index ? { ...entry, defaultValue: event.target.value } : entry))} placeholder="默认值" /><label title="账号必须填写"><input type="checkbox" checked={Boolean(item.required)} disabled={item.key === 'apiKey'} onChange={(event) => setVariables((old) => old.map((entry, entryIndex) => entryIndex === index ? { ...entry, required: event.target.checked } : entry))} />必填</label><label title="使用 Windows DPAPI 加密"><input type="checkbox" checked={Boolean(item.secret)} disabled={item.system} onChange={(event) => setVariables((old) => old.map((entry, entryIndex) => entryIndex === index ? { ...entry, secret: event.target.checked } : entry))} />敏感</label><span className="variable-row-tail">{item.system && <span className="variable-system-badge" title="厂商内置变量，用法和自定义变量一样，也可以删除">内置</span>}<button type="button" className="row-icon-button danger" onClick={() => setVariables((old) => old.filter((_entry, entryIndex) => entryIndex !== index))} title="删除变量" aria-label="删除变量"><Trash2 size={13} /></button></span></div>)}</div><label className="field"><span>适配脚本</span><textarea className="script-editor" required value={script} onChange={(event) => setScript(event.target.value)} placeholder="({ request: { url: '{{endpoint}}?region={{region}}', method: 'GET' }, extractor(response, variables) { return { key: 'weekly', remaining: 50, total: 100, unit: '%' }; } })" /></label></> : <>
+    {!cliAdapter && <Toggle checked={advancedEnabled} onChange={setAdvancedEnabled} label="高级适配脚本" description="开启后脚本独立负责请求与响应解析" />}
+    {wasteCandidates.length > 0 && <div className="adapter-config"><span className="eyebrow">浪费统计</span>
+      <div className="field"><span>统计窗口 <small>勾选参与周期末浪费归档的窗口，全部取消则该厂商不做浪费统计</small></span>
+        <div className="window-choice">{wasteCandidates.map((key) => { const on = (wasteWindows ?? wasteCandidates).includes(key); return <button type="button" key={key} className={`window-choice-item ${on ? 'selected' : ''}`} onClick={() => toggleWasteWindow(key)}><span>{on ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>; })}</div>
+      </div></div>}
+    {!cliAdapter && <div className="form-grid preset-grid"><button type="button" className="outline-button" onClick={() => { setAdvancedEnabled(true); setScript(newApiTemplateScript); setVariables([{ key: 'endpoint', label: '站点地址', defaultValue: 'https://your-newapi-site.com', required: true, secret: false, system: false }, { key: 'accessToken', label: '面板 accessToken', defaultValue: '', required: true, secret: true, system: false }, { key: 'userId', label: '面板用户 ID', defaultValue: '', required: true, secret: false, system: false }]); }}><Sparkles size={14} /> New API 站点模板</button><small className="preset-hint">一键填入 New API 系中转站的余额查询脚本</small></div>}
+    {!cliAdapter && (advancedEnabled ? <><div className="adapter-config variable-editor"><div className="variable-editor-head"><span className="eyebrow">账号变量</span><button type="button" className="mini-add" onClick={() => setVariables((old) => [...old, { key: '', label: '', defaultValue: '', required: false, secret: false }])}><Plus size={13} /> 新增变量</button></div>{variables.length > 0 && <div className="variable-row variable-row-head"><span>变量名<small>脚本里用 {'{{变量名}}'} 引用</small></span><span>显示名称<small>账号表单上的标签</small></span><span>默认值<small>账号没填时使用</small></span><span>必填</span><span>敏感</span><span /></div>}{variables.length === 0 ? <div className="settings-empty">没有额外变量</div> : variables.map((item, index) => <div className="variable-row" key={`${item.key}-${index}`}><input value={item.key || ''} readOnly={item.system} onChange={(event) => setVariables((old) => old.map((entry, entryIndex) => entryIndex === index ? { ...entry, key: event.target.value } : entry))} placeholder="变量名" /><input value={item.label || ''} readOnly={item.system} onChange={(event) => setVariables((old) => old.map((entry, entryIndex) => entryIndex === index ? { ...entry, label: event.target.value } : entry))} placeholder="显示名称" /><input value={item.defaultValue ?? ''} onChange={(event) => setVariables((old) => old.map((entry, entryIndex) => entryIndex === index ? { ...entry, defaultValue: event.target.value } : entry))} placeholder="默认值" /><label title="账号必须填写"><input type="checkbox" checked={Boolean(item.required)} disabled={item.key === 'apiKey'} onChange={(event) => setVariables((old) => old.map((entry, entryIndex) => entryIndex === index ? { ...entry, required: event.target.checked } : entry))} />必填</label><label title="使用 Windows DPAPI 加密"><input type="checkbox" checked={Boolean(item.secret)} disabled={item.system} onChange={(event) => setVariables((old) => old.map((entry, entryIndex) => entryIndex === index ? { ...entry, secret: event.target.checked } : entry))} />敏感</label><span className="variable-row-tail">{item.system && <span className="variable-system-badge" title="厂商内置变量，用法和自定义变量一样，也可以删除">内置</span>}<button type="button" className="row-icon-button danger" onClick={() => setVariables((old) => old.filter((_entry, entryIndex) => entryIndex !== index))} title="删除变量" aria-label="删除变量"><Trash2 size={13} /></button></span></div>)}</div><label className="field"><span>适配脚本</span><textarea className="script-editor" required value={script} onChange={(event) => setScript(event.target.value)} placeholder="({ request: { url: '{{endpoint}}?region={{region}}', method: 'GET' }, extractor(response, variables) { return { key: 'weekly', remaining: 50, total: 100, unit: '%' }; } })" /></label></> : <>
       <div className="form-grid"><label className="field"><span>默认额度接口 <small>必须是完整 URL</small></span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder="https://api.example.com/v1/usage" /></label><label className="field"><span>请求方法</span><select value={method} onChange={(event) => setMethod(event.target.value)}><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option></select></label></div>
       <div className="adapter-config"><span className="eyebrow">认证与请求</span><div className="form-grid"><label className="field"><span>认证方式</span><select value={auth} onChange={(event) => setAuth(event.target.value)}><option value="bearer">Bearer Token</option><option value="token">自定义 Header</option><option value="cookie">Cookie</option><option value="query">Query 参数</option><option value="none">无需认证</option></select></label>{auth === 'query' ? <label className="field"><span>Query 参数名</span><input value={authQuery} onChange={(event) => setAuthQuery(event.target.value)} /></label> : auth !== 'none' && <label className="field"><span>认证 Header</span><input value={authHeader} onChange={(event) => setAuthHeader(event.target.value)} /></label>}</div>{(auth === 'bearer' || auth === 'token') && <label className="field"><span>凭据前缀 <small>例如 Bearer，末尾空格会保留</small></span><input value={authPrefix} onChange={(event) => setAuthPrefix(event.target.value)} /></label>}<div className="form-grid"><label className="field"><span>额外请求头 JSON</span><textarea value={headers} onChange={(event) => setHeaders(event.target.value)} placeholder={'{"X-Client": "QuotaDesk"}'} /></label><label className="field"><span>请求体 JSON <small>GET 时忽略</small></span><textarea value={body} onChange={(event) => setBody(event.target.value)} placeholder={'{"account": "{{accountId}}"}'} /></label></div></div>
       <div className="adapter-config"><span className="eyebrow">响应字段映射</span><div className="form-grid"><label className="field"><span>数据路径</span><input value={listPath} onChange={(event) => setListPath(event.target.value)} placeholder="data.quota，可留空" /></label><label className="field"><span>数据形态</span><select value={collectionMode} onChange={(event) => setCollectionMode(event.target.value)}><option value="auto">自动判断</option><option value="single">单个对象</option><option value="array">数组</option><option value="object-entries">对象键作为窗口</option></select></label></div><div className="form-grid"><label className="field"><span>窗口字段</span><input value={windowField} onChange={(event) => setWindowField(event.target.value)} /></label><label className="field"><span>默认窗口</span><select value={defaultWindow} onChange={(event) => setDefaultWindow(event.target.value)}><option value="five_hour">5 小时</option><option value="daily">1 天</option><option value="weekly">7 天</option><option value="monthly">1个月</option><option value="balance">余额</option></select></label></div><label className="field"><span>窗口值映射 <small>每行：接口值=内部窗口</small></span><textarea value={windowMapText} onChange={(event) => setWindowMapText(event.target.value)} /></label><div className="form-grid mapping-grid"><label className="field"><span>总量路径</span><input value={totalPath} onChange={(event) => setTotalPath(event.target.value)} /></label><label className="field"><span>剩余路径</span><input value={remainingPath} onChange={(event) => setRemainingPath(event.target.value)} /></label><label className="field"><span>已用路径</span><input value={usedPath} onChange={(event) => setUsedPath(event.target.value)} /></label><label className="field"><span>百分比路径</span><input value={percentagePath} onChange={(event) => setPercentagePath(event.target.value)} /></label></div><div className="form-grid"><label className="field"><span>百分比含义</span><select value={percentageMode} onChange={(event) => setPercentageMode(event.target.value)}><option value="used">已用百分比</option><option value="remaining">剩余百分比</option></select></label><label className="field"><span>可用状态路径</span><input value={availablePath} onChange={(event) => setAvailablePath(event.target.value)} placeholder="isValid / status" /></label></div><div className="form-grid"><label className="field"><span>单位</span><input value={unit} onChange={(event) => setUnit(event.target.value)} placeholder="% / CNY / USD" /></label><label className="field"><span>刷新时间路径</span><input value={resetPath} onChange={(event) => setResetPath(event.target.value)} /></label></div></div>
       <label className="field"><span>多规则响应映射 JSON <small>填写后优先于上方单规则映射</small></span><textarea className="rules-editor" value={responseRulesText} onChange={(event) => setResponseRulesText(event.target.value)} placeholder={'[{"listPath":"rate_limits","collectionMode":"array","filterPath":"window","filterValue":"7d","defaultWindow":"weekly","totalPath":"limit","remainingPath":"remaining","resetPath":"reset_at"}]'} /></label>
-    </>}
+    </>)}
     {configError && <div className="desktop-error"><AlertCircle size={14} /><span>{configError}</span></div>}
-    <div className="adapter-note"><Sparkles size={15} /><span>{advancedEnabled ? '脚本模式仅使用脚本中的 request 和 extractor。' : '标准模式支持完整 URL、方法、Header/Query/Cookie 认证、请求头/请求体 JSON 与多形态响应。'}</span></div>
+    <div className="adapter-note"><Sparkles size={15} /><span>{cliAdapter ? '专属适配厂商：请求与解析逻辑已内置（凭据来自本机 CLI 登录态 / 官方接口），只需维护名称、Logo、官网与浪费统计窗口。' : advancedEnabled ? '脚本模式仅使用脚本中的 request 和 extractor。' : '标准模式支持完整 URL、方法、Header/Query/Cookie 认证、请求头/请求体 JSON 与多形态响应。'}</span></div>
     <div className="modal-actions"><button type="button" className="outline-button" onClick={onClose}>取消</button><button className="primary-button" type="submit"><Pencil size={15} /> {provider ? '保存厂商' : '新增厂商'}</button></div>
   </form></div>;
 }

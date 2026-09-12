@@ -33,11 +33,11 @@ const scriptVariables = (endpoint) => [
 ];
 
 const builtinConfigs = {
-  kimi: { endpoint: 'https://api.kimi.com/coding/v1/usages', windows: ['five_hour', 'weekly'], adapterMode: 'script', script: scripts.kimi, variables: scriptVariables('https://api.kimi.com/coding/v1/usages') },
-  zai: { endpoint: 'https://open.bigmodel.cn/api/monitor/usage/quota/limit', windows: ['five_hour', 'weekly', 'monthly'], adapterMode: 'script', script: scripts.zai, variables: scriptVariables('https://open.bigmodel.cn/api/monitor/usage/quota/limit') },
-  deepseek: { endpoint: 'https://api.deepseek.com/user/balance', windows: ['balance'], adapterMode: 'script', script: scripts.deepseek, variables: scriptVariables('https://api.deepseek.com/user/balance') },
+  kimi: { endpoint: 'https://api.kimi.com/coding/v1/usages', windows: ['five_hour', 'weekly'], wasteWindows: ['weekly'], adapterMode: 'script', script: scripts.kimi, variables: scriptVariables('https://api.kimi.com/coding/v1/usages') },
+  zai: { endpoint: 'https://open.bigmodel.cn/api/monitor/usage/quota/limit', windows: ['five_hour', 'weekly', 'monthly'], wasteWindows: ['weekly'], adapterMode: 'script', script: scripts.zai, variables: scriptVariables('https://open.bigmodel.cn/api/monitor/usage/quota/limit') },
+  deepseek: { endpoint: 'https://api.deepseek.com/user/balance', windows: ['balance'], wasteWindows: [], adapterMode: 'script', script: scripts.deepseek, variables: scriptVariables('https://api.deepseek.com/user/balance') },
   wlb: {
-    endpoint: 'https://codex.wlbclub.com/v1/usage', windows: ['daily', 'weekly'], adapterMode: 'standard', method: 'GET', auth: 'bearer', authHeader: 'Authorization', authPrefix: 'Bearer ', builtinMigration: 'wlb-standard-v2',
+    endpoint: 'https://codex.wlbclub.com/v1/usage', windows: ['daily', 'weekly'], wasteWindows: ['weekly'], adapterMode: 'standard', method: 'GET', auth: 'bearer', authHeader: 'Authorization', authPrefix: 'Bearer ', builtinMigration: 'wlb-standard-v2',
     responseRules: [
       // rate_limits 里 window=1d 的行是 wlbclub 后上线的 1 天限额
       { listPath: 'rate_limits', collectionMode: 'array', filterPath: 'window', filterOperator: 'equals', filterValue: '1d', defaultWindow: 'daily', totalPath: 'limit', remainingPath: 'remaining', usedPath: 'used', resetPath: 'reset_at|resetAt|resetTime', availablePath: '$root.status', unavailableValues: 'inactive|invalid|false|0', unit: '%' },
@@ -45,11 +45,12 @@ const builtinConfigs = {
     ],
   },
   // Grok 订阅走专属适配（poller.cjs queryGrokSubscription）：读本机 grok CLI 凭据查 grok.com 计费端点，无需用户填任何凭据
-  grok: { windows: ['weekly', 'monthly'], adapterMode: 'grok', auth: 'none', credentialRequired: false },
+  // Grok 订阅走专属适配（poller.cjs queryGrokSubscription）：读本机 grok CLI 凭据查 grok.com 计费端点，无需用户填任何凭据；Grok 只有周额度，没有月额度
+  grok: { windows: ['weekly'], wasteWindows: ['weekly'], adapterMode: 'grok', auth: 'none', credentialRequired: false },
   // MiniMax Coding Plan（规则移植自 cc-switch coding_plan.rs）：model_remains 里 model_name=general 的 5 小时/周剩余百分比
   minimax: {
     endpoint: 'https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains',
-    windows: ['five_hour', 'weekly'], adapterMode: 'script',
+    windows: ['five_hour', 'weekly'], wasteWindows: ['weekly'], adapterMode: 'script',
     script: `({
     request: { url: "{{endpoint}}", method: "GET", headers: { Authorization: "Bearer {{apiKey}}" } },
     extractor(response) {
@@ -70,11 +71,11 @@ const builtinConfigs = {
     variables: scriptVariables('https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains'),
   },
   // Claude / Codex / Gemini 官方订阅：专属适配（cli-quota.cjs），复用本机 CLI 登录态
-  claude: { windows: ['five_hour', 'weekly'], adapterMode: 'claude', auth: 'none', credentialRequired: false },
-  codex: { windows: ['five_hour', 'weekly', 'monthly'], adapterMode: 'codex', auth: 'none', credentialRequired: false },
-  gemini: { windows: ['gemini_pro', 'gemini_flash', 'gemini_flash_lite'], adapterMode: 'gemini', auth: 'none', credentialRequired: false },
+  claude: { windows: ['five_hour', 'weekly'], wasteWindows: ['weekly'], adapterMode: 'claude', auth: 'none', credentialRequired: false },
+  codex: { windows: ['five_hour', 'weekly', 'monthly'], wasteWindows: ['weekly', 'monthly'], adapterMode: 'codex', auth: 'none', credentialRequired: false },
+  gemini: { windows: ['gemini_pro', 'gemini_flash', 'gemini_flash_lite'], wasteWindows: [], adapterMode: 'gemini', auth: 'none', credentialRequired: false },
   // Kimi 官方订阅：专属适配（cli-quota.cjs），凭据来自「导入订阅登录」的扫码快照，含月订阅额度
-  'kimi-subscription': { windows: ['five_hour', 'weekly', 'monthly'], adapterMode: 'kimi', auth: 'none', credentialRequired: false },
+  'kimi-subscription': { windows: ['five_hour', 'weekly', 'monthly'], wasteWindows: ['weekly', 'monthly'], adapterMode: 'kimi', auth: 'none', credentialRequired: false },
 };
 
 module.exports = { builtinConfigs };

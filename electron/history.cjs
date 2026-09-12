@@ -3,12 +3,18 @@
 
 const DEFAULT_RETENTION_DAYS = 7;
 const MAX_RETENTION_DAYS = 90; // 最长 3 个月
+const PERMANENT_RETENTION = 0; // retentionDays = 0 表示永久保存
 const MAX_POINTS_PER_ACCOUNT = 5000;
+const MAX_POINTS_PERMANENT = 200_000; // 永久保存时的点数上限（降采样后约 10 年数据量）
+// 永久保存时，超过该天数的旧点降采样为每小时一点：长期趋势不需要 5 分钟粒度，体积降到 1/12
+const FULL_RESOLUTION_DAYS = 30;
 // 距上一条记录不足 1 分钟时直接覆盖，避免手动连点“刷新”刷出大量重复点
 const MIN_INTERVAL_MS = 60_000;
 
+// retentionDays：正数 = 保留天数（上限 90），0 = 永久保存，其他非法值回退默认 7 天
 const clampRetentionDays = (value) => {
   const days = Number(value);
+  if (days === 0) return PERMANENT_RETENTION;
   return Number.isFinite(days) && days > 0 ? Math.min(MAX_RETENTION_DAYS, Math.max(1, Math.round(days))) : DEFAULT_RETENTION_DAYS;
 };
 
@@ -30,20 +36,38 @@ const appendHistoryPoint = (history, accountId, windows, now = Date.now(), reten
   const point = { at: new Date(now).toISOString(), windows: snapshotWindows(windows) };
   if (last && now - new Date(last.at).getTime() < MIN_INTERVAL_MS) points[points.length - 1] = point;
   else points.push(point);
-  next[accountId] = points.slice(-MAX_POINTS_PER_ACCOUNT);
+  const maxPoints = clampRetentionDays(retentionDays) === PERMANENT_RETENTION ? MAX_POINTS_PERMANENT : MAX_POINTS_PER_ACCOUNT;
+  next[accountId] = points.slice(-maxPoints);
   return pruneHistory(next, retentionDays, now);
 };
 
-// 按保留天数裁剪所有账号的历史；传入 validAccountIds 时顺便清掉已删除账号的历史
+// 永久保存：超过 FULL_RESOLUTION_DAYS 的旧点按小时降采样（每小时保留第一个点），近期点保持原粒度
+const downsampleHistory = (points, now) => {
+  const cutoff = now - FULL_RESOLUTION_DAYS * 86_400_000;
+  const kept = [];
+  let lastBucket = -1;
+  for (const point of points || []) {
+    const at = new Date(point.at).getTime();
+    if (at >= cutoff) { kept.push(point); continue; }
+    const bucket = Math.floor(at / 3_600_000);
+    if (bucket !== lastBucket) { kept.push(point); lastBucket = bucket; }
+  }
+  return kept;
+};
+
+// 按保留天数裁剪所有账号；retentionDays 为 0 时永久保存，改为降采样旧数据；传入 validAccountIds 时顺便清掉已删除账号的历史
 const pruneHistory = (history, retentionDays = DEFAULT_RETENTION_DAYS, now = Date.now(), validAccountIds = null) => {
-  const cutoff = now - clampRetentionDays(retentionDays) * 86_400_000;
+  const days = clampRetentionDays(retentionDays);
+  const cutoff = days === PERMANENT_RETENTION ? null : now - days * 86_400_000;
   const next = {};
   for (const [accountId, points] of Object.entries(history || {})) {
     if (validAccountIds && !validAccountIds.has(accountId)) continue;
-    const kept = (points || []).filter((point) => new Date(point.at).getTime() >= cutoff);
+    const kept = cutoff === null
+      ? downsampleHistory(points, now)
+      : (points || []).filter((point) => new Date(point.at).getTime() >= cutoff);
     if (kept.length) next[accountId] = kept;
   }
   return next;
 };
 
-module.exports = { appendHistoryPoint, pruneHistory, clampRetentionDays, snapshotWindows, MAX_RETENTION_DAYS };
+module.exports = { appendHistoryPoint, pruneHistory, clampRetentionDays, snapshotWindows, downsampleHistory, MAX_RETENTION_DAYS, PERMANENT_RETENTION };

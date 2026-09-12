@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { app, safeStorage } = require('electron');
 const { appendHistoryPoint, pruneHistory } = require('./history.cjs');
+const { extractCycles, mergeCycles } = require('./waste.cjs');
 
 const readJson = (filePath, fallback) => {
   try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); }
@@ -21,6 +22,7 @@ class DesktopStore {
     this.statePath = path.join(root, 'state.json');
     this.credentialsPath = path.join(root, 'credentials.json');
     this.historyPath = path.join(root, 'history.json');
+    this.cyclesPath = path.join(root, 'cycles.json');
   }
 
   loadState() { return readJson(this.statePath, null); }
@@ -40,6 +42,35 @@ class DesktopStore {
   }
 
   clearHistory() { writeJson(this.historyPath, {}); return true; }
+
+  // 周期浪费档案：{ accountId: [{ window, from, end, kind, observedAt, remaining, amount, limit, gapMs, reliable }] }
+  // 永久保留，不受历史保留时长影响；每次全量扫描该账号历史提取，靠 mergeCycles 去重，天然支持回填
+  loadCycles() { return readJson(this.cyclesPath, {}); }
+
+  archiveCycles(accountId, windowKeys) {
+    if (!accountId || !Array.isArray(windowKeys) || !windowKeys.length) return;
+    const points = this.loadHistory()[accountId] || [];
+    if (points.length < 2) return;
+    const all = this.loadCycles();
+    const existing = all[accountId] || [];
+    const merged = mergeCycles(existing, extractCycles(points, windowKeys));
+    if (merged.length !== existing.length) {
+      all[accountId] = merged;
+      writeJson(this.cyclesPath, all);
+    }
+  }
+
+  getCycles(accountId) { return this.loadCycles()[accountId] || []; }
+
+  clearCycles() { writeJson(this.cyclesPath, {}); return true; }
+
+  // 删除账号后清理它的周期档案
+  pruneCyclesAccounts(accountIds) {
+    const valid = new Set(accountIds);
+    const all = this.loadCycles();
+    const next = Object.fromEntries(Object.entries(all).filter(([accountId]) => valid.has(accountId)));
+    writeJson(this.cyclesPath, next);
+  }
 
   // 删除账号后清理它的历史，同时按当前保留天数裁剪
   pruneHistoryAccounts(accountIds, retentionDays) {
