@@ -613,33 +613,42 @@ function WasteView({ account, wasteWindows }) {
   const empty = cycles !== null && windowCycles.length === 0;
   // 周期过多出现横向滚动时，默认停在最右侧（最新周期）
   useEffect(() => { const el = scrollRef.current; if (el) el.scrollLeft = el.scrollWidth; }, [shown.length, curWindow]);
+  // 周期展示起点：归档的 from 是首次观测时间，应用中途开始记录时会晚于真实起点；
+  // 自然到期的周期真实起点 = 结束时刻 − 周期长度，两者取较早者展示（提前重置的周期起点不可考，沿用观测值）
+  const displayFrom = (cycle) => {
+    if (cycle.kind !== 'natural') return cycle.from;
+    const derived = wasteCycleStart(cycle.end, curWindow);
+    return new Date(cycle.from).getTime() <= new Date(derived).getTime() ? cycle.from : derived;
+  };
   // 单行详情条内容：按周期形态（进行中 / 提前重置 / 失真 / 可靠）组织
   const renderDetail = (cycle) => {
-    const range = `${formatWasteDay(cycle.from)} → ${formatWasteDay(cycle.end)}`;
+    const range = `${formatWasteDay(displayFrom(cycle))} → ${formatWasteDay(cycle.end)}`;
     if (cycle.now) return <>
-      <span className="when">当前周期 {range}</span>
-      <span>已用 <b>{100 - cycle.remaining}%</b> · 若现在重置将浪费 <b>{cycle.remaining}%</b></span>
-      <span>最后记录于 <b>{formatChartStamp(account.lastChecked)}</b> · {formatReset(cycle.end)}重置</span>
+      <span className="when">{range}（进行中）</span>
+      <span>剩余 <b>{cycle.remaining}%</b> 未用</span>
+      <span>{formatResetCompact(cycle.end)} 后重置 · 记录 {formatChartStamp(account.lastChecked)}</span>
     </>;
     const observed = <span>记录于 <b>{formatChartStamp(cycle.observedAt)}</b></span>;
     const amount = Number.isFinite(cycle.amount) && Number.isFinite(cycle.limit) ? <span>剩 <b>{cycle.amount} / {cycle.limit}</b></span> : null;
     if (cycle.kind === 'early') return <><span className="when">{range} 周期</span><span className="warn">⚡ 厂商提前重置：剩余 {Math.round(cycle.remaining)}% 被清零</span>{observed}</>;
     if (!cycle.reliable) return <><span className="when">{range} 周期</span><span>浪费 <b>≤{Math.round(cycle.remaining)}%</b></span>{amount}{observed}<span className="warn">可能失真：距重置约 {formatWasteGap(cycle.gapMs)}</span></>;
-    return <><span className="when">{range} 周期</span><span>浪费 <b>{Math.round(cycle.remaining)}%</b> · 已用 {100 - Math.round(cycle.remaining)}%</span>{amount}{observed}</>;
+    return <><span className="when">{range} 周期</span><span>浪费 <b>{Math.round(cycle.remaining)}%</b>（剩余未用）</span>{amount}{observed}</>;
   };
   // 周期过多柱宽触底时横向拖动平移
   const startDrag = (event) => { const el = scrollRef.current; if (!el) return; dragRef.current = { x: event.clientX, left: el.scrollLeft }; el.setPointerCapture?.(event.pointerId); setDragging(true); };
   const moveDrag = (event) => { const drag = dragRef.current; if (!drag || !scrollRef.current) return; scrollRef.current.scrollLeft = drag.left - (event.clientX - drag.x); };
   const endDrag = () => { dragRef.current = null; setDragging(false); };
   const softColor = `color-mix(in srgb, ${CHART_COLORS[curWindow] || 'var(--violet)'} 30%, transparent)`;
-  const mid = windowCycles.length > 2 ? windowCycles[Math.floor(windowCycles.length / 2)] : null;
+  // 柱子少时每根都标完整区间；多了只标结束日期并按需抽稀，避免文字挤在一起
+  const compactLabels = shown.length <= 6;
+  const labelStep = Math.max(1, Math.ceil(shown.length / 12));
   return <div className="waste-view">
     <div className="waste-row">
       {wasteWindows.length >= 2
         ? <div className="seg-control">{wasteWindows.map((key) => <button type="button" key={key} className={curWindow === key ? 'active' : ''} onClick={() => setCurWindow(key)}>{windowCatalog[key]?.label || key} 额度</button>)}</div>
         : <span className="waste-label">{windowCatalog[curWindow]?.label || curWindow} 额度 · 浪费统计</span>}
       <span className="waste-stats">{windowCycles.length ? <>
-        <span>{windowCycles.length} 个周期</span><span>平均浪费 <b>{avg != null ? `${avg.toFixed(0)}%` : '—'}</b>（{good.length} 可靠）</span><span>累计 <b>{total.toFixed(1)}</b> 倍额度</span>
+        <span>{windowCycles.length} 个周期</span><span>平均浪费 <b>{avg != null ? `${avg.toFixed(0)}%` : '—'}</b>（{good.length} 可靠）</span>{good.length ? <span>累计 <b>{Math.round(total * 100) / 100}</b> 倍额度</span> : <span>累计 —</span>}
       </> : <><span>0 个周期</span><span>平均浪费 —</span><span>累计 —</span></>}</span>
     </div>
     <div className="chart-detail waste-detail">{hover ? renderDetail(hover) : <span className="chart-detail-hint">{empty ? '悬停查看当前周期详情' : '悬停查看周期详情 · 周期过多时可左右拖动'}</span>}</div>
@@ -647,19 +656,18 @@ function WasteView({ account, wasteWindows }) {
       <div className={`waste-plot ${curWindow === 'monthly' ? 'mo' : 'wk'}`}>
         {!empty && [25, 50, 75].map((value) => <div key={value} className="waste-gridline" style={{ bottom: `${value}%` }} />)}
         {!empty && avg != null && <div className="waste-avg" style={{ bottom: `${Math.min(100, avg)}%` }}><em>平均 {avg.toFixed(0)}%</em></div>}
-        {empty && <div className="waste-empty-hint"><span>还没有已完成的周期</span><span>第一个周期 <b>{nowCycle ? formatWasteDay(nowCycle.end) : '—'}</b> 重置后自动生成统计</span></div>}
+        {empty && !nowCycle && <div className="waste-empty-hint"><span>还没有已完成的周期</span><span>第一个周期重置后自动生成统计</span></div>}
         {shown.map((cycle, index) => {
           const classes = ['waste-col', cycle.now ? 'now' : cycle.kind === 'early' ? 'early' : !cycle.reliable ? 'bad' : '', hover === cycle ? 'hot' : ''].filter(Boolean).join(' ');
-          return <div key={cycle.now ? 'now' : `${cycle.end}-${index}`} className={classes} onMouseEnter={() => setHover(cycle)} onMouseLeave={() => setHover(null)}>
+          const tip = `${formatWasteDay(displayFrom(cycle))} → ${formatWasteDay(cycle.end)}${cycle.now ? '（进行中）' : ` · 浪费 ${Math.round(cycle.remaining)}%`}`;
+          return <div key={cycle.now ? 'now' : `${cycle.end}-${index}`} className={classes} title={tip} onMouseEnter={() => setHover(cycle)} onMouseLeave={() => setHover(null)}>
             <div className="waste-bar" style={{ height: `${Math.max(2, Math.min(100, cycle.remaining))}%` }} />
           </div>;
         })}
       </div>
-    </div>
-    <div className="waste-x-labels">
-      <span>{windowCycles.length ? `${formatWasteDay(windowCycles[0].from)} → ${formatWasteDay(windowCycles[0].end)}` : ''}</span>
-      <span>{mid ? `${formatWasteDay(mid.from)} → ${formatWasteDay(mid.end)}` : ''}</span>
-      <span>{nowCycle ? `${formatWasteDay(nowCycle.from)} → ${formatWasteDay(nowCycle.end)}（进行中）` : ''}</span>
+      <div className={`waste-x-labels ${curWindow === 'monthly' ? 'mo' : 'wk'}`}>
+        {shown.map((cycle, index) => <span key={cycle.now ? 'now' : `${cycle.end}-${index}`} className="waste-x-cell">{index % labelStep === 0 ? (compactLabels ? `${formatWasteDay(displayFrom(cycle))}→${formatWasteDay(cycle.end)}` : formatWasteDay(cycle.end)) : ''}</span>)}
+      </div>
     </div>
     <div className="chart-legend waste-legend">{empty
       ? <span><i className="swatch-now" />进行中</span>
@@ -713,13 +721,12 @@ function HistoryView({ account, provider, onBack }) {
     <section className="surface-section">
       <div className="history-head">
         <AccountIdentity account={account} provider={provider} />
-        <span className="section-count">{points ? `${points.length} 条记录` : '读取中…'}</span>
         {wasteWindows.length > 0 && <div className="seg-control">
           <button type="button" className={view === 'trend' ? 'active' : ''} onClick={() => setView('trend')}>趋势</button>
           <button type="button" className={view === 'waste' ? 'active' : ''} onClick={() => setView('waste')}>浪费</button>
         </div>}
       </div>
-      {showWaste ? <WasteView account={account} wasteWindows={wasteWindows} /> : <>
+      {showWaste ? <WasteView account={account} wasteWindows={wasteWindows} /> : <div className="trend-view">
         {points === null ? <div className="settings-empty chart-empty">正在读取历史记录…</div>
           : points.length === 0 ? <div className="settings-empty chart-empty">暂无历史数据，每次成功刷新额度后都会记录一条</div>
             : <UsageChart points={points} hiddenKeys={hiddenKeys} />}
@@ -727,10 +734,10 @@ function HistoryView({ account, provider, onBack }) {
           const sample = latestSamples[key];
           const hidden = hiddenKeys.includes(key);
           return <button type="button" key={key} className={hidden ? 'off' : ''} title={hidden ? '点击显示该折线' : '点击隐藏该折线'} onClick={() => toggleKey(key)}><i style={{ background: chartColor(key, index) }} />{windowCatalog[key]?.label || key}{sample && <em>{formatChartValue(sample, chartValue(sample))}</em>}</button>;
-        })}</div>}
-      </>}
+        })}<span className="legend-right">{points.length} 条记录</span></div>}
+      </div>}
     </section>
-    <div className="history-foot"><button type="button" className="outline-button" onClick={onBack}><ArrowLeft size={14} /> 返回</button><span className="history-foot-note">{wasteWindows.length > 0 ? '周期末记录永久归档，不受保留时长影响' : '该账号的额度类型不参与浪费统计'}</span></div>
+    <div className="history-foot"><button type="button" className="outline-button" onClick={onBack}><ArrowLeft size={14} /> 返回</button></div>
   </div>;
 }
 
@@ -999,28 +1006,11 @@ function AccountModalV2({ providers, onClose, onSave, onTestDraft, embedded = fa
   return <div className="modal-backdrop" onClick={onClose}><form className="modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">新账号</span><h2>连接一个账号</h2></div></div>{formFields}{actions(onClose)}</form></div>;
 }
 
-function CredentialModalV2({ account, provider, onClose, onSave, onTestDraft }) {
-  const [credential, setCredential] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState(null);
-  // 草稿连通性测试：输入框留空时由主进程回退到已保存的凭据
-  const runTest = async () => {
-    setTesting(true);
-    setTestResult(null);
-    try { setTestResult(await onTestDraft({ accountId: account.id, account, providerId: account.providerId, credential: credential.trim() })); }
-    finally { setTesting(false); }
-  };
-  const submit = async (event) => { event.preventDefault(); setSaving(true); try { await onSave({ account, credential: credential.trim() }); } finally { setSaving(false); } };
-  return <div className="modal-backdrop" onClick={onClose}><form className="modal compact-modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">Windows 安全凭据</span><h2>更新 {account.name}</h2></div></div><label className="field"><span>{'新 API Token'} <small>原凭据不会被读取或显示</small></span><input autoFocus type="password" value={credential} onChange={(event) => setCredential(event.target.value)} /></label><div className="adapter-note"><ShieldCheck size={15} /><span>保存后由 Windows DPAPI 加密。可先「测试」当前输入（留空则测试原凭据），通过后再保存。</span></div>{testResult && <div className={`draft-test-result ${testResult.ok ? 'ok' : 'fail'}`}><span>{testResult.ok ? '测试通过' : '测试失败'} · {testResult.message}</span></div>}<div className="modal-actions"><button type="button" className="outline-button" onClick={onClose}>取消</button><button type="button" className="outline-button" disabled={testing} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" disabled={saving}>{saving ? '正在保存' : '保存'}</button></div></form></div>;
-}
-
 function AccountEditModalV2({ account, provider, onClose, onSave, onTestDraft }) {
   const [name, setName] = useState(account.name || '');
   const [identity, setIdentity] = useState(account.identity || '');
   const [tags, setTags] = useState((account.tags || []).join(', '));
   const [endpoint, setEndpoint] = useState(account.endpoint || defaultEndpoint(provider));
-  const [credential, setCredential] = useState('');
   const [timeoutSeconds, setTimeoutSeconds] = useState(account.timeoutSeconds ? String(account.timeoutSeconds) : '');
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -1040,11 +1030,11 @@ function AccountEditModalV2({ account, provider, onClose, onSave, onTestDraft })
     setTestResult(null);
     try {
       const { publicVariables, secretVariables } = splitVariableValues(provider, variableValues);
-      setTestResult(await onTestDraft({ accountId: account.id, account: { ...account, endpoint: accountEndpoint, variables: publicVariables, windowKeys: selected, timeoutSeconds: clampAccountTimeout(timeoutSeconds) }, providerId: provider?.id, credential: credential.trim(), secretVariables }));
+      setTestResult(await onTestDraft({ accountId: account.id, account: { ...account, endpoint: accountEndpoint, variables: publicVariables, windowKeys: selected, timeoutSeconds: clampAccountTimeout(timeoutSeconds) }, providerId: provider?.id, credential: '', secretVariables }));
     } finally { setTesting(false); }
   };
-  const submit = async (event) => { event.preventDefault(); if (!name.trim() || (!cliProvider && !accountEndpoint) || !selected.length) return; const { publicVariables, secretVariables } = splitVariableValues(provider, variableValues); setSaving(true); try { await onSave({ account, name: name.trim(), identity: identity.trim(), tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean), endpoint: accountEndpoint, windowKeys: selected, credential: credential.trim(), timeoutSeconds: clampAccountTimeout(timeoutSeconds), variables: publicVariables, secretVariables }); } finally { setSaving(false); } };
-  return <div className="modal-backdrop" onClick={onClose}><form className="modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">账号配置</span><h2>编辑 {account.name}</h2></div></div><div className="form-grid"><label className="field"><span>账号名</span><input required value={name} onChange={(event) => setName(event.target.value)} /></label><label className="field"><span>标识</span><input value={identity} onChange={(event) => setIdentity(event.target.value)} /></label></div><label className="field"><span>标签 <small>用逗号分隔，可留空</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} /></label>{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <label className="field"><span>详细额度接口路径</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} /></label>}<div className="form-grid"><label className="field"><span>请求超时（秒）<small>5–120，默认 15；跨境或代理网络可调大</small></span><input type="number" min="5" max="120" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.target.value)} placeholder="15" /></label></div><div className="field"><span>额度窗口</span><div className="window-choice">{availableWindows.map((key) => <button type="button" key={key} className={`window-choice-item ${selected.includes(key) ? 'selected' : ''}`} onClick={() => toggle(key)}><span>{selected.includes(key) ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>)}</div></div>{account.cliAuthSource === 'snapshot' && <div className="adapter-note"><ShieldCheck size={15} /><span>{cliProvider && (provider?.requestConfig?.adapterMode === 'kimi' || provider?.adapter === 'kimi') ? '该账号使用扫码导入的 Kimi 订阅登录快照：令牌由本应用自动续期；若登录在官方侧失效，请重新扫码「导入订阅登录」。' : '该账号使用独立的登录快照：令牌由本应用自动续期，不依赖本机 CLI 当前激活的 profile；若登录在官方侧失效，请重新登录后再次「导入订阅登录」。'}</span></div>}{variableDefinitions.length > 0 && <div className="adapter-config account-variables"><span className="eyebrow">厂商变量</span><div className="form-grid">{variableDefinitions.map((item) => <label className="field" key={item.key}><span>{item.label || item.key}{item.secret && <small> 留空保留原值</small>}</span><input type={item.secret ? 'password' : 'text'} required={item.required && !item.secret} value={variableValues[item.key] ?? ''} onChange={(event) => setVariableValues((old) => ({ ...old, [item.key]: event.target.value }))} placeholder={item.secret ? '未修改' : (item.defaultValue || item.key)} /></label>)}</div></div>}{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <label className="field"><span>{'新 API Token'} <small>留空保留原凭据</small></span><input type="password" value={credential} onChange={(event) => setCredential(event.target.value)} /></label>}{testResult && <div className={`draft-test-result ${testResult.ok ? 'ok' : 'fail'}`}><span>{testResult.ok ? '测试通过' : '测试失败'} · {testResult.message}</span></div>}<div className="modal-actions"><button type="button" className="outline-button" onClick={onClose}>取消</button><button type="button" className="outline-button" disabled={testing || !name.trim() || (!cliProvider && !accountEndpoint) || !selected.length} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" disabled={saving || !selected.length}>{saving ? '正在保存' : '保存'}</button></div></form></div>;
+  const submit = async (event) => { event.preventDefault(); if (!name.trim() || (!cliProvider && !accountEndpoint) || !selected.length) return; const { publicVariables, secretVariables } = splitVariableValues(provider, variableValues); setSaving(true); try { await onSave({ account, name: name.trim(), identity: identity.trim(), tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean), endpoint: accountEndpoint, windowKeys: selected, timeoutSeconds: clampAccountTimeout(timeoutSeconds), variables: publicVariables, secretVariables }); } finally { setSaving(false); } };
+  return <div className="modal-backdrop" onClick={onClose}><form className="modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">账号配置</span><h2>编辑 {account.name}</h2></div></div><div className="form-grid"><label className="field"><span>账号名</span><input required value={name} onChange={(event) => setName(event.target.value)} /></label><label className="field"><span>标识</span><input value={identity} onChange={(event) => setIdentity(event.target.value)} /></label></div><label className="field"><span>标签 <small>用逗号分隔，可留空</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} /></label>{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <label className="field"><span>详细额度接口路径</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} /></label>}<div className="form-grid"><label className="field"><span>请求超时（秒）<small>5–120，默认 15；跨境或代理网络可调大</small></span><input type="number" min="5" max="120" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.target.value)} placeholder="15" /></label></div><div className="field"><span>额度窗口</span><div className="window-choice">{availableWindows.map((key) => <button type="button" key={key} className={`window-choice-item ${selected.includes(key) ? 'selected' : ''}`} onClick={() => toggle(key)}><span>{selected.includes(key) ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>)}</div></div>{account.cliAuthSource === 'snapshot' && <div className="adapter-note"><ShieldCheck size={15} /><span>{cliProvider && (provider?.requestConfig?.adapterMode === 'kimi' || provider?.adapter === 'kimi') ? '该账号使用扫码导入的 Kimi 订阅登录快照：令牌由本应用自动续期；若登录在官方侧失效，请重新扫码「导入订阅登录」。' : '该账号使用独立的登录快照：令牌由本应用自动续期，不依赖本机 CLI 当前激活的 profile；若登录在官方侧失效，请重新登录后再次「导入订阅登录」。'}</span></div>}{variableDefinitions.length > 0 && <div className="adapter-config account-variables"><span className="eyebrow">厂商变量</span><div className="form-grid">{variableDefinitions.map((item) => { const lockedKey = item.system && item.key === 'apiKey'; return <label className="field" key={item.key}><span>{item.label || item.key}{lockedKey ? <small> 创建后不可修改</small> : item.secret && <small> 留空保留原值</small>}</span><input type={item.secret ? 'password' : 'text'} required={item.required && !item.secret} disabled={lockedKey} value={lockedKey ? '' : (variableValues[item.key] ?? '')} onChange={(event) => setVariableValues((old) => ({ ...old, [item.key]: event.target.value }))} placeholder={lockedKey ? '如需更换请删除账号后重新添加' : item.secret ? '未修改' : (item.defaultValue || item.key)} /></label>; })}</div></div>}{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <div className="adapter-note"><KeyRound size={15} /><span>凭据创建后不可修改；如需更换 API Token，请删除该账号后重新添加。</span></div>}{testResult && <div className={`draft-test-result ${testResult.ok ? 'ok' : 'fail'}`}><span>{testResult.ok ? '测试通过' : '测试失败'} · {testResult.message}</span></div>}<div className="modal-actions"><button type="button" className="outline-button" onClick={onClose}>取消</button><button type="button" className="outline-button" disabled={testing || !name.trim() || (!cliProvider && !accountEndpoint) || !selected.length} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" disabled={saving || !selected.length}>{saving ? '正在保存' : '保存'}</button></div></form></div>;
 }
 
 function ProviderModalV2({ provider, onClose, onSave }) {
@@ -1688,20 +1678,11 @@ function App() {
     setAccounts(nextAccounts);
     setModal(null);
   };
-  const updateCredential = async ({ account, credential }) => {
-    const nextAccounts = accounts;
-    if (bridge) {
-      if (credential) await bridge.saveCredential(account.id, credential);
-      const state = serializableState({ accounts: nextAccounts });
-      lastSaved.current = JSON.stringify(state);
-      await bridge.saveState(state);
-    }
-    setModal(null);
-  };
-  const updateAccount = async ({ account, name, identity, tags, endpoint, windowKeys, credential, timeoutSeconds, variables, secretVariables }) => {
+  const updateAccount = async ({ account, name, identity, tags, endpoint, windowKeys, timeoutSeconds, variables, secretVariables }) => {
     const nextAccounts = accounts.map((item) => item.id === account.id ? { ...item, name, identity, tags, endpoint, variables: variables || {}, windowKeys, timeoutSeconds: clampAccountTimeout(timeoutSeconds) } : item);
     if (bridge) {
-      if (credential || Object.keys(secretVariables || {}).length) await bridge.saveCredential(account.id, credential, secretVariables || {});
+      // 凭据创建后不可修改：这里只保存可能更新的密钥变量，credential 传空表示保留原值
+      if (Object.keys(secretVariables || {}).length) await bridge.saveCredential(account.id, '', secretVariables || {});
       const state = serializableState({ accounts: nextAccounts });
       lastSaved.current = JSON.stringify(state);
       await bridge.saveState(state);
@@ -1755,7 +1736,6 @@ function App() {
       setToast({ id: Date.now(), ok: !result?.duplicate, message: result?.duplicate ? `该登录已收录在账号「${result.name}」中` : `已导入「${result.name}」，正在刷新额度` });
     }} />}
     {modal?.type === 'account-edit' && <AccountEditModalV2 account={modal.account} provider={providers.find((item) => item.id === modal.account.providerId)} onClose={() => setModal(null)} onSave={updateAccount} onTestDraft={testDraft} />}
-    {modal?.type === 'credential' && <CredentialModalV2 account={modal.account} provider={providers.find((item) => item.id === modal.account.providerId)} onClose={() => setModal(null)} onSave={updateCredential} onTestDraft={testDraft} />}
     {modal === 'provider' && <ProviderModalV2 onClose={() => setModal(null)} onSave={saveProvider} />}
     {modal?.type === 'provider-edit' && <ProviderModalV2 provider={modal.provider} onClose={() => setModal(null)} onSave={saveProvider} />}
     {modal === 'import-ccswitch' && <ImportCcswitchModal onClose={() => setModal(null)} onApplied={(result) => {

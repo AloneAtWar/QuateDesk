@@ -28,10 +28,14 @@ test('detectCycleClose：resetAt 变晚且旧重置时刻已过 → 自然到期
 });
 
 test('detectCycleClose：滑动窗口 resetAt 持续后移但永远在将来 → 不算周期结束', () => {
-  // 每次轮询 resetAt 都是「现在 + 7 天」，delta 很大但旧 resetAt 还没到
+  // 每次轮询 resetAt 都是「现在 + 7 天」，后移 5 分钟在抖动容差内，且旧 resetAt 还没到
   const prev = { remaining: 60, resetAt: new Date(T0 + 7 * D).toISOString() };
   const curr = { remaining: 55, resetAt: new Date(T0 + 7 * D + 5 * 60_000).toISOString() };
   assert.equal(detectCycleClose(prev, curr, T0 - 5 * 60_000, T0), null);
+  // 轮询间隔 10 分钟时后移步长也约 10 分钟（超出抖动容差），同样是滑动窗口而非提前重置
+  const prev2 = { remaining: 60, resetAt: new Date(T0 + 7 * D).toISOString() };
+  const curr2 = { remaining: 55, resetAt: new Date(T0 + 7 * D + 10 * 60_000).toISOString() };
+  assert.equal(detectCycleClose(prev2, curr2, T0 - 10 * 60_000, T0), null);
 });
 
 test('detectCycleClose：resetAt 变早 → 厂商提前重置', () => {
@@ -42,12 +46,39 @@ test('detectCycleClose：resetAt 变早 → 厂商提前重置', () => {
   assert.deepEqual(close, { kind: 'early', end: prevAt });
 });
 
-test('detectCycleClose：resetAt 没变但剩余率突升 ≥15pp → 清零兜底', () => {
+test('detectCycleClose：resetAt 为数值型毫秒时间戳（Z.ai 场景）→ 照常判定', () => {
+  // 9/9 17:57 剩 5%、resetAt=18:00:07；18:02 剩 99%、resetAt 变为下周：旧重置时刻已被跨过 → 自然到期
+  const prevAt = Date.parse('2026-09-09T09:57:25Z');
+  const currAt = Date.parse('2026-09-09T10:02:25Z');
+  const prev = { remaining: 5, resetAt: Date.parse('2026-09-09T10:00:07Z') };
+  const curr = { remaining: 99, resetAt: Date.parse('2026-09-16T10:00:07Z') };
+  assert.deepEqual(detectCycleClose(prev, curr, prevAt, currAt), { kind: 'natural', end: prev.resetAt });
+  // 秒级时间戳同样兼容
+  const prevSec = { remaining: 5, resetAt: Math.floor(prev.resetAt / 1000) };
+  const currSec = { remaining: 99, resetAt: Math.floor(curr.resetAt / 1000) };
+  assert.deepEqual(detectCycleClose(prevSec, currSec, prevAt, currAt).kind, 'natural');
+});
+
+test('detectCycleClose：resetAt 没变 → 同一周期，即使剩余率回升也不算重置', () => {
   const reset = '2026-09-08T02:00:00Z';
   const prevAt = T0 - 5 * 60_000;
-  assert.deepEqual(detectCycleClose({ remaining: 40, resetAt: reset }, { remaining: 100, resetAt: reset }, prevAt, T0), { kind: 'early', end: prevAt });
-  // 小幅回升（缓慢回血/统计抖动）不算
+  assert.equal(detectCycleClose({ remaining: 40, resetAt: reset }, { remaining: 100, resetAt: reset }, prevAt, T0), null);
   assert.equal(detectCycleClose({ remaining: 40, resetAt: reset }, { remaining: 50, resetAt: reset }, prevAt, T0), null);
+});
+
+test('detectCycleClose：resetAt 变晚但旧重置时刻还没到 → 提前重置（wlbclub 场景）', () => {
+  // 9/13 10:05 检测时说 9/14 重置，9/13 10:10 检测时变成 9/20 重置：两次轮询之间没有跨越 9/14
+  const prevAt = Date.parse('2026-09-13T02:05:00Z');
+  const currAt = Date.parse('2026-09-13T02:10:00Z');
+  const prev = { remaining: 51.6, resetAt: '2026-09-14T02:00:00Z' };
+  const curr = { remaining: 100, resetAt: '2026-09-20T02:00:00Z' };
+  assert.deepEqual(detectCycleClose(prev, curr, prevAt, currAt), { kind: 'early', end: prevAt });
+});
+
+test('detectCycleClose：resetAt 缺失 → 无法判定周期边界，不算结束', () => {
+  const prevAt = T0 - 5 * 60_000;
+  assert.equal(detectCycleClose({ remaining: 40, resetAt: '2026-09-08T02:00:00Z' }, { remaining: 100, resetAt: null }, prevAt, T0), null);
+  assert.equal(detectCycleClose({ remaining: 100, resetAt: null }, { remaining: 99, resetAt: '2026-09-08T02:00:00Z' }, prevAt, T0), null);
 });
 
 test('detectCycleClose：resetAt 抖动在容差内 → 同一周期', () => {
@@ -94,6 +125,39 @@ test('extractCycles：提前重置的周期标记为 early，新周期从观测�
   assert.equal(cycles[0].kind, 'early');
   assert.equal(cycles[0].reliable, false); // early 一律不计入统计
   assert.equal(cycles[0].remaining, 78);
+});
+
+test('extractCycles：resetAt 在重置瞬间短暂消失 → 桥接后仍能识别自然到期', () => {
+  // wlbclub 场景：01:57 时 resetAt=02:00（3 分钟后到期），02:02 resetAt 消失、剩余率回满，02:07 resetAt 变为下周
+  const t = (m) => new Date(T0 + m * 60_000).toISOString();
+  const point = (m, remaining, resetAt) => ({ at: t(m), windows: { weekly: { remaining, amount: remaining, limit: 100, unit: '%', resetAt } } });
+  const points = [
+    point(-10, 90, t(0)),
+    point(-5, 84.09, t(0)),
+    point(0, 100, null),          // 重置瞬间 resetAt 消失
+    point(5, 99.8, t(7 * 24 * 60)), // 恢复后 resetAt 指向下一周期
+  ];
+  const cycles = extractCycles(points, ['weekly']);
+  assert.equal(cycles.length, 1);
+  assert.equal(cycles[0].kind, 'natural');
+  assert.equal(cycles[0].end, t(0));
+  assert.equal(cycles[0].remaining, 84.09);
+});
+
+test('extractCycles：resetAt 消失后直到历史末尾都没恢复 → 消失本身视为周期结束', () => {
+  const t = (m) => new Date(T0 + m * 60_000).toISOString();
+  const point = (m, remaining, resetAt) => ({ at: t(m), windows: { weekly: { remaining, amount: remaining, limit: 100, unit: '%', resetAt } } });
+  // 旧重置时刻（T0）在消失前已被跨过 → 自然到期
+  const natural = extractCycles([point(-10, 90, t(0)), point(-5, 80, t(0)), point(5, 100, null), point(10, 100, null)], ['weekly']);
+  assert.equal(natural.length, 1);
+  assert.equal(natural[0].kind, 'natural');
+  assert.equal(natural[0].end, t(0));
+  assert.equal(natural[0].remaining, 80);
+  // 旧重置时刻还没到就消失了 → 提前重置，end ≈ 最后一次带 resetAt 的观测
+  const early = extractCycles([point(-10, 90, t(7 * 24 * 60)), point(-5, 80, t(7 * 24 * 60)), point(0, 100, null)], ['weekly']);
+  assert.equal(early.length, 1);
+  assert.equal(early[0].kind, 'early');
+  assert.equal(early[0].end, t(-5));
 });
 
 test('mergeCycles：按 窗口:类型:结束时间 去重，可安全重复扫描', () => {

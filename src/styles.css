@@ -582,7 +582,10 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .history-head .account-identity { flex: 1; min-width: 0; }
 .back-button { flex: 0 0 auto; width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-soft); background: var(--control); }
 .back-button:hover { color: var(--ink); border-color: var(--hover-border); }
-.usage-chart { position: relative; padding: 10px 8px 2px; }
+/* 趋势/浪费两个视图主体锁成同一固定高度，切换时整个卡片与头部切换按钮都不动；多余空间由图例行（趋势）或滚动区（浪费）吸收 */
+.trend-view { height: 271px; display: flex; flex-direction: column; }
+.trend-view .chart-legend { margin-top: auto; }
+.usage-chart { position: relative; padding: 10px 8px 2px; user-select: none; }
 .usage-chart svg { display: block; width: 100%; height: auto; }
 .chart-grid { stroke: var(--line-inner); stroke-width: 1; }
 .chart-y-label, .chart-x-label { fill: var(--faint); font-size: 9px; font-family: 'DM Mono', monospace; }
@@ -608,9 +611,8 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .account-title-line .tag-pill { flex: 0 4 auto; min-width: 14px; overflow: hidden; text-overflow: ellipsis; }
 /* 行式/周期视图的账号行可点击进入趋势图 */
 .account-window-row.clickable, .priority-row.clickable { cursor: pointer; }
-/* 历史视图底部返回（在卡片外，左对齐），右侧一行小字说明 */
+/* 历史视图底部返回（在卡片外，左对齐） */
 .history-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 2px; }
-.history-foot-note { font-size: 10px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .usage-chart.zoomed svg { cursor: grab; }
 .usage-chart.zoomed svg:active { cursor: grabbing; }
 .chart-tools { display: flex; align-items: center; justify-content: space-between; padding: 0 12px 4px; min-height: 18px; }
@@ -627,7 +629,9 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .seg-control button { border: 0; padding: 3px 10px; border-radius: 5px; color: var(--muted); background: transparent; font-size: 10px; }
 .seg-control button.active { color: var(--ink); background: var(--surface-3); }
 .seg-control button:hover:not(.active) { color: var(--ink-soft); }
-.waste-view { padding: 10px 8px 2px; }
+.waste-view { height: 271px; display: flex; flex-direction: column; padding: 10px 8px 2px; }
+.waste-view > * { flex: 0 0 auto; }
+.waste-view > .waste-scroll { flex: 1 1 auto; }
 .waste-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 24px; margin: 0 6px 6px; }
 .waste-label { font-size: 11px; font-weight: 700; color: var(--muted); white-space: nowrap; }
 .waste-stats { display: inline-flex; align-items: center; min-width: 0; font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; }
@@ -639,11 +643,11 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .waste-detail b { color: var(--ink); font-weight: 700; }
 .waste-detail .when { color: var(--ink); font-weight: 600; }
 .waste-detail .warn { color: var(--amber); }
-.waste-scroll { height: 148px; margin: 0 6px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; cursor: grab; border: 1px solid var(--line-inner); border-radius: 8px; background: var(--surface-2); }
+.waste-scroll { flex: 1 1 auto; min-height: 0; margin: 0 6px; display: flex; flex-direction: column; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; cursor: grab; border: 1px solid var(--line-inner); border-radius: 8px; background: var(--surface-2); user-select: none; }
 .waste-scroll::-webkit-scrollbar { display: none; }
 .waste-scroll.dragging { cursor: grabbing; }
 /* plot 高度 = 柱区（去掉顶部 10px 留白），网格线/平均线的 bottom 百分比都相对柱区 */
-.waste-plot { position: relative; height: calc(100% - 10px); margin-top: 10px; min-width: 100%; display: flex; align-items: flex-end; gap: 1px; padding: 0 10px; border-bottom: 1px solid var(--line-inner); }
+.waste-plot { position: relative; flex: 1 1 auto; min-height: 0; margin-top: 10px; min-width: 100%; display: flex; align-items: flex-end; gap: 1px; padding: 0 10px; border-bottom: 1px solid var(--line-inner); }
 .waste-gridline { position: absolute; left: 10px; right: 10px; height: 1px; background: var(--line-inner); pointer-events: none; }
 .waste-col { flex: 1 0 8px; min-width: 8px; height: 100%; align-self: flex-end; display: flex; align-items: flex-end; }
 .waste-plot.mo .waste-col { flex: 1 0 26px; min-width: 26px; }
@@ -663,9 +667,10 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .waste-avg em { position: absolute; left: 0; top: -9px; padding: 0 4px; color: var(--amber); background: var(--surface-2); font-size: 9px; font-style: normal; }
 .waste-empty-hint { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: var(--muted); font-size: 11px; text-align: center; pointer-events: none; }
 .waste-empty-hint b { color: var(--ink); }
-.waste-x-labels { display: flex; justify-content: space-between; gap: 8px; margin: 5px 10px 0; color: var(--faint); font-size: 9px; }
-.waste-x-labels span { max-width: 40%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.waste-x-labels { display: flex; flex: 0 0 auto; gap: 1px; min-width: 100%; padding: 3px 10px 2px; }
+.waste-x-cell { flex: 1 0 8px; min-width: 8px; overflow: hidden; white-space: nowrap; text-align: center; color: var(--faint); font-size: 8px; line-height: 11px; }
+.waste-x-labels.mo .waste-x-cell { flex-basis: 26px; min-width: 26px; }
 .waste-legend i { width: 11px; height: 8px; border-radius: 2px; }
 .waste-legend i.swatch-early { background: color-mix(in srgb, var(--amber) 16%, transparent); border: 1px dotted var(--amber); }
 .waste-legend i.swatch-now { background: color-mix(in srgb, var(--cyan) 15%, transparent); border: 1px dashed var(--cyan); }
-.waste-legend .legend-right { margin-left: auto; color: var(--faint); }
+.chart-legend .legend-right { margin-left: auto; color: var(--faint); }
