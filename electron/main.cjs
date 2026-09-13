@@ -348,12 +348,14 @@ const migrateProvider = (provider) => {
 
 const migrateAccount = (account) => {
   if (!account) return account;
-  const { baseUrl, ...rest } = account;
+  // 停用字段规范化：只有显式 disabled:true 才算停用（脏值一律视为启用中），停用时间缺失补 null
+  const { baseUrl, disabled, disabledAt, ...rest } = account;
+  const normalized = disabled === true ? { ...rest, disabled: true, disabledAt: disabledAt || null } : rest;
   // wlbclub 上线 1 天限额：已显式选择过窗口的 wlb 账号自动补上 daily；没选过窗口的账号不做过滤，本来就会显示
-  if (rest.providerId === 'wlb' && Array.isArray(rest.windowKeys) && rest.windowKeys.length && !rest.windowKeys.includes('daily')) {
-    return { ...rest, windowKeys: [...rest.windowKeys, 'daily'] };
+  if (normalized.providerId === 'wlb' && Array.isArray(normalized.windowKeys) && normalized.windowKeys.length && !normalized.windowKeys.includes('daily')) {
+    return { ...normalized, windowKeys: [...normalized.windowKeys, 'daily'] };
   }
-  return rest;
+  return normalized;
 };
 
 // XiaoMi MiMo 从未推出适配接口，已从系统厂商中移除；历史 state 里残留的 mimo 厂商与账号在迁移时一并丢弃
@@ -382,7 +384,11 @@ const notifyWaste = (state, account, provider) => {
     const reminderKey = `${account.id}:${item.key}:${item.resetAt}:${rule.id}`;
     if (sentReminders.has(reminderKey)) continue;
     sentReminders.add(reminderKey);
-    new Notification({ title: rule.label || '额度即将刷新', body: `${provider.name} · ${account.name} · ${Math.round(item.remaining)}% · ${Math.ceil(remainingMs / 60_000)} 分钟后刷新。` }).show();
+    // 点击通知呼起主窗口。Windows Toast 的点击激活依赖开始菜单快捷方式上登记的
+    // AppUserModelID（NSIS 安装自带；便携版/开发模式没有该快捷方式，点击不响应属系统限制）
+    const notification = new Notification({ title: rule.label || '额度即将刷新', body: `${provider.name} · ${account.name} · ${Math.round(item.remaining)}% · ${Math.ceil(remainingMs / 60_000)} 分钟后刷新。` });
+    notification.on('click', () => { mainWindow?.show(); mainWindow?.focus(); });
+    notification.show();
   }
 };
 
@@ -394,6 +400,9 @@ async function pollState(accountIds = null) {
   const ids = accountIds ? new Set(accountIds) : null;
   const nextAccounts = [];
   for (const account of current.accounts || []) {
+    // 定时巡检跳过停用账号（数据冻结、不产生新历史点与提醒）；点名轮询不受限，
+    // 「测试连接」与启用后的立即补拉都靠它验证停用中的账号
+    if (account.disabled && !ids) { nextAccounts.push(account); continue; }
     if (ids && !ids.has(account.id)) { nextAccounts.push(account); continue; }
     const provider = (current.providers || []).find((item) => item.id === account.providerId);
     if (!provider) {
