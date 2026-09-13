@@ -55,7 +55,8 @@
       "artifactName": "Quota-Desk-Setup-${version}-${arch}.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "shortcutName": "Quota Desk"
+      "shortcutName": "Quota Desk",
+      "createDesktopShortcut": "always"
     },
     "mac": {
       "target": [
