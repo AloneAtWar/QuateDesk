@@ -428,16 +428,44 @@ const formatPointResetShort = (resetAt, pointAt) => {
   if (!resetAt) return '';
   const minutes = Math.round((new Date(resetAt).getTime() - new Date(pointAt).getTime()) / 60000);
   if (minutes <= 0) return '';
-  if (minutes < 60) return `${minutes} 分钟后重置`;
-  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分后重置`;
-  return `${Math.floor(minutes / (24 * 60))} 天后重置`;
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hours < 24) return mins ? `${hours}h${mins}m` : `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
 };
 
-function UsageChart({ points, hiddenKeys = [] }) {
+const DAY_MS = 86_400_000;
+const RANGE_PRESETS = [
+  { id: 'all', label: '全部', ms: null },
+  { id: '1d', label: '1天', ms: DAY_MS },
+  { id: '7d', label: '7天', ms: 7 * DAY_MS },
+  { id: '1m', label: '1个月', ms: 30 * DAY_MS },
+];
+const presetView = (rangeMs, fullStart, fullEnd) => {
+  const fullSpan = Math.max(1, fullEnd - fullStart);
+  if (!rangeMs || fullEnd <= fullStart) return null;
+  const span = Math.min(rangeMs, fullSpan);
+  if (span >= fullSpan - 1000) return null;
+  return { start: fullEnd - span, end: fullEnd };
+};
+const rangeAvailable = (rangeMs, fullStart, fullEnd) => rangeMs == null || fullEnd - fullStart >= rangeMs - 60_000;
+const matchRangeKey = (next, fullStart, fullEnd) => {
+  const fullSpan = Math.max(1, fullEnd - fullStart);
+  if (!next || next.end - next.start >= fullSpan - 60_000) return 'all';
+  const span = next.end - next.start;
+  for (const preset of RANGE_PRESETS) {
+    if (preset.ms == null || !rangeAvailable(preset.ms, fullStart, fullEnd)) continue;
+    if (Math.abs(span - preset.ms) <= Math.max(90_000, preset.ms * 0.03)) return preset.id;
+  }
+  return null;
+};
+
+function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange }) {
   const [hover, setHover] = useState(null);
   // 断线区间（无数据时段）的悬停提示：{ from, to } 为区间前后两个数据点的时间
   const [hoverGap, setHoverGap] = useState(null);
-  // 时间轴缩放：null 表示显示全程；滚轮以光标位置为中心缩放，放大后可拖动平移
+  // 自定义窗口：滚轮 / 平移后不再属于任一预设时使用；选中预设时忽略此值
   const [view, setView] = useState(null);
   const svgRef = useRef(null);
   const dragRef = useRef(null);
@@ -463,6 +491,16 @@ function UsageChart({ points, hiddenKeys = [] }) {
       breakGapMs: Math.max(medianGap * 2, 10 * 60_000),
     };
   }, [points]);
+  const rangeMs = RANGE_PRESETS.find((item) => item.id === rangeKey)?.ms;
+  // 有自定义窗口（滚轮 / 平移）时用它；否则按当前档位贴到最新一端
+  const shown = view ?? presetView(rangeMs, fullStart, fullEnd);
+  const applyView = (next) => {
+    setView(next);
+    onRangeKeyChange?.(matchRangeKey(next, fullStart, fullEnd));
+  };
+  useEffect(() => {
+    if (rangeMs != null && !rangeAvailable(rangeMs, fullStart, fullEnd)) onRangeKeyChange?.('all');
+  }, [rangeMs, fullStart, fullEnd]);
   // React 根节点上的 wheel 监听是 passive 的，必须自己绑非 passive 监听才能 preventDefault
   useEffect(() => {
     const el = svgRef.current;
@@ -471,28 +509,26 @@ function UsageChart({ points, hiddenKeys = [] }) {
       event.preventDefault();
       const rect = el.getBoundingClientRect();
       const ratio = Math.min(1, Math.max(0, (((event.clientX - rect.left) / rect.width) * W - PAD.l) / innerW));
-      setView((prev) => {
-        const fullSpan = Math.max(1, fullEnd - fullStart);
-        const cur = prev || { start: fullStart, end: fullEnd };
-        const curSpan = cur.end - cur.start;
-        const factor = event.deltaY > 0 ? 1.3 : 1 / 1.3;
-        const minSpan = Math.min(fullSpan, Math.max(10 * 60_000, fullSpan / 50));
-        const nextSpan = Math.min(fullSpan, Math.max(minSpan, curSpan * factor));
-        if (Math.abs(nextSpan - curSpan) < 1000) return prev;
-        const anchor = cur.start + curSpan * ratio;
-        const nextStart = Math.min(Math.max(fullStart, anchor - nextSpan * ratio), fullEnd - nextSpan);
-        return nextSpan >= fullSpan ? null : { start: nextStart, end: nextStart + nextSpan };
-      });
+      const fullSpan = Math.max(1, fullEnd - fullStart);
+      const cur = shown || { start: fullStart, end: fullEnd };
+      const curSpan = cur.end - cur.start;
+      const factor = event.deltaY > 0 ? 1.3 : 1 / 1.3;
+      const minSpan = Math.min(fullSpan, Math.max(10 * 60_000, fullSpan / 50));
+      const nextSpan = Math.min(fullSpan, Math.max(minSpan, curSpan * factor));
+      if (Math.abs(nextSpan - curSpan) < 1000) return;
+      const anchor = cur.start + curSpan * ratio;
+      const nextStart = Math.min(Math.max(fullStart, anchor - nextSpan * ratio), fullEnd - nextSpan);
+      applyView(nextSpan >= fullSpan ? null : { start: nextStart, end: nextStart + nextSpan });
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  }, [fullStart, fullEnd, samples.length]);
+  }, [fullStart, fullEnd, samples.length, shown?.start, shown?.end]);
   // 图例开关：隐藏的线不参与绘制；兜底不允许全部隐藏
   const seriesKeys = allKeys.filter((key) => !hiddenKeys.includes(key));
   const visibleKeys = seriesKeys.length ? seriesKeys : allKeys;
   if (!allKeys.length || !samples.length) return <div className="settings-empty chart-empty">历史记录里没有可绘制的额度窗口</div>;
-  const start = view?.start ?? fullStart;
-  const end = view?.end ?? fullEnd;
+  const start = shown?.start ?? fullStart;
+  const end = shown?.end ?? fullEnd;
   const span = Math.max(1, end - start);
   const ranged = samples.filter((point) => { const at = new Date(point.at).getTime(); return at >= start && at <= end; });
   const drawn = ranged.length ? ranged : samples;
@@ -549,8 +585,9 @@ function UsageChart({ points, hiddenKeys = [] }) {
     setHover(best); setHoverGap(null);
   };
   const startPan = (event) => {
-    if (!view) return;
-    dragRef.current = { x: event.clientX, start: view.start, end: view.end };
+    const cur = shown;
+    if (!cur) return;
+    dragRef.current = { x: event.clientX, start: cur.start, end: cur.end };
     event.currentTarget.setPointerCapture?.(event.pointerId);
   };
   const movePan = (event) => {
@@ -561,22 +598,35 @@ function UsageChart({ points, hiddenKeys = [] }) {
     const viewSpan = drag.end - drag.start;
     const shift = ((event.clientX - drag.x) / rect.width) * (W / innerW) * viewSpan;
     const nextStart = Math.min(Math.max(fullStart, drag.start - shift), fullEnd - viewSpan);
-    setView({ start: nextStart, end: nextStart + viewSpan });
+    applyView({ start: nextStart, end: nextStart + viewSpan });
     setHover(null);
   };
   const endPan = () => { dragRef.current = null; };
   const hoverPoint = hover == null ? null : drawn[hover];
   const hoverX = hoverPoint ? toX(new Date(hoverPoint.at).getTime()) : 0;
-  return <div className={`usage-chart ${view ? 'zoomed' : ''}`}>
-    <div className="chart-detail">{hoverPoint ? <>
-      <b>{formatChartStamp(hoverPoint.at)}</b>
-      {visibleKeys.map((key, index) => {
-        const sample = hoverPoint.windows?.[key];
-        if (!sample) return null;
-        const reset = formatPointResetShort(sample.resetAt, hoverPoint.at);
-        return <span className="chart-detail-item" key={key}><i style={{ background: chartColor(key, index) }} />{windowCatalog[key]?.label || key}<b>{formatChartDetail(sample)}</b>{reset && <small>{reset}</small>}</span>;
-      })}
-    </> : hoverGap ? <span className="chart-detail-hint">{formatChartStamp(hoverGap.from)} – {formatChartStamp(hoverGap.to)} · 该时段暂无数据</span> : <span className="chart-detail-hint">悬停查看该点的数值与重置时间</span>}</div>
+  const pickRange = (preset) => {
+    if (!rangeAvailable(preset.ms, fullStart, fullEnd)) return;
+    setView(presetView(preset.ms, fullStart, fullEnd));
+    onRangeKeyChange?.(preset.id);
+  };
+  return <div className={`usage-chart ${shown ? 'zoomed' : ''}`}>
+    <div className="chart-detail">
+      <div className="chart-detail-main">{hoverPoint ? <>
+        <b>{formatChartStamp(hoverPoint.at)}</b>
+        {visibleKeys.map((key, index) => {
+          const sample = hoverPoint.windows?.[key];
+          if (!sample) return null;
+          const reset = formatPointResetShort(sample.resetAt, hoverPoint.at);
+          return <span className="chart-detail-item" key={key} title={[windowCatalog[key]?.label || key, formatChartDetail(sample), reset].filter(Boolean).join(' ')}><i style={{ background: chartColor(key, index) }} />{windowCatalog[key]?.short || key}<b>{formatChartDetail(sample)}</b>{reset && <small>{reset}</small>}</span>;
+        })}
+      </> : hoverGap ? <span className="chart-detail-hint">{formatChartStamp(hoverGap.from)} – {formatChartStamp(hoverGap.to)} · 该时段暂无数据</span> : <span className="chart-detail-hint">悬停查看该点的数值与重置时间</span>}</div>
+      <div className="range-control" role="group" aria-label="趋势时间范围" onPointerDown={(event) => event.stopPropagation()}>
+        {RANGE_PRESETS.map((preset) => {
+          const available = rangeAvailable(preset.ms, fullStart, fullEnd);
+          return <button type="button" key={preset.id} className={rangeKey === preset.id ? 'active' : ''} disabled={!available} title={available ? preset.label : `历史不足 ${preset.label}`} onClick={() => pickRange(preset)}>{preset.label}</button>;
+        })}
+      </div>
+    </div>
     <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} onPointerDown={startPan} onPointerMove={movePan} onPointerUp={endPan} onPointerCancel={endPan} onMouseLeave={() => { setHover(null); setHoverGap(null); endPan(); }}>
       {yTicks.map((value) => <g key={value}><line x1={PAD.l} x2={W - PAD.r} y1={toY(value)} y2={toY(value)} className="chart-grid" /><text x={PAD.l - 6} y={toY(value) + 3} className="chart-y-label">{formatYTick(value)}</text></g>)}
       {xTicks.map((at) => <text key={Math.round(at)} x={Math.min(Math.max(toX(at), PAD.l + 16), W - PAD.r - 16)} y={H - 7} className="chart-x-label">{formatTick(at)}</text>)}
@@ -594,7 +644,7 @@ function UsageChart({ points, hiddenKeys = [] }) {
         })}
       </g>}
     </svg>
-    {samples.length > 1 && <div className="chart-tools"><span className="chart-hint">滚轮缩放 · 放大后拖动平移</span>{view && <button type="button" className="chart-reset" onClick={() => setView(null)}>重置缩放</button>}</div>}
+    {samples.length > 1 && <div className="chart-tools"><span className="chart-hint">滚轮缩放 · 放大后拖动平移</span></div>}
   </div>;
 }
 
@@ -722,6 +772,7 @@ function HistoryView({ account, provider, onBack }) {
   const [points, setPoints] = useState(null);
   const [hiddenKeys, setHiddenKeys] = useState([]);
   const [view, setView] = useState('trend');
+  const [rangeKey, setRangeKey] = useState('1d');
   // 该厂商参与浪费统计的周期窗口；为空时不提供「浪费」入口
   // 再按账号实际追踪的窗口过滤：用户选过窗口用 windowKeys，否则用接口实时返回的窗口；
   // 账号还没有任何窗口数据时不过滤（避免轮询失败期间入口闪烁）
@@ -767,7 +818,7 @@ function HistoryView({ account, provider, onBack }) {
       {showWaste ? <WasteView account={account} wasteWindows={wasteWindows} /> : <div className="trend-view">
         {points === null ? <div className="settings-empty chart-empty">正在读取历史记录…</div>
           : points.length === 0 ? <div className="settings-empty chart-empty">暂无历史数据，每次成功刷新额度后都会记录一条</div>
-            : <UsageChart points={points} hiddenKeys={hiddenKeys} />}
+            : <UsageChart points={points} hiddenKeys={hiddenKeys} rangeKey={rangeKey} onRangeKeyChange={setRangeKey} />}
         {legendKeys.length > 0 && <div className="chart-legend">{legendKeys.map((key, index) => {
           const sample = latestSamples[key];
           const hidden = hiddenKeys.includes(key);
