@@ -727,6 +727,8 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .provider-stat.cost .stat-icon { color: var(--coral); background: var(--coral-bg); }
 .provider-stat.tokens .stat-icon { color: var(--sky); background: color-mix(in srgb, var(--sky) 15%, transparent); }
 .provider-stat.days .stat-icon { color: var(--green-deep); background: var(--green-bg); }
+.provider-stat.plan .stat-icon { color: var(--violet, #7c5cfc); background: color-mix(in srgb, var(--violet, #7c5cfc) 15%, transparent); }
+.provider-stat.streak .stat-icon { color: var(--coral); background: var(--coral-bg); }
 /* 热力图标题行：标题在左，「较少→较多」图例在右 */
 .provider-heatmap-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 5px 1px 0; }
 .provider-heatmap-title { color: var(--ink-soft); font-size: 10px; font-weight: 700; }

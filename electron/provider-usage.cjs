@@ -908,6 +908,370 @@ const fetchDeepSeekUsage = async (userToken, fetcher, options = {}) => {
   };
 };
 
+// ── 通用 JSON 请求（供 DeepSeek 之外的厂商复用）──────────────────────────────
+// 与 requestJson 同一套超时/取消语义，但主机、请求头与业务错误判定由调用方给出。
+const requestProviderJson = async ({
+  label, fetcher, url, headers = {}, credentials = undefined, timeoutMs, signal = null,
+  authMessage, isBusinessAuthError = null, businessError = null,
+}) => {
+  throwIfAborted(signal);
+  const providerAbortError = () => new ProviderUsageError(`${label}请求已取消`, 'ABORTED');
+  const controller = new AbortController();
+  let timedOut = false;
+  let rejectStop;
+  const stopPromise = new Promise((_, reject) => { rejectStop = reject; });
+  const handleExternalAbort = () => { controller.abort(signal?.reason); rejectStop(providerAbortError()); };
+  if (signal) {
+    signal.addEventListener('abort', handleExternalAbort, { once: true });
+    if (signal.aborted) handleExternalAbort();
+  }
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+    rejectStop(new ProviderUsageError(`${label}请求超时`, 'TIMEOUT'));
+  }, timeoutMs);
+  const awaitWithStop = (promise) => Promise.race([Promise.resolve(promise), stopPromise]);
+  const throwIfStopped = () => {
+    if (signal?.aborted) throw providerAbortError();
+    if (timedOut) throw new ProviderUsageError(`${label}请求超时`, 'TIMEOUT');
+  };
+  try {
+    let response;
+    try {
+      response = await awaitWithStop(fetcher(url, {
+        method: 'GET',
+        cache: 'no-store',
+        redirect: 'error',
+        ...(credentials ? { credentials } : {}),
+        headers: { Accept: 'application/json', ...headers },
+        signal: controller.signal,
+      }));
+      throwIfStopped();
+    } catch (error) {
+      if (signal?.aborted || error?.code === 'ABORTED') throw providerAbortError();
+      if (error instanceof ProviderUsageError && error.code === 'TIMEOUT') throw error;
+      throw new ProviderUsageError(
+        timedOut ? `${label}请求超时` : `无法连接${label}`,
+        timedOut ? 'TIMEOUT' : 'NETWORK_ERROR',
+      );
+    }
+    throwIfStopped();
+    const status = Number(response?.status);
+    let payload = null;
+    if (typeof response?.json === 'function') {
+      try {
+        payload = await awaitWithStop(response.json());
+        throwIfStopped();
+      } catch (error) {
+        if (signal?.aborted || error?.code === 'ABORTED') throw providerAbortError();
+        if (error instanceof ProviderUsageError) throw error;
+        payload = null;
+      }
+    }
+    if (status === 401 || status === 403 || (payload && isBusinessAuthError?.(payload))) {
+      throw new ProviderUsageError(authMessage || `${label}登录已失效，请重新连接`, 'AUTH_EXPIRED', Number.isFinite(status) ? status : null);
+    }
+    const ok = response?.ok === true || (response?.ok === undefined && status >= 200 && status < 300);
+    if (!ok) throw new ProviderUsageError(`${label}请求失败`, 'HTTP_ERROR', Number.isFinite(status) ? status : null);
+    if (payload === null || typeof payload !== 'object') {
+      throw new ProviderUsageError(`${label}响应不是有效 JSON`, 'SCHEMA_INCOMPATIBLE');
+    }
+    if (businessError) {
+      const message = businessError(payload);
+      if (message) throw new ProviderUsageError(message, 'PLATFORM_ERROR', Number.isFinite(status) ? status : null);
+    }
+    return payload;
+  } finally {
+    clearTimeout(timer);
+    if (signal) signal.removeEventListener('abort', handleExternalAbort);
+  }
+};
+
+// 厂商通用的时区参数校验（各厂商默认时区不同，由调用方传入回退值）
+const normalizeUsageTimezoneOffset = (value, fallback, label = '厂商用量') => {
+  if (value === undefined || value === null) return fallback;
+  if (!Number.isInteger(value) || value < -43_200 || value > 50_400 || value % 900 !== 0) {
+    throw new ProviderUsageError(`${label}时区参数无效`, 'INVALID_ARGUMENT');
+  }
+  return value;
+};
+
+const usageTimeoutMs = (value) => Number.isFinite(Number(value))
+  ? Math.min(120_000, Math.max(1_000, Math.round(Number(value))))
+  : DEFAULT_TIMEOUT_MS;
+
+// ── Z.ai（智谱开放平台）逐日模型用量 ────────────────────────────────────────
+// Z.ai 用量统计直接复用账号已保存的 API Key（与额度巡检同一份凭据），不需要
+// 网页登录。数据来自 model-usage 接口：按月分块拉取每日各模型的 Token 消耗；
+// x_time 标签格式不稳定（YYYY-MM-DD / MM-DD / 时间戳都有可能出现），解析失败
+// 时按块内序号对齐日期，保证热力图不错位。接口语义参考 CodexBar 的 zai 插件。
+const ZAI_DEFAULT_ORIGIN = 'https://open.bigmodel.cn';
+const ZAI_MODEL_USAGE_PATH = '/api/monitor/usage/model-usage';
+const ZAI_QUOTA_LIMIT_PATH = '/api/monitor/usage/quota/limit';
+const ZAI_TIMEZONE_OFFSET_SEC = 8 * 60 * 60;
+const ZAI_LABEL = 'Z.ai 平台';
+const ZAI_AUTH_EXPIRED_MESSAGE = 'Z.ai API Key 无效或已过期，请在账号设置更新凭据后重新连接';
+
+const normalizeZaiApiKey = (raw) => {
+  const text = String(raw || '').trim().replace(/^Bearer\s+/i, '').trim();
+  if (!text || text.length > 4096 || /\s/.test(text)) return '';
+  return text;
+};
+
+// 用量接口只发往 open.bigmodel.cn / api.z.ai 系主机；自定义中转端点一律回落
+// 默认域名，避免把 API Key 泄露给第三方主机。
+const normalizeZaiOrigin = (raw) => {
+  try {
+    const url = new URL(String(raw || '').trim());
+    const host = url.hostname.toLowerCase();
+    if (url.protocol === 'https:' && !url.username && !url.password && (/(^|\.)bigmodel\.cn$/.test(host) || /(^|\.)z\.ai$/.test(host))) return url.origin;
+  } catch {}
+  return ZAI_DEFAULT_ORIGIN;
+};
+
+const zaiGetJson = (fetcher, origin, path, query, apiKey, timeoutMs, signal) => requestProviderJson({
+  label: ZAI_LABEL,
+  fetcher,
+  url: `${origin}${path}${query ? `?${query}` : ''}`,
+  // 与额度巡检的内置脚本一致：智谱网关在 Authorization 头里直接收 API Key（不加 Bearer）
+  headers: { Authorization: apiKey, 'Accept-Language': 'zh-CN,zh' },
+  timeoutMs,
+  signal,
+  authMessage: ZAI_AUTH_EXPIRED_MESSAGE,
+  isBusinessAuthError: (payload) => Number(payload?.code) === 1001
+    || /authorization|身份验证|鉴权|登录|凭证|凭据/i.test(String(payload?.msg || '')),
+  businessError: (payload) => (payload?.success === false || (payload?.code !== undefined && Number(payload?.code) !== 200)
+    ? `Z.ai 平台返回错误：${String(payload?.msg || '未知错误').slice(0, 120)}`
+    : null),
+});
+
+// 无用量时 data 可能为空对象或缺省，按空序列处理；结构不符才视为不兼容
+const zaiModelUsageData = (payload) => {
+  const data = objectOf(payload?.data);
+  if (!data || (!own(data, 'x_time') && !own(data, 'modelDataList'))) return { x_time: [], modelDataList: [] };
+  const labels = Array.isArray(data.x_time) ? data.x_time : null;
+  if (!labels) return null;
+  const models = Array.isArray(data.modelDataList) ? data.modelDataList : [];
+  if (!models.every((model) => objectOf(model) && (model.tokensUsage === undefined || Array.isArray(model.tokensUsage)))) return null;
+  return { x_time: labels, modelDataList: models };
+};
+
+const zaiChunkDays = (chunk) => Math.round((parseDate(chunk.endDate, 'date').ordinal - parseDate(chunk.startDate, 'date').ordinal) / DAY_MS) + 1;
+
+const zaiLabelDate = (label, chunk, index, timezoneOffsetSec) => {
+  const text = String(label ?? '').trim();
+  const full = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(text);
+  if (full) return strictResponseDate(`${full[1]}-${full[2].padStart(2, '0')}-${full[3].padStart(2, '0')}`);
+  if (/^\d{9,13}$/.test(text)) {
+    const date = dateOfEpoch(text, timezoneOffsetSec);
+    if (date) return date;
+  }
+  const monthDay = /^(\d{1,2})-(\d{1,2})(?!\d)/.exec(text);
+  if (monthDay) {
+    const years = [...new Set([Number(chunk.endDate.slice(0, 4)), Number(chunk.startDate.slice(0, 4))])];
+    for (const year of years) {
+      const date = `${year}-${monthDay[1].padStart(2, '0')}-${monthDay[2].padStart(2, '0')}`;
+      if (date >= chunk.startDate && date <= chunk.endDate) return date;
+    }
+  }
+  // 标签无法解析时按块内序号对齐（按日分桶时第 i 桶即块起始后第 i 天）；
+  // 单天块（如范围尾日落在 1 号）即使返回小时桶也全部归入这一天
+  if (zaiChunkDays(chunk) === 1) return chunk.startDate;
+  const date = dateStringOfOrdinal(parseDate(chunk.startDate, 'date').ordinal + index * DAY_MS);
+  return date <= chunk.endDate ? date : null;
+};
+
+const mergeZaiModelUsage = (data, days, chunk, timezoneOffsetSec) => {
+  const labels = data.x_time;
+  const models = data.modelDataList;
+  for (let index = 0; index < labels.length; index += 1) {
+    const date = zaiLabelDate(labels[index], chunk, index, timezoneOffsetSec);
+    if (!inRange(date, chunk.startDate, chunk.endDate)) continue;
+    for (const model of models) {
+      const value = countOf(Array.isArray(model.tokensUsage) ? model.tokensUsage[index] : 0);
+      if (value <= 0) continue;
+      addTokens(ensureDay(days, date), model.modelName, {
+        tokens: value,
+        inputTokens: 0,
+        outputTokens: 0,
+        promptTokens: 0,
+        cacheHitTokens: 0,
+        cacheMissTokens: 0,
+        requests: 0,
+      });
+    }
+  }
+};
+
+const zaiChunkQuery = (chunk) => `startTime=${encodeURIComponent(`${chunk.startDate} 00:00:00`)}&endTime=${encodeURIComponent(`${chunk.endDate} 23:59:59`)}`;
+
+const attemptZaiModelUsage = async (fetcher, origin, apiKey, chunk, timeoutMs, signal) => {
+  try {
+    const payload = await zaiGetJson(fetcher, origin, ZAI_MODEL_USAGE_PATH, zaiChunkQuery(chunk), apiKey, timeoutMs, signal);
+    const data = zaiModelUsageData(payload);
+    if (data === null) throw new ProviderUsageError('Z.ai 用量响应结构不兼容', 'SCHEMA_INCOMPATIBLE');
+    return { ok: true, data };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof ProviderUsageError ? error : new ProviderUsageError('Z.ai 用量请求失败', 'USAGE_UNAVAILABLE'),
+    };
+  }
+};
+
+// 套餐名只是摘要卡片的可选增强，结构宽容、失败不阻塞逐日用量
+const fetchZaiPlanSummary = async (apiKeyRaw, fetcher, options = {}) => {
+  const apiKey = normalizeZaiApiKey(apiKeyRaw);
+  if (!apiKey) throw new ProviderUsageError('缺少 Z.ai API Key', 'AUTH_MISSING');
+  if (typeof fetcher !== 'function') throw new ProviderUsageError('缺少网络请求实现', 'INVALID_ARGUMENT');
+  const timeoutMs = usageTimeoutMs(options.timeoutMs);
+  const signal = normalizeAbortSignal(options.signal);
+  throwIfAborted(signal);
+  const origin = normalizeZaiOrigin(options.origin);
+  const payload = await zaiGetJson(fetcher, origin, ZAI_QUOTA_LIMIT_PATH, '', apiKey, timeoutMs, signal);
+  const data = objectOf(payload?.data) || {};
+  const planName = ['planName', 'plan', 'plan_type', 'packageName', 'level']
+    .map((key) => data[key])
+    .find((value) => typeof value === 'string' && value.trim())?.trim().slice(0, 60) || null;
+  return { planName, limits: Array.isArray(data.limits) ? data.limits.length : 0 };
+};
+
+/**
+ * Fetch Z.ai (bigmodel.cn) daily model token usage with the account API key.
+ * startDate/endDate are inclusive YYYY-MM-DD dates in timezoneOffsetSec (UTC+8).
+ * The result mirrors the DeepSeek shape but only carries the tokens metric.
+ */
+const fetchZaiUsage = async (apiKeyRaw, fetcher, options = {}) => {
+  const apiKey = normalizeZaiApiKey(apiKeyRaw);
+  if (!apiKey) throw new ProviderUsageError('缺少 Z.ai API Key', 'AUTH_MISSING');
+  if (typeof fetcher !== 'function') throw new ProviderUsageError('缺少网络请求实现', 'INVALID_ARGUMENT');
+
+  const timezoneOffsetSec = normalizeUsageTimezoneOffset(options.timezoneOffsetSec, ZAI_TIMEZONE_OFFSET_SEC, 'Z.ai 用量');
+  const fallbackRange = defaultRange(timezoneOffsetSec, options.nowMs);
+  const start = parseDate(options.startDate || fallbackRange.startDate, 'startDate');
+  const end = parseDate(options.endDate || fallbackRange.endDate, 'endDate');
+  if (start.ordinal > end.ordinal) throw new ProviderUsageError('startDate 不能晚于 endDate', 'INVALID_ARGUMENT');
+  if ((end.ordinal - start.ordinal) / DAY_MS + 1 > MAX_RANGE_DAYS) {
+    throw new ProviderUsageError('Z.ai 用量查询范围不能超过 3660 天', 'INVALID_ARGUMENT');
+  }
+  const timeoutMs = usageTimeoutMs(options.timeoutMs);
+  const signal = normalizeAbortSignal(options.signal);
+  throwIfAborted(signal);
+  const origin = normalizeZaiOrigin(options.origin);
+
+  const chunks = buildMonthChunks(start, end, timezoneOffsetSec);
+  const days = new Map();
+  const chunkCoverage = [];
+  const issues = [];
+  for (const chunk of chunks) {
+    throwIfAborted(signal);
+    const result = await attemptZaiModelUsage(fetcher, origin, apiKey, chunk, timeoutMs, signal);
+    if (!result.ok && (result.error?.code === 'AUTH_EXPIRED' || result.error?.code === 'ABORTED')) throw result.error;
+    chunkCoverage.push({ startDate: chunk.startDate, endDate: chunk.endDate, ok: result.ok });
+    if (!result.ok) {
+      issues.push({ period: `${chunk.startDate}~${chunk.endDate}`, code: result.error?.code || 'USAGE_UNAVAILABLE' });
+      continue;
+    }
+    mergeZaiModelUsage(result.data, days, chunk, timezoneOffsetSec);
+  }
+
+  let planName = null;
+  try {
+    planName = (await fetchZaiPlanSummary(apiKey, fetcher, { origin, timeoutMs, signal })).planName;
+  } catch (error) {
+    if (error?.code === 'ABORTED' || error?.code === 'AUTH_EXPIRED') throw error;
+  }
+
+  const coveredPeriods = chunkCoverage.filter((chunk) => chunk.ok).length;
+  const tokensCoverage = {
+    complete: coveredPeriods === chunkCoverage.length,
+    coveredPeriods,
+    totalPeriods: chunkCoverage.length,
+    sources: coveredPeriods ? ['model-usage'] : [],
+    legacyFallback: false,
+  };
+  const costCoverage = { complete: false, coveredPeriods: 0, totalPeriods: 0, sources: [], legacyFallback: false };
+  const coverageByDate = new Map();
+  for (const chunk of chunkCoverage) {
+    for (let ordinal = parseDate(chunk.startDate, 'date').ordinal; ordinal <= parseDate(chunk.endDate, 'date').ordinal; ordinal += DAY_MS) {
+      coverageByDate.set(dateStringOfOrdinal(ordinal), chunk.ok);
+    }
+  }
+
+  const daily = [];
+  for (let ordinal = start.ordinal; ordinal <= end.ordinal; ordinal += DAY_MS) {
+    const date = dateStringOfOrdinal(ordinal);
+    const accumulated = days.get(date) || createDayAccumulator(date);
+    const covered = coverageByDate.get(date) === true;
+    daily.push({
+      date,
+      cost: null,
+      currency: null,
+      costs: [],
+      tokens: covered ? accumulated.tokens : null,
+      inputTokens: null,
+      outputTokens: null,
+      promptTokens: null,
+      cacheHitTokens: null,
+      cacheMissTokens: null,
+      requests: null,
+      models: [...accumulated.models.values()].map((model) => ({
+        model: model.model,
+        cost: null,
+        currency: null,
+        costs: [],
+        tokens: covered ? model.tokens : null,
+        inputTokens: null,
+        outputTokens: null,
+        cacheHitTokens: null,
+        cacheMissTokens: null,
+        requests: null,
+      })).filter((model) => (model.tokens || 0) > 0).sort((left, right) => (right.tokens || 0) - (left.tokens || 0)),
+      coverage: { tokens: covered, cost: false },
+    });
+  }
+
+  const knownTokens = daily.reduce((sum, day) => sum + (day.tokens || 0), 0);
+  const activeDays = daily.filter((day) => (day.tokens || 0) > 0).length;
+  const peakDailyTokens = coveredPeriods > 0
+    ? daily.reduce((peak, day) => day.tokens === null ? peak : Math.max(peak, day.tokens), 0)
+    : null;
+
+  return {
+    provider: 'zai',
+    metric: 'tokens',
+    currency: null,
+    summary: {
+      balance: null,
+      grantedBalance: null,
+      toppedUpBalance: null,
+      totalCost: null,
+      rangeCost: null,
+      peakDailyCost: null,
+      rangeTokens: tokensCoverage.complete ? knownTokens : null,
+      knownRangeTokens: knownTokens,
+      peakDailyTokens,
+      activeDays,
+      inputTokens: null,
+      outputTokens: null,
+      requests: null,
+      planName,
+    },
+    coverage: {
+      start: start.value,
+      end: end.value,
+      timeZone: timezoneOffsetSec,
+      timezoneOffsetSec,
+      source: coveredPeriods ? 'model-usage' : 'unavailable',
+      partial: !tokensCoverage.complete,
+      tokens: tokensCoverage,
+      cost: costCoverage,
+      issues,
+    },
+    days: daily,
+    fetchedAt: new Date().toISOString(),
+  };
+};
 module.exports = {
   fetchDeepSeekUsage,
   fetchDeepSeekSummary,
@@ -915,8 +1279,18 @@ module.exports = {
   ProviderUsageError,
   isAllowedDeepSeekLoginUrl,
   normalizeDeepSeekUserToken,
+  fetchZaiUsage,
+  fetchZaiPlanSummary,
+  normalizeZaiApiKey,
+  normalizeZaiOrigin,
   shouldUseCachedUsage,
   __test: {
+    ZAI_DEFAULT_ORIGIN,
+    ZAI_MODEL_USAGE_PATH,
+    ZAI_QUOTA_LIMIT_PATH,
+    ZAI_TIMEZONE_OFFSET_SEC,
+    zaiLabelDate,
+    zaiModelUsageData,
     DEEPSEEK_PLATFORM_ORIGIN,
     DEEPSEEK_ROUTES,
     DEEPSEEK_LOGIN_HOSTS,

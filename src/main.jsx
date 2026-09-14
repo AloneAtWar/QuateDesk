@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import {
   AlertCircle, ArrowLeft, Bell, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, CircleGauge, CircleStop, Clock3, Download, Eye, ExternalLink, Globe, HelpCircle, History, LayoutGrid,
-  Ellipsis, KeyRound, Monitor, Play, Plus, Power, RefreshCw, Rows3, Settings2, ShieldCheck, SlidersHorizontal, Square, Bot,
+  Ellipsis, Flame, KeyRound, Monitor, Play, Plus, Power, RefreshCw, Rows3, Settings2, ShieldCheck, SlidersHorizontal, Square, Bot,
   Pencil, Pin, Sparkles, SunMoon, Tag, Trash2, UploadCloud, X, Zap,
 } from 'lucide-react';
 import { initialAccounts, providerCatalog, windowCatalog } from './data';
@@ -178,10 +178,48 @@ const openProviderWebsite = (provider) => {
   else window.open(url, '_blank', 'noopener,noreferrer');
 };
 
-// 厂商服务端历史与本地额度快照是两套独立数据源。当前后端只为 DeepSeek
-// 提供官方账号连接；这里同时检查 bridge 和后端公开的连接状态，绝不拿本地
-// getHistory 数据拼装服务端用量。
-const providerUsageSupported = (account, provider) => provider?.id === 'deepseek'
+// 厂商服务端历史与本地额度快照是两套独立数据源。每家厂商的接入方式不同：
+// DeepSeek/MiniMax 走官方网页登录，Z.ai 复用账号 API Key，Codex 复用本机 CLI 登录；
+// 布局保持一致，文案与指标按厂商实际能力有所取舍。这里同时检查 bridge 和后端公开
+// 的连接状态，绝不拿本地 getHistory 数据拼装服务端用量。
+const PROVIDER_USAGE_COPY = {
+  deepseek: {
+    display: 'DeepSeek',
+    loading: '查询最近 1 年的每日花费与 Token',
+    connectHint: '登录 DeepSeek 官方账号后读取每日花费与 Token；登录凭据不会暴露给界面。',
+    connectAction: '登录官方账号',
+    connecting: '等待登录…',
+    reauthLabel: '需要重新登录',
+    reauthDetail: 'DeepSeek 官方登录已过期',
+    reauthHint: '重新登录后即可继续读取 DeepSeek 服务端历史，不影响 API Key 余额巡检。',
+    emptyHint: 'DeepSeek 已连接，但没有返回可绘制的每日金额或 Token。',
+    editHint: '保存后打开 DeepSeek 官方登录，用于读取每日金额与 Token 历史',
+    connectedToast: '已连接 DeepSeek 官方账号，可在历史详情查看每日用量',
+    savedToast: '账号已保存，并已连接 DeepSeek 官方用量',
+    saveAction: '保存并登录',
+    connectedDetail: '可读取最近 1 年服务端历史',
+    disconnectTitle: '断开 DeepSeek 官方账号',
+  },
+  zai: {
+    display: 'Z.ai',
+    loading: '查询最近 1 年的每日模型 Token 用量',
+    connectHint: '复用账号已保存的 API Key，读取智谱开放平台的每日模型 Token 用量；无需额外登录。',
+    connectAction: '连接官方用量',
+    connecting: '验证凭据…',
+    reauthLabel: '需要重新连接',
+    reauthDetail: 'Z.ai API Key 无效或已过期',
+    reauthHint: '在账号设置中更新 API Key 后重新连接，即可继续读取 Z.ai 服务端历史。',
+    emptyHint: 'Z.ai 已连接，但没有返回可绘制的每日 Token 用量。',
+    editHint: '保存后验证 API Key，用于读取每日模型 Token 用量历史',
+    connectedToast: '已连接 Z.ai 官方用量，可在历史详情查看每日用量',
+    savedToast: '账号已保存，并已连接 Z.ai 官方用量',
+    saveAction: '保存并连接',
+    connectedDetail: '可读取最近 1 年服务端历史',
+    disconnectTitle: '断开 Z.ai 官方用量',
+  },
+};
+const providerUsageCopy = (provider) => PROVIDER_USAGE_COPY[provider?.id] || null;
+const providerUsageSupported = (account, provider) => Boolean(providerUsageCopy(provider))
   && account?.usageConnection?.supported !== false
   && Boolean(window.quotaDesk?.getProviderUsage && window.quotaDesk?.connectProviderUsage && window.quotaDesk?.disconnectProviderUsage);
 const providerUsageStatus = (account) => {
@@ -858,15 +896,16 @@ function ProviderUsageView({ account, provider, onState }) {
   };
 
   if (!supported) return null;
+  const copy = providerUsageCopy(provider) || PROVIDER_USAGE_COPY.deepseek;
   if (status === 'reauth_required') return <div className="provider-usage-state auth-required">
     <span className="provider-usage-state-icon"><AlertCircle size={18} /></span>
-    <div><b>官方账号登录已失效</b><small>{account.usageConnection?.lastError || '重新登录后即可继续读取 DeepSeek 服务端历史，不影响 API Key 余额巡检。'}</small>{error && <em>{error}</em>}</div>
-    <button type="button" className="primary-button" disabled={connecting} onClick={connect}><Globe size={13} />{connecting ? '等待登录…' : '重新连接'}</button>
+    <div><b>官方用量连接已失效</b><small>{account.usageConnection?.lastError || copy.reauthHint}</small>{error && <em>{error}</em>}</div>
+    <button type="button" className="primary-button" disabled={connecting} onClick={connect}><Globe size={13} />{connecting ? copy.connecting : '重新连接'}</button>
   </div>;
-  if (loading && !data) return <div className="provider-usage-state"><RefreshCw size={17} className="spinning" /><div><b>正在读取 DeepSeek 服务端用量</b><small>查询最近 1 年的每日花费与 Token</small></div></div>;
+  if (loading && !data) return <div className="provider-usage-state"><RefreshCw size={17} className="spinning" /><div><b>正在读取 {copy.display} 服务端用量</b><small>{copy.loading}</small></div></div>;
   if ((error || empty) && !data) return <div className="provider-usage-state">
     <span className="provider-usage-state-icon"><History size={18} /></span>
-    <div><b>{error ? '服务端用量暂时不可用' : '这个区间没有厂商历史数据'}</b><small>{error || 'DeepSeek 已连接，但没有返回可绘制的每日金额或 Token。'}</small></div>
+    <div><b>{error ? '服务端用量暂时不可用' : '这个区间没有厂商历史数据'}</b><small>{error || copy.emptyHint}</small></div>
     <button type="button" className="outline-button" disabled={loading} onClick={refreshUsage}><RefreshCw size={13} /> 重试</button>
   </div>;
   if (!data) return null;
@@ -883,11 +922,15 @@ function ProviderUsageView({ account, provider, onState }) {
     ? accountTotalCost
     : (data.coverage?.cost?.complete && rangeCostExact != null ? rangeCostExact : rangeCostKnown);
   const costLabel = accountTotalCost != null ? '累计花费' : '区间花费';
-  // Token 只有区间口径（DeepSeek 摘要接口不提供账号累计 Token），覆盖不完整时如实标注
+  // Token 口径：部分厂商摘要直接提供账号累计（totalTokens）；否则退回区间口径，
+  // 覆盖不完整时如实标注
+  const accountTotalTokens = providerUsageHasNumber(data.summary?.totalTokens) ? data.summary.totalTokens : null;
   const tokensExact = providerUsageHasNumber(data.summary?.rangeTokens) ? data.summary.rangeTokens : null;
   const tokensKnown = providerUsageHasNumber(data.summary?.knownRangeTokens) ? data.summary.knownRangeTokens : null;
-  const tokensTotal = data.coverage?.tokens?.complete && tokensExact != null ? tokensExact : tokensKnown;
-  const tokensLabel = data.coverage?.tokens?.complete && tokensExact != null ? '累计消耗 Token' : '已覆盖区间 Token';
+  const tokensTotal = accountTotalTokens != null
+    ? accountTotalTokens
+    : (data.coverage?.tokens?.complete && tokensExact != null ? tokensExact : tokensKnown);
+  const tokensLabel = accountTotalTokens != null || (data.coverage?.tokens?.complete && tokensExact != null) ? '累计消耗 Token' : '已覆盖区间 Token';
   const values = sortedDays.map((day) => day[metric]).filter(providerUsageHasNumber).map(Number);
   const maxValue = Math.max(0, ...values);
   const firstDate = sortedDays[0]?.date;
@@ -943,30 +986,50 @@ function ProviderUsageView({ account, provider, onState }) {
     stepTo(base + delta);
   };
 
+  // 统计卡片按厂商实际返回的指标组装：花费/Token/套餐/连续使用按需出现，活跃日固定收尾
+  const planName = typeof data.summary?.planName === 'string' && data.summary.planName.trim() ? data.summary.planName.trim() : null;
+  const streakDays = providerUsageHasNumber(data.summary?.currentStreakDays) ? Number(data.summary.currentStreakDays) : null;
+  const hasRequests = providerUsageHasMetric(data, 'requests');
+  const summaryCards = [
+    hasCost && <div key="cost" className="provider-stat cost" title={formatProviderUsageCost(costTotal, data.currency)}>
+      <span className="stat-icon"><Zap size={13} /></span>
+      <div className="stat-copy">
+        <span>{costLabel}</span>
+        <strong>{formatProviderUsageCost(costTotal, data.currency)}</strong>
+      </div>
+    </div>,
+    hasTokens && <div key="tokens" className="provider-stat tokens" title={providerUsageHasNumber(tokensTotal) ? `${formatProviderUsageCount(tokensTotal, false)} Token` : ''}>
+      <span className="stat-icon"><Bot size={13} /></span>
+      <div className="stat-copy">
+        <span>{tokensLabel}</span>
+        <strong>{providerUsageHasNumber(tokensTotal) ? `${formatProviderUsageSummaryTokens(tokensTotal)} Token` : '—'}</strong>
+      </div>
+    </div>,
+    planName && <div key="plan" className="provider-stat plan" title={planName}>
+      <span className="stat-icon"><Tag size={13} /></span>
+      <div className="stat-copy">
+        <span>套餐</span>
+        <strong>{planName}</strong>
+      </div>
+    </div>,
+    streakDays !== null && <div key="streak" className="provider-stat streak" title={providerUsageHasNumber(data.summary?.longestStreakDays) ? `最长连续 ${data.summary.longestStreakDays} 天` : ''}>
+      <span className="stat-icon"><Flame size={13} /></span>
+      <div className="stat-copy">
+        <span>连续使用</span>
+        <strong>{formatProviderUsageCount(streakDays, false)} 天</strong>
+      </div>
+    </div>,
+    <div key="days" className="provider-stat days">
+      <span className="stat-icon"><CalendarDays size={13} /></span>
+      <div className="stat-copy">
+        <span>活跃日</span>
+        <strong>{formatProviderUsageCount(data.summary?.activeDays, false)} 天</strong>
+      </div>
+    </div>,
+  ].filter(Boolean);
+
   return <div className="provider-usage-view">
-    <div className="provider-usage-summary">
-      <div className="provider-stat cost" title={formatProviderUsageCost(costTotal, data.currency)}>
-        <span className="stat-icon"><Zap size={13} /></span>
-        <div className="stat-copy">
-          <span>{costLabel}</span>
-          <strong>{formatProviderUsageCost(costTotal, data.currency)}</strong>
-        </div>
-      </div>
-      <div className="provider-stat tokens" title={providerUsageHasNumber(tokensTotal) ? `${formatProviderUsageCount(tokensTotal, false)} Token` : ''}>
-        <span className="stat-icon"><Bot size={13} /></span>
-        <div className="stat-copy">
-          <span>{tokensLabel}</span>
-          <strong>{providerUsageHasNumber(tokensTotal) ? `${formatProviderUsageSummaryTokens(tokensTotal)} Token` : '—'}</strong>
-        </div>
-      </div>
-      <div className="provider-stat days">
-        <span className="stat-icon"><CalendarDays size={13} /></span>
-        <div className="stat-copy">
-          <span>活跃日</span>
-          <strong>{formatProviderUsageCount(data.summary?.activeDays, false)} 天</strong>
-        </div>
-      </div>
-    </div>
+    <div className="provider-usage-summary">{summaryCards}</div>
     <div className="provider-heatmap-head">
       <span className="provider-heatmap-title">近 1 年使用热力图</span>
       <div className="provider-heatmap-legend" aria-hidden="true">
@@ -978,7 +1041,7 @@ function ProviderUsageView({ account, provider, onState }) {
         <span className="provider-heatmap-corner" aria-hidden="true" />
         <div className="provider-heatmap-months" aria-hidden="true" style={{ width: `${weekCount * cellPx}px` }}>{monthMarkers.map((item) => <span key={item.key} style={{ left: `${(item.column - 1) * cellPx}px` }}>{item.label}</span>)}</div>
         <div className="provider-heatmap-weekdays" aria-hidden="true"><span>一</span><span /><span>三</span><span /><span>五</span><span /><span>日</span></div>
-        <div className="provider-heatmap-grid" role="rowgroup" aria-label={`DeepSeek 每日${metric === 'cost' ? '花费' : 'Token'}热力图`}>
+        <div className="provider-heatmap-grid" role="rowgroup" aria-label={`${copy.display} 每日${metric === 'cost' ? '花费' : 'Token'}热力图`}>
           {heatmapCells.map((day, index) => day
             ? <button type="button" role="gridcell" key={day.date} data-usage-date={day.date} tabIndex={selectedDate === day.date ? 0 : -1} aria-selected={selectedDate === day.date} aria-label={dayAriaLabel(day)} className={`provider-heatmap-cell level-${levelOf(day)}${selectedDate === day.date ? ' selected' : ''}`} title={dayAriaLabel(day)} onFocus={() => setSelectedDate(day.date)} onClick={() => setSelectedDate(day.date)} />
             : <span key={`blank-${index}`} className="provider-heatmap-cell blank" aria-hidden="true" />)}
@@ -987,9 +1050,9 @@ function ProviderUsageView({ account, provider, onState }) {
     </div>
     <div className="provider-day-card">
       {selectedDay ? <>
-        <div className="day-cell"><div><span>{dayLabel}花费</span><b>{providerUsageHasNumber(selectedDay.cost) ? valueLabel(selectedDay, 'cost') : '—'}</b></div></div>
-        <div className="day-cell"><div><span>{dayLabel}Token</span><b>{providerUsageHasNumber(selectedDay.tokens) ? `${formatProviderUsageSummaryTokens(selectedDay.tokens)} Token` : '—'}</b></div></div>
-        <div className="day-cell"><div><span>{dayLabel}请求</span><b>{providerUsageHasNumber(selectedDay.requests) ? formatProviderUsageCount(selectedDay.requests, false) : '—'}</b></div></div>
+        {hasCost && <div className="day-cell"><div><span>{dayLabel}花费</span><b>{providerUsageHasNumber(selectedDay.cost) ? valueLabel(selectedDay, 'cost') : '—'}</b></div></div>}
+        {hasTokens && <div className="day-cell"><div><span>{dayLabel}Token</span><b>{providerUsageHasNumber(selectedDay.tokens) ? `${formatProviderUsageSummaryTokens(selectedDay.tokens)} Token` : '—'}</b></div></div>}
+        {hasRequests && <div className="day-cell"><div><span>{dayLabel}请求</span><b>{providerUsageHasNumber(selectedDay.requests) ? formatProviderUsageCount(selectedDay.requests, false) : '—'}</b></div></div>}
       </> : <span className="chart-detail-hint">点击热力图方格查看当日用量</span>}
     </div>
   </div>;
@@ -1353,7 +1416,7 @@ function AccountModalV2({ providers, onClose, onSave, onTestDraft, embedded = fa
   const variableDefinitions = providerVariableDefinitions(provider);
   const credentialRequired = provider?.requestConfig?.adapterMode === 'script' ? false : provider?.requestConfig?.auth !== 'none';
   const missingRequiredVariables = variableDefinitions.some((item) => providerVariableRequired(provider, item) && !String(variableValues[item.key] ?? '').trim());
-  useEffect(() => { if (providerId !== 'deepseek') setConnectUsageAfterSave(false); }, [providerId]);
+  useEffect(() => { if (!PROVIDER_USAGE_COPY[providerId]) setConnectUsageAfterSave(false); }, [providerId]);
   const toggle = (key) => setSelected((old) => old.includes(key) ? old.filter((item) => item !== key) : [...old, key]);
   const accountEndpoint = provider?.requestConfig?.adapterMode === 'script' ? String(variableValues.endpoint || provider.requestConfig.endpoint || '') : endpoint.trim();
   // 草稿连通性测试：不保存账号与凭据，直接用当前表单值查一次
@@ -1371,16 +1434,17 @@ function AccountModalV2({ providers, onClose, onSave, onTestDraft, embedded = fa
     if ((credentialRequired && !credential.trim()) || missingRequiredVariables || !selected.length || !accountEndpoint) return;
     setSaving(true);
     const { publicVariables, secretVariables } = splitVariableValues(provider, variableValues);
-    try { await onSave({ providerId, name: name.trim() || provider?.name || '新账号', identity: identity.trim(), tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean), windowKeys: selected, credential: credential.trim(), endpoint: accountEndpoint, timeoutSeconds: clampAccountTimeout(timeoutSeconds), variables: publicVariables, secretVariables, connectUsageAfterSave: provider?.id === 'deepseek' && connectUsageAfterSave }); }
+    try { await onSave({ providerId, name: name.trim() || provider?.name || '新账号', identity: identity.trim(), tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean), windowKeys: selected, credential: credential.trim(), endpoint: accountEndpoint, timeoutSeconds: clampAccountTimeout(timeoutSeconds), variables: publicVariables, secretVariables, connectUsageAfterSave: Boolean(providerUsageCopy(provider)) && connectUsageAfterSave }); }
     finally { setSaving(false); }
   };
   const formFields = <><label className="field"><span>厂商</span><select value={providerId} onChange={(event) => { const next = selectableProviders.find((item) => item.id === event.target.value); setProviderId(event.target.value); setEndpoint(defaultEndpoint(next)); setSelected(providerWindowKeys(next)); setVariableValues(defaultVariableValues(next)); }}>{selectableProviders.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><div className="form-grid"><label className="field"><span>账号名</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder={provider?.name || '账号名称'} /></label><label className="field"><span>标识</span><input value={identity} onChange={(event) => setIdentity(event.target.value)} placeholder="邮箱、用户名或币种" /></label></div><label className="field"><span>标签 <small>用逗号分隔，可留空</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="日常, 主力" /></label>{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && <label className="field"><span>详细额度接口路径</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder="https://api.example.com/v1/usage" /></label>}<div className="form-grid"><label className="field"><span>请求超时（秒）<small>5–120，默认 15；跨境或代理网络可调大</small></span><input type="number" min="5" max="120" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.target.value)} /></label></div><div className="field"><span>额度窗口</span><div className="window-choice">{availableWindows.map((key) => <button type="button" key={key} className={`window-choice-item ${selected.includes(key) ? 'selected' : ''}`} onClick={() => toggle(key)}><span>{selected.includes(key) ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>)}</div></div>{variableDefinitions.length > 0 && <div className="adapter-config account-variables"><span className="eyebrow">厂商变量</span><div className="form-grid">{variableDefinitions.map((item) => <label className="field" key={item.key}><span>{item.label || item.key}{item.required && <small> 必填</small>}</span><input type={item.secret ? 'password' : 'text'} required={item.required} value={variableValues[item.key] ?? ''} onChange={(event) => setVariableValues((old) => ({ ...old, [item.key]: event.target.value }))} placeholder={item.defaultValue || item.key} /></label>)}</div></div>}{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && <label className="field"><span>{credentialRequired ? 'API Token' : '凭据（可选）'}</span><input type="password" required={credentialRequired} value={credential} onChange={(event) => setCredential(event.target.value)} placeholder={credentialRequired ? '凭据只会加密保存在本机' : '此接口无需凭据'} /></label>}{testResult && <div className={`draft-test-result ${testResult.ok ? 'ok' : 'fail'}`}><span>{testResult.ok ? '测试通过' : '测试失败'} · {testResult.message}</span></div>}</>;
   const canRun = !((credentialRequired && !credential.trim()) || missingRequiredVariables || !selected.length || !accountEndpoint);
   const canSave = !(saving || (credentialRequired && !credential.trim()) || missingRequiredVariables || !selected.length || !accountEndpoint);
-  const usageConnectOption = provider?.id === 'deepseek' && window.quotaDesk?.connectProviderUsage
-    ? <label className="setting-toggle provider-login-option"><span><b>官方账号用量 <small>可选</small></b><small>保存后打开 DeepSeek 官方登录，用于读取每日金额与 Token 历史</small></span><input type="checkbox" checked={connectUsageAfterSave} onChange={(event) => setConnectUsageAfterSave(event.target.checked)} /><i /></label>
+  const usageCopy = providerUsageCopy(provider);
+  const usageConnectOption = usageCopy && window.quotaDesk?.connectProviderUsage
+    ? <label className="setting-toggle provider-login-option"><span><b>官方账号用量 <small>可选</small></b><small>{usageCopy.editHint}</small></span><input type="checkbox" checked={connectUsageAfterSave} onChange={(event) => setConnectUsageAfterSave(event.target.checked)} /><i /></label>
     : null;
-  const actions = (onCancel) => <div className="modal-actions"><button type="button" className="outline-button" onClick={onCancel}>{embedded ? '返回' : '取消'}</button><button type="button" className="outline-button" disabled={testing || !canRun} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" type="submit" form={embedded ? 'custom-account-form' : undefined} disabled={!canSave}>{saving ? '正在保存' : (connectUsageAfterSave ? '保存并登录' : '保存')}</button></div>;
+  const actions = (onCancel) => <div className="modal-actions"><button type="button" className="outline-button" onClick={onCancel}>{embedded ? '返回' : '取消'}</button><button type="button" className="outline-button" disabled={testing || !canRun} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" type="submit" form={embedded ? 'custom-account-form' : undefined} disabled={!canSave}>{saving ? '正在保存' : (connectUsageAfterSave ? (usageCopy?.saveAction || '保存并登录') : '保存')}</button></div>;
   // 嵌入模式（「添加账号」弹窗内的自定义视图）：表单区域滚动，标题与操作条固定，窗口尺寸与磁贴页一致
   if (embedded) return <>
     <div className="modal-head"><div><h2>自定义账号<TitleHelp>API / 中转接口：手动填写额度地址与凭据，凭据只加密保存在本机。</TitleHelp></h2></div></div>
@@ -1404,7 +1468,8 @@ function ProviderUsageConnectionCard({ account, provider, onState }) {
     const timer = setTimeout(() => setConfirmDisconnect(false), 4000);
     return () => clearTimeout(timer);
   }, [confirmDisconnect]);
-  if (provider?.id !== 'deepseek') return null;
+  const copy = providerUsageCopy(provider);
+  if (!copy) return null;
   const supported = providerUsageSupported({ ...account, usageConnection: connection }, provider);
   const status = providerUsageStatus({ usageConnection: connection });
   const applyResultState = (state) => {
@@ -1419,9 +1484,9 @@ function ProviderUsageConnectionCard({ account, provider, onState }) {
     try {
       const result = await bridge.connectProviderUsage(account.id);
       if (result?.cancelled) { setFeedback({ ok: false, message: '未完成登录，连接状态没有变化' }); return; }
-      setConnection(result?.connection || { provider: 'deepseek', status: 'connected' });
+      setConnection(result?.connection || { provider: provider.id, status: 'connected' });
       applyResultState(result?.state);
-      setFeedback({ ok: true, message: '已连接 DeepSeek 官方账号，可在历史详情查看每日用量' });
+      setFeedback({ ok: true, message: copy.connectedToast });
     } catch (connectError) { setFeedback({ ok: false, message: connectError?.message || '连接失败' }); }
     finally { setBusy(''); }
   };
@@ -1432,11 +1497,13 @@ function ProviderUsageConnectionCard({ account, provider, onState }) {
       const result = await bridge.getProviderUsage(account.id, { days: 180, force: true });
       const hasHistory = providerUsageHasMetric(result, 'cost') || providerUsageHasMetric(result, 'tokens');
       const rangeCost = result?.summary?.rangeCost ?? result?.summary?.knownRangeCost;
-      setFeedback({ ok: true, message: hasHistory ? `已读取最近 ${result.days.length} 天${providerUsageHasNumber(rangeCost) ? ` · ${formatProviderUsageCost(rangeCost, result.currency)}` : ''}` : '已连接，厂商暂未返回历史用量' });
-      setConnection((old) => ({ ...(old || {}), provider: 'deepseek', status: 'connected', checkedAt: new Date().toISOString() }));
+      const rangeTokens = result?.summary?.rangeTokens ?? result?.summary?.knownRangeTokens;
+      const metricText = providerUsageHasNumber(rangeCost) ? ` · ${formatProviderUsageCost(rangeCost, result.currency)}` : (providerUsageHasNumber(rangeTokens) ? ` · ${formatProviderUsageSummaryTokens(rangeTokens)} Token` : '');
+      setFeedback({ ok: true, message: hasHistory ? `已读取最近 ${result.days.length} 天${metricText}` : '已连接，厂商暂未返回历史用量' });
+      setConnection((old) => ({ ...(old || {}), provider: provider.id, status: 'connected', checkedAt: new Date().toISOString() }));
     } catch (refreshError) {
       const message = refreshError?.message || '刷新失败';
-      if (/AUTH_|登录已失效|尚未连接|重新连接/.test(message)) setConnection((old) => ({ ...(old || {}), provider: 'deepseek', status: 'reauth_required', lastError: message }));
+      if (/AUTH_|登录已失效|尚未连接|重新连接|已过期/.test(message)) setConnection((old) => ({ ...(old || {}), provider: provider.id, status: 'reauth_required', lastError: message }));
       setFeedback({ ok: false, message });
     } finally { setBusy(''); }
   };
@@ -1459,20 +1526,20 @@ function ProviderUsageConnectionCard({ account, provider, onState }) {
   const statusCopy = !supported
     ? { label: '当前版本不可用', detail: '桌面后端未提供官方账号用量能力', tone: 'muted' }
     : status === 'connected'
-      ? { label: '已连接', detail: connection?.checkedAt ? formatChecked(connection.checkedAt) : '可读取最近 180 天服务端历史', tone: 'connected' }
+      ? { label: '已连接', detail: connection?.checkedAt ? formatChecked(connection.checkedAt) : copy.connectedDetail, tone: 'connected' }
       : status === 'reauth_required'
-        ? { label: '需要重新登录', detail: connection?.lastError || 'DeepSeek 官方登录已过期', tone: 'reauth' }
+        ? { label: copy.reauthLabel, detail: connection?.lastError || copy.reauthDetail, tone: 'reauth' }
         : { label: '未连接', detail: '可选增强，不影响现有 API Key 余额巡检', tone: 'muted' };
   return <div className="provider-connection-card">
-    <div className="provider-connection-copy"><span className="provider-connection-icon"><Globe size={15} /></span><div><b>服务端用量 <em>可选</em></b><small>登录 DeepSeek 官方账号后读取每日花费与 Token；登录凭据不会暴露给界面。</small></div></div>
+    <div className="provider-connection-copy"><span className="provider-connection-icon"><Globe size={15} /></span><div><b>服务端用量 <em>可选</em></b><small>{copy.connectHint}</small></div></div>
     <div className={`provider-connection-status ${statusCopy.tone}`}><i /><span><b>{statusCopy.label}</b><small>{statusCopy.detail}</small></span></div>
     {supported && <div className="provider-connection-actions">
       {status === 'connected' ? <>
         <button type="button" className="outline-button" disabled={Boolean(busy)} onClick={refresh}><RefreshCw size={12} className={busy === 'refresh' ? 'spinning' : ''} />{busy === 'refresh' ? '刷新中…' : '刷新'}</button>
-        <button type="button" className={`text-button disconnect ${confirmDisconnect ? 'confirming' : ''}`} disabled={Boolean(busy)} title={confirmDisconnect ? '再次点击确认清除官方登录会话' : '断开 DeepSeek 官方账号'} onClick={requestDisconnect}><Power size={12} />{busy === 'disconnect' ? '断开中…' : (confirmDisconnect ? '确认断开' : '断开')}</button>
+        <button type="button" className={`text-button disconnect ${confirmDisconnect ? 'confirming' : ''}`} disabled={Boolean(busy)} title={confirmDisconnect ? '再次点击确认清除官方登录会话' : copy.disconnectTitle} onClick={requestDisconnect}><Power size={12} />{busy === 'disconnect' ? '断开中…' : (confirmDisconnect ? '确认断开' : '断开')}</button>
       </> : <>
-        <button type="button" className="primary-button" disabled={Boolean(busy)} onClick={connect}><Globe size={12} />{busy === 'connect' ? '等待登录…' : (status === 'reauth_required' ? '重新连接' : '登录官方账号')}</button>
-        {status === 'reauth_required' && <button type="button" className={`text-button disconnect ${confirmDisconnect ? 'confirming' : ''}`} disabled={Boolean(busy)} title={confirmDisconnect ? '再次点击确认清除官方登录会话' : '断开 DeepSeek 官方账号'} onClick={requestDisconnect}><Power size={12} />{confirmDisconnect ? '确认断开' : '断开'}</button>}
+        <button type="button" className="primary-button" disabled={Boolean(busy)} onClick={connect}><Globe size={12} />{busy === 'connect' ? copy.connecting : (status === 'reauth_required' ? '重新连接' : copy.connectAction)}</button>
+        {status === 'reauth_required' && <button type="button" className={`text-button disconnect ${confirmDisconnect ? 'confirming' : ''}`} disabled={Boolean(busy)} title={confirmDisconnect ? '再次点击确认清除官方登录会话' : copy.disconnectTitle} onClick={requestDisconnect}><Power size={12} />{confirmDisconnect ? '确认断开' : '断开'}</button>}
       </>}
     </div>}
     {feedback && <div className={`provider-connection-feedback ${feedback.ok ? 'ok' : 'fail'}`}>{feedback.ok ? <Check size={12} /> : <AlertCircle size={12} />}<span>{feedback.message}</span></div>}
@@ -2180,7 +2247,7 @@ function App() {
         ok: !result?.cancelled,
         message: result?.cancelled
           ? '账号已保存；官方账号登录未完成，可稍后在账号编辑中连接'
-          : '账号已保存，并已连接 DeepSeek 官方用量',
+          : `账号已保存，并已连接 ${PROVIDER_USAGE_COPY[draft.providerId]?.display || ''}官方用量`,
       });
     } catch (error) {
       setToast({ id: Date.now(), ok: false, message: `账号已保存；官方用量连接失败：${error?.message || '请稍后重试'}` });
