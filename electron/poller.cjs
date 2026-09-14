@@ -1,5 +1,8 @@
 const { resolveCliAuth, refreshTokenOf, accessTokenExpiryMs, fetchWithCliAuth, __grok: cliGrok } = require('./cli-auth.cjs');
 
+const reauthRequiredError = (message) => Object.assign(new Error(message), { authStatus: 'reauth_required' });
+const authStatusForPollError = (error) => error?.authStatus === 'reauth_required' ? 'reauth_required' : 'temporary_error';
+
 const numeric = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
 const percent = (remaining, total) => total > 0 ? Number(((remaining / total) * 100).toFixed(2)) : 0;
 const pathCandidates = (fieldPath) => String(fieldPath || '').split(/[|,]/).map((item) => item.trim()).filter(Boolean);
@@ -149,7 +152,8 @@ const TRANSIENT_NETWORK_ERROR = new RegExp([
   'grpc-status\\s*(?::|=)\\s*(?:1|4|14)\\b',
 ].join('|'), 'i');
 
-const isTransientNetworkError = (error) => Boolean(error?.transient) || TRANSIENT_NETWORK_ERROR.test(String(error?.message || ''));
+const isTransientNetworkError = (error) => TRANSIENT_NETWORK_ERROR.test(String(error?.message || ''));
+const isRetryableError = (error) => Boolean(error?.transient) || isTransientNetworkError(error);
 
 // 网络类报错翻译成可行动的中文提示；attempts 为最终失败时的总尝试次数
 const describeNetworkError = (error, attempts) => {
@@ -347,8 +351,13 @@ async function queryAccount(account, provider, credential, fetcher = fetch, secr
     try {
       return await queryAccountOnce(account, provider, credential, fetcher, secretVariables, options);
     } catch (error) {
-      if (!isTransientNetworkError(error)) throw error;
-      if (attempt > delays.length) throw new Error(describeNetworkError(error, attempt));
+      if (!isRetryableError(error)) throw error;
+      if (attempt > delays.length) {
+        // 429/5xx 等厂商续期错误也值得重试，但它们不是网络故障；保留原始、可行动的
+        // 厂商提示及 authStatus，而不是统一误报为“请配置代理”。
+        if (!isTransientNetworkError(error)) throw error;
+        throw new Error(describeNetworkError(error, attempt));
+      }
       await sleep(delays[attempt - 1]);
     }
   }
@@ -370,7 +379,7 @@ async function queryAccountOnce(account, provider, credential, fetcher = fetch, 
     return queryGeminiQuota(fetcher, meter, timeoutMs, cliContext);
   }
   const credentialRequired = config.adapterMode === 'script' ? config.credentialRequired === true : config.auth !== 'none';
-  if (!credential && credentialRequired) throw new Error('缺少凭据，请在「设置 → 账号与凭据」中编辑该账号填写 API Token');
+  if (!credential && credentialRequired) throw reauthRequiredError('缺少凭据，请在「设置 → 账号与凭据」中编辑该账号填写 API Token');
   const scripted = config.adapterMode === 'script' && config.script ? runScriptAdapter(account, provider, credential, null, secretVariables) : null;
   const standard = config.adapterMode === 'standard' ? buildStandardRequest(account, provider, credential, secretVariables) : null;
   if (!scripted && !standard) throw new Error(`厂商 ${provider.name} 必须选择标准映射或脚本适配`);
@@ -378,7 +387,7 @@ async function queryAccountOnce(account, provider, credential, fetcher = fetch, 
   if (!request.url || !/^https?:\/\//i.test(request.url)) throw new Error('额度接口地址无效');
   const headers = scripted || standard ? { Accept: 'application/json', ...request.headers } : buildHeaders(request.auth, credential);
   const response = await fetcher(request.url, { method: request.method || 'GET', headers, body: request.body ? JSON.stringify(request.body) : undefined, signal: AbortSignal.timeout(timeoutMs) });
-  if (response.status === 401 || response.status === 403) throw new Error('凭据已失效，请在「设置 → 账号与凭据」中编辑该账号，更新 API Token 后重新保存');
+  if (response.status === 401 || response.status === 403) throw reauthRequiredError('凭据已失效，请在「设置 → 账号与凭据」中编辑该账号，更新 API Token 后重新保存');
   if (!response.ok) throw new Error(`额度接口返回 HTTP ${response.status}`);
   const payload = await response.json();
   if (payload?.success === false || Number(payload?.code) >= 400) {
@@ -547,10 +556,10 @@ const grokGrpcAuthFailure = async (response) => {
 
 async function queryGrokSubscription(fetcher = fetch, timeoutMs = DEFAULT_TIMEOUT_MS, ctx = {}) {
   const resolved = resolveCliAuth('grok', ctx.variables);
-  if (!resolved) throw new Error('未检测到 Grok CLI 登录信息。请先运行 grok login，或在「导入订阅登录」中保存本机登录');
+  if (!resolved) throw reauthRequiredError('未检测到 Grok CLI 登录信息。请先运行 grok login，或在「导入订阅登录」中保存本机登录');
   const expiry = accessTokenExpiryMs('grok', resolved.auth);
   if (expiry && expiry < Date.now() && !refreshTokenOf('grok', resolved.auth)) {
-    throw new Error('Grok 访问令牌已过期且无法自动续期，请运行 grok login 后重新导入');
+    throw reauthRequiredError('Grok 访问令牌已过期且无法自动续期，请运行 grok login 后重新导入');
   }
   // 空 gRPC-web 帧：1 字节 flags + 4 字节大端长度 0
   const body = new Uint8Array(5);
@@ -579,12 +588,12 @@ async function queryGrokSubscription(fetcher = fetch, timeoutMs = DEFAULT_TIMEOU
     onAuthUpdate: ctx.onAuthUpdate,
     isAuthFailure: grokGrpcAuthFailure,
   });
-  if (response.status === 401 || response.status === 403) throw new Error('Grok 凭据被拒绝（自动续期后仍无效），请重新 grok login 并再次导入');
+  if (response.status === 401 || response.status === 403) throw reauthRequiredError('Grok 凭据被拒绝（自动续期后仍无效），请重新 grok login 并再次导入');
   if (!response.ok) throw new Error(`Grok 计费接口返回 HTTP ${response.status}`);
   const data = Buffer.from(await response.arrayBuffer());
   const grpcStatus = grpcStatusFromData(data) ?? await grpcStatusFromResponse(response);
   if (grpcStatus != null && grpcStatus !== 0) {
-    if ([7, 16].includes(grpcStatus)) throw new Error('Grok 凭据被拒绝（自动续期后仍无效），请重新 grok login 并再次导入');
+    if ([7, 16].includes(grpcStatus)) throw reauthRequiredError('Grok 凭据被拒绝（自动续期后仍无效），请重新 grok login 并再次导入');
     throw new Error(`Grok 计费 RPC 失败（grpc-status ${grpcStatus}）`);
   }
   const nowSeconds = Math.floor(Date.now() / 1000);
@@ -596,4 +605,10 @@ async function queryGrokSubscription(fetcher = fetch, timeoutMs = DEFAULT_TIMEOU
   })];
 }
 
-module.exports = { definitions, queryAccount, __grok: { selectGrokAuthEntry, parseGrokBilling, grokWindowKey, grpcStatusFromData }, __network: { accountTimeoutMs, isTransientNetworkError, describeNetworkError } };
+module.exports = {
+  definitions,
+  queryAccount,
+  authStatusForPollError,
+  __grok: { selectGrokAuthEntry, parseGrokBilling, grokWindowKey, grpcStatusFromData },
+  __network: { accountTimeoutMs, isTransientNetworkError, describeNetworkError },
+};

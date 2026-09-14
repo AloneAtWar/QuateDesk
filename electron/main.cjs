@@ -3,12 +3,20 @@ const path = require('node:path');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
 const { DesktopStore } = require('./storage.cjs');
-const { queryAccount } = require('./poller.cjs');
+const { queryAccount, authStatusForPollError } = require('./poller.cjs');
 const { clampRetentionDays } = require('./history.cjs');
 const { resolveWasteWindows } = require('./waste.cjs');
 const { builtinConfigs } = require('./builtin-configs.cjs');
 const { scanCcswitch } = require('./ccswitch.cjs');
+const { mergeMainOwnedUsageConnections } = require('./provider-usage-state.cjs');
 const { CLI_KINDS, SNAPSHOT_KEY, readLiveAuth, cliIdentity, resolveCliAuth, authVersionMatches, writeLiveIfCurrent } = require('./cli-auth.cjs');
+const {
+  fetchDeepSeekUsage,
+  fetchDeepSeekSummary,
+  isAllowedDeepSeekLoginUrl,
+  normalizeDeepSeekUserToken,
+  shouldUseCachedUsage,
+} = require('./provider-usage.cjs');
 
 app.setName('Quota Desk');
 app.setAppUserModelId('com.quotadesk.app');
@@ -24,6 +32,18 @@ let nextPollAt = null;
 let pollStartedAt = null;
 let pollInProgress = false;
 const sentReminders = new Set();
+const providerUsageLoginFlows = new Map();
+const providerUsageRecoveryFlows = new Map();
+const providerUsageCache = new Map();
+const providerUsageWindows = new Map();
+const providerUsageSessions = new Map();
+const providerUsageRequests = new Map();
+const providerUsageEpochs = new Map();
+const PROVIDER_USAGE_AUTH_KEY = 'providerUsageAuth';
+const PROVIDER_USAGE_CACHE_MS = 2 * 60 * 1000;
+const DEEPSEEK_USAGE_URL = 'https://platform.deepseek.com/usage';
+const DEEPSEEK_PLATFORM_ORIGIN = new URL(DEEPSEEK_USAGE_URL).origin;
+const DEEPSEEK_TIMEZONE_OFFSET_SEC = 8 * 60 * 60;
 // 小控件整体等比缩放：一个比例因子同时决定窗口像素尺寸和内容缩放（渲染端 transform）。
 // Windows 显示缩放非 100% 时，反复 setPosition 会因 DIP/物理像素换算误差把窗口
 // 越拖越大，所以拖动时也必须用固定宽高走 setBounds。
@@ -266,7 +286,7 @@ const normalizeProxyRules = (value) => {
   return `http://${trimmed}`;
 };
 
-function applyProxySetting() {
+function currentProxyConfig() {
   const settings = store?.loadState()?.settings || {};
   const mode = ['direct', 'system', 'manual'].includes(settings.proxyMode) ? settings.proxyMode : 'system';
   let config = { mode };
@@ -274,7 +294,11 @@ function applyProxySetting() {
     const proxyRules = normalizeProxyRules(settings.proxyUrl);
     config = proxyRules ? { proxyRules } : { mode: 'system' };
   }
-  return session.defaultSession.setProxy(config)
+  return config;
+}
+
+function applyProxySetting() {
+  return session.defaultSession.setProxy(currentProxyConfig())
     .catch((error) => console.error('[Quota Desk] 应用代理设置失败', error.message));
 }
 
@@ -342,8 +366,21 @@ const migrateProvider = (provider) => {
   const seededWaste = builtinConfig && migrated.requestConfig && !Array.isArray(migrated.requestConfig.wasteWindows)
     ? { ...migrated, requestConfig: { ...migrated.requestConfig, wasteWindows: builtinConfig.wasteWindows } }
     : migrated;
-  if (provider.id === 'wlb') return { ...seededWaste, name: 'wlbclub', legalName: 'wlbclub', monogram: 'W' };
-  return seededWaste;
+  // API 厂商的官方账号登录只是增强能力，不能替代基础 API Key。同步修正旧 state
+  // 中曾被保存为 optional 的系统 apiKey 变量，避免绕过 renderer 时创建空凭据账号。
+  const requiredApiKey = builtinConfig?.adapterMode === 'script' && Array.isArray(seededWaste.requestConfig?.variables)
+    ? {
+      ...seededWaste,
+      requestConfig: {
+        ...seededWaste.requestConfig,
+        variables: seededWaste.requestConfig.variables.map((variable) => variable?.system && variable.key === 'apiKey'
+          ? { ...variable, required: true }
+          : variable),
+      },
+    }
+    : seededWaste;
+  if (provider.id === 'wlb') return { ...requiredApiKey, name: 'wlbclub', legalName: 'wlbclub', monogram: 'W' };
+  return requiredApiKey;
 };
 
 const migrateAccount = (account) => {
@@ -372,6 +409,477 @@ const cleanState = (state) => ({
   lastSync: state?.lastSync || new Date().toISOString(),
 });
 
+// ── 厂商官方账号用量 ──────────────────────────────────────────────────────
+// API Key 仍负责日常余额轮询；网页登录只作为可选增强，用于读取厂商控制台的
+// 账号级历史账单。登录窗口使用非 persist 分区，userToken 与第三方登录 Cookie
+// 不会写进 Chromium 的磁盘目录；只把恢复所需的 DeepSeek Cookie 和 token 一起
+// 写入 safeStorage，且永远不进入公开 state 或 renderer。
+const providerUsagePartitionBase = (accountId) => `quota-desk-usage-${crypto.createHash('sha256').update(String(accountId)).digest('hex').slice(0, 20)}`;
+// A flow-specific, memory-only partition prevents an older login flow's cleanup from
+// erasing cookies/localStorage belonging to a replacement login or an active query.
+const providerUsagePartition = (accountId) => `${providerUsagePartitionBase(accountId)}-${crypto.randomBytes(8).toString('hex')}`;
+const legacyProviderUsagePartition = (accountId) => `persist:${providerUsagePartitionBase(accountId)}`;
+const providerUsageEpoch = (accountId) => Number(providerUsageEpochs.get(accountId) || 0);
+const bumpProviderUsageEpoch = (accountId) => {
+  const next = providerUsageEpoch(accountId) + 1;
+  providerUsageEpochs.set(accountId, next);
+  return next;
+};
+const providerUsageCancelledError = () => Object.assign(new Error('官方账号用量操作已取消'), { code: 'USAGE_DISCONNECTED' });
+const assertProviderUsageEpoch = (accountId, epoch) => {
+  if (providerUsageEpoch(accountId) !== epoch) throw providerUsageCancelledError();
+};
+
+const rememberProviderUsageRequest = (accountId, controller) => {
+  const controllers = providerUsageRequests.get(accountId) || new Set();
+  controllers.add(controller);
+  providerUsageRequests.set(accountId, controllers);
+  return () => {
+    controllers.delete(controller);
+    if (controllers.size === 0) providerUsageRequests.delete(accountId);
+  };
+};
+
+const abortProviderUsageRequests = (accountId) => {
+  for (const controller of providerUsageRequests.get(accountId) || []) controller.abort();
+  providerUsageRequests.delete(accountId);
+};
+
+const isDeepSeekCookieDomain = (value) => {
+  const domain = String(value || '').toLowerCase().replace(/^\./, '');
+  return domain === 'deepseek.com' || domain.endsWith('.deepseek.com');
+};
+const serializeDeepSeekCookies = (cookies) => (Array.isArray(cookies) ? cookies : [])
+  .filter((cookie) => isDeepSeekCookieDomain(cookie?.domain) && cookie?.name && typeof cookie?.value === 'string')
+  .slice(0, 80)
+  .map((cookie) => ({
+    name: String(cookie.name).slice(0, 256),
+    value: String(cookie.value).slice(0, 16 * 1024),
+    domain: String(cookie.domain).slice(0, 256),
+    path: String(cookie.path || '/').startsWith('/') ? String(cookie.path || '/').slice(0, 1024) : '/',
+    secure: cookie.secure !== false,
+    httpOnly: Boolean(cookie.httpOnly),
+    hostOnly: Boolean(cookie.hostOnly),
+    ...(Number.isFinite(Number(cookie.expirationDate)) ? { expirationDate: Number(cookie.expirationDate) } : {}),
+    ...(['unspecified', 'no_restriction', 'lax', 'strict'].includes(cookie.sameSite) ? { sameSite: cookie.sameSite } : {}),
+  }));
+
+const readDeepSeekCookies = async (usageSession) => serializeDeepSeekCookies(await usageSession.cookies.get({}));
+const restoreDeepSeekCookies = async (usageSession, cookies) => {
+  for (const cookie of serializeDeepSeekCookies(cookies)) {
+    if (cookie.expirationDate && cookie.expirationDate <= Date.now() / 1000) continue;
+    const hostname = cookie.domain.replace(/^\./, '');
+    const details = {
+      url: `https://${hostname}${cookie.path}`,
+      name: cookie.name,
+      value: cookie.value,
+      path: cookie.path,
+      secure: cookie.secure,
+      httpOnly: cookie.httpOnly,
+      ...(cookie.hostOnly ? {} : { domain: cookie.domain }),
+      ...(cookie.expirationDate ? { expirationDate: cookie.expirationDate } : {}),
+      ...(cookie.sameSite && cookie.sameSite !== 'unspecified' ? { sameSite: cookie.sameSite } : {}),
+    };
+    await usageSession.cookies.set(details);
+  }
+};
+
+const readProviderUsageAuth = (accountId) => {
+  const raw = store.getSecrets(accountId).variables?.[PROVIDER_USAGE_AUTH_KEY];
+  try {
+    const auth = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const token = normalizeDeepSeekUserToken(auth?.token);
+    return auth?.provider === 'deepseek' && token ? { ...auth, token, cookies: serializeDeepSeekCookies(auth.cookies) } : null;
+  } catch { return null; }
+};
+
+const saveProviderUsageAuth = (accountId, token, connectedAt = new Date().toISOString(), cookies = []) => {
+  const auth = { version: 2, provider: 'deepseek', mode: 'official-account', token, cookies: serializeDeepSeekCookies(cookies), connectedAt, updatedAt: new Date().toISOString() };
+  store.saveCredential(accountId, '', { [PROVIDER_USAGE_AUTH_KEY]: JSON.stringify(auth) });
+  return auth;
+};
+
+const withAccountUsageConnection = (accountId, updater) => {
+  const current = migrateState(store.loadState());
+  if (!current) throw new Error('桌面状态尚未初始化');
+  let found = false;
+  const accounts = (current.accounts || []).map((account) => {
+    if (account.id !== accountId) return account;
+    found = true;
+    return updater(account);
+  });
+  if (!found) throw new Error('找不到要连接的账号');
+  const saved = store.saveState(cleanState({ ...current, accounts }));
+  sendState(saved);
+  return saved;
+};
+
+const markProviderUsageConnected = (accountId, auth, incrementRevision = true) => withAccountUsageConnection(accountId, (account) => {
+  const previous = account.usageConnection || {};
+  return {
+    ...account,
+    usageConnection: {
+      provider: 'deepseek',
+      mode: 'official-account',
+      status: 'connected',
+      connectedAt: auth.connectedAt || previous.connectedAt || new Date().toISOString(),
+      checkedAt: new Date().toISOString(),
+      lastError: null,
+      revision: Number(previous.revision || 0) + (incrementRevision ? 1 : 0),
+    },
+  };
+});
+
+const markProviderUsageExpired = (accountId) => withAccountUsageConnection(accountId, (account) => {
+  const previous = account.usageConnection || {};
+  return {
+    ...account,
+    usageConnection: {
+      provider: 'deepseek',
+      mode: 'official-account',
+      status: 'reauth_required',
+      connectedAt: previous.connectedAt || null,
+      checkedAt: new Date().toISOString(),
+      lastError: '官方账号登录已过期，请重新连接',
+      revision: Number(previous.revision || 0),
+    },
+  };
+});
+
+const clearProviderUsageCache = (accountId) => {
+  for (const key of providerUsageCache.keys()) if (key.startsWith(`${accountId}:`)) providerUsageCache.delete(key);
+};
+
+const rememberProviderUsageWindow = (accountId, window) => {
+  const windows = providerUsageWindows.get(accountId) || new Set();
+  windows.add(window);
+  providerUsageWindows.set(accountId, windows);
+  window.once('closed', () => {
+    windows.delete(window);
+    if (windows.size === 0) providerUsageWindows.delete(accountId);
+  });
+};
+
+const rememberProviderUsageSession = (accountId, usageSession) => {
+  const sessions = providerUsageSessions.get(accountId) || new Set();
+  sessions.add(usageSession);
+  providerUsageSessions.set(accountId, sessions);
+  return () => {
+    sessions.delete(usageSession);
+    if (sessions.size === 0) providerUsageSessions.delete(accountId);
+  };
+};
+
+const closeProviderUsageWindows = (accountId) => {
+  for (const window of [...(providerUsageWindows.get(accountId) || [])]) {
+    if (!window.isDestroyed()) window.destroy();
+  }
+  providerUsageWindows.delete(accountId);
+};
+
+const clearProviderUsageBrowserStorage = async (accountId, targetSession = null) => {
+  const sessions = targetSession ? [targetSession] : [...(providerUsageSessions.get(accountId) || [])];
+  const results = await Promise.all(sessions.map(async (usageSession) => {
+    try {
+      await Promise.all([usageSession.clearStorageData(), usageSession.clearCache()]);
+      return true;
+    } catch (error) {
+      console.error('[Quota Desk] failed to clear in-memory DeepSeek login storage', error?.message || error);
+      return false;
+    }
+  }));
+  return results.every(Boolean);
+};
+
+const clearProviderUsageSession = async (accountId) => {
+  closeProviderUsageWindows(accountId);
+  clearProviderUsageCache(accountId);
+  await clearProviderUsageBrowserStorage(accountId);
+};
+
+const scrubLegacyProviderUsagePartitions = async () => {
+  const accountIds = (migrateState(store.loadState())?.accounts || []).map((account) => account.id);
+  await Promise.all(accountIds.map(async (accountId) => {
+    const legacySession = session.fromPartition(legacyProviderUsagePartition(accountId));
+    try { await Promise.all([legacySession.clearStorageData(), legacySession.clearCache()]); }
+    catch (error) { console.warn('[Quota Desk] failed to scrub legacy DeepSeek login storage', error?.message || error); }
+  }));
+};
+
+const deleteAccountLocalData = async (accountId) => {
+  bumpProviderUsageEpoch(accountId);
+  abortProviderUsageRequests(accountId);
+  closeProviderUsageWindows(accountId);
+  clearProviderUsageCache(accountId);
+  // The auxiliary session is memory-only. Always remove the encrypted credential even
+  // if Chromium cannot eagerly release its in-process cache.
+  await clearProviderUsageSession(accountId);
+  store.deleteCredential(accountId);
+  return true;
+};
+
+const deepSeekDateRange = (days) => {
+  const count = Math.min(365, Math.max(7, Math.round(Number(days) || 180)));
+  const shiftedNow = new Date(Date.now() + DEEPSEEK_TIMEZONE_OFFSET_SEC * 1000);
+  const endOrdinal = Date.UTC(shiftedNow.getUTCFullYear(), shiftedNow.getUTCMonth(), shiftedNow.getUTCDate());
+  const startOrdinal = endOrdinal - (count - 1) * 24 * 60 * 60 * 1000;
+  return {
+    days: count,
+    startDate: new Date(startOrdinal).toISOString().slice(0, 10),
+    endDate: new Date(endOrdinal).toISOString().slice(0, 10),
+  };
+};
+
+const readDeepSeekTokenFromWindow = async (window) => {
+  if (!window || window.isDestroyed()) return '';
+  try {
+    const currentUrl = new URL(window.webContents.getURL());
+    if (currentUrl.origin !== DEEPSEEK_PLATFORM_ORIGIN) return '';
+    const raw = await window.webContents.executeJavaScript(`(() => {
+      for (const storage of [window.localStorage, window.sessionStorage]) {
+        const value = storage.getItem('userToken');
+        if (value) return value;
+      }
+      return '';
+    })()`, true);
+    return normalizeDeepSeekUserToken(raw);
+  } catch { return ''; }
+};
+
+const captureDeepSeekLogin = async ({ accountId, interactive, timeoutMs = 0, cookies = [] }) => {
+  const partition = providerUsagePartition(accountId);
+  const usageSession = session.fromPartition(partition);
+  const forgetSession = rememberProviderUsageSession(accountId, usageSession);
+  const validationController = new AbortController();
+  try {
+    await clearProviderUsageBrowserStorage(accountId, usageSession);
+    await usageSession.setProxy(currentProxyConfig());
+    await restoreDeepSeekCookies(usageSession, cookies);
+    usageSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+    usageSession.setPermissionCheckHandler(() => false);
+    return await new Promise((resolve) => {
+      const loginWindow = new BrowserWindow({
+        width: 460,
+        height: 650,
+        minWidth: 400,
+        minHeight: 520,
+        show: false,
+        parent: interactive ? mainWindow : undefined,
+        modal: Boolean(interactive && mainWindow),
+        autoHideMenuBar: true,
+        title: '连接 DeepSeek 官方账号',
+        backgroundColor: themeColors(savedTheme()).main,
+        webPreferences: { partition, contextIsolation: true, nodeIntegration: false, sandbox: true },
+      });
+      rememberProviderUsageWindow(accountId, loginWindow);
+      let settled = false;
+      let validating = false;
+      let lastRejectedToken = '';
+      let lastAttemptedToken = '';
+      let lastAttemptedAt = 0;
+      let timer = null;
+      let interval = null;
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        validationController.abort();
+        if (timer) clearTimeout(timer);
+        if (interval) clearInterval(interval);
+        if (!loginWindow.isDestroyed()) loginWindow.destroy();
+        resolve(result);
+      };
+      const inspect = async () => {
+        if (settled || validating || loginWindow.isDestroyed()) return;
+        const token = await readDeepSeekTokenFromWindow(loginWindow);
+        const now = Date.now();
+        if (!token || token === lastRejectedToken) return;
+        if (token === lastAttemptedToken && now - lastAttemptedAt < 3_000) return;
+        lastAttemptedToken = token;
+        lastAttemptedAt = now;
+        validating = true;
+        try {
+          // A successful summary proves the captured bearer token without making four
+          // history/fallback requests every time the inspection interval fires.
+          await fetchDeepSeekSummary(token, (url, init) => usageSession.fetch(url, init), {
+            timeoutMs: 15_000,
+            signal: validationController.signal,
+          });
+          let deepSeekCookies = [];
+          try { deepSeekCookies = await readDeepSeekCookies(usageSession); } catch {}
+          finish({ token, cookies: deepSeekCookies, validatedAt: new Date().toISOString() });
+        } catch (error) {
+          if (error?.code === 'AUTH_EXPIRED' || error?.code === 'AUTH_MISSING') lastRejectedToken = token;
+        } finally { validating = false; }
+      };
+      loginWindow.webContents.setWindowOpenHandler(({ url }) => {
+        if (isAllowedDeepSeekLoginUrl(url)) loginWindow.loadURL(url).catch(() => {});
+        return { action: 'deny' };
+      });
+      for (const eventName of ['will-navigate', 'will-redirect']) {
+        loginWindow.webContents.on(eventName, (event, url) => {
+          if (!isAllowedDeepSeekLoginUrl(url)) event.preventDefault();
+        });
+      }
+      loginWindow.webContents.on('did-finish-load', inspect);
+      loginWindow.webContents.on('did-navigate-in-page', inspect);
+      loginWindow.on('closed', () => finish(null));
+      if (interactive) loginWindow.once('ready-to-show', () => { loginWindow.show(); loginWindow.focus(); });
+      interval = setInterval(inspect, 900);
+      if (timeoutMs > 0) timer = setTimeout(() => finish(null), timeoutMs);
+      loginWindow.loadURL(DEEPSEEK_USAGE_URL).catch(() => {});
+    });
+  } finally {
+    validationController.abort();
+    // The browser partition is memory-only, but clear it immediately as well. Only the
+    // DeepSeek cookies captured above survive, encrypted inside providerUsageAuth.
+    await clearProviderUsageBrowserStorage(accountId, usageSession);
+    forgetSession();
+  }
+};
+
+const connectDeepSeekUsage = async (accountId) => {
+  const existing = providerUsageLoginFlows.get(accountId);
+  const currentEpoch = providerUsageEpoch(accountId);
+  if (existing?.epoch === currentEpoch) return existing.flow;
+  const epoch = bumpProviderUsageEpoch(accountId);
+  abortProviderUsageRequests(accountId);
+  closeProviderUsageWindows(accountId);
+  const previous = readProviderUsageAuth(accountId);
+  const flow = (async () => {
+    const result = await captureDeepSeekLogin({ accountId, interactive: true, cookies: previous?.cookies });
+    if (!result) return { cancelled: true };
+    assertProviderUsageEpoch(accountId, epoch);
+    let auth = null;
+    try {
+      auth = saveProviderUsageAuth(accountId, result.token, previous?.connectedAt, result.cookies);
+      clearProviderUsageCache(accountId);
+      const state = markProviderUsageConnected(accountId, auth, true);
+      return { cancelled: false, connection: state.accounts.find((item) => item.id === accountId)?.usageConnection, state: { ...state, runtime: runtimeStatus() } };
+    } catch (error) {
+      // The account may have been deleted while its modal login was completing.
+      if (auth) {
+        try { store.deleteSecretVariable(accountId, PROVIDER_USAGE_AUTH_KEY); } catch {}
+        await clearProviderUsageSession(accountId).catch(() => {});
+      }
+      throw error;
+    }
+  })();
+  const entry = { epoch, flow };
+  providerUsageLoginFlows.set(accountId, entry);
+  try { return await flow; }
+  finally { if (providerUsageLoginFlows.get(accountId) === entry) providerUsageLoginFlows.delete(accountId); }
+};
+
+const recoverDeepSeekUsageAuth = async (accountId, epoch) => {
+  const existing = providerUsageRecoveryFlows.get(accountId);
+  if (existing?.epoch === epoch) return existing.flow;
+  const flow = (async () => {
+    assertProviderUsageEpoch(accountId, epoch);
+    const previous = readProviderUsageAuth(accountId);
+    const result = await captureDeepSeekLogin({ accountId, interactive: false, timeoutMs: 15_000, cookies: previous?.cookies });
+    if (!result) return null;
+    assertProviderUsageEpoch(accountId, epoch);
+    let auth = null;
+    try {
+      auth = saveProviderUsageAuth(accountId, result.token, previous?.connectedAt, result.cookies);
+      clearProviderUsageCache(accountId);
+      markProviderUsageConnected(accountId, auth, true);
+      return auth;
+    } catch (error) {
+      if (auth) {
+        try { store.deleteSecretVariable(accountId, PROVIDER_USAGE_AUTH_KEY); } catch {}
+        await clearProviderUsageSession(accountId).catch(() => {});
+      }
+      throw error;
+    }
+  })();
+  const entry = { epoch, flow };
+  providerUsageRecoveryFlows.set(accountId, entry);
+  try { return await flow; }
+  finally { if (providerUsageRecoveryFlows.get(accountId) === entry) providerUsageRecoveryFlows.delete(accountId); }
+};
+
+const queryDeepSeekUsage = async (accountId, options = {}) => {
+  const epoch = providerUsageEpoch(accountId);
+  const range = deepSeekDateRange(options.days);
+  const cacheKey = `${accountId}:${range.startDate}:${range.endDate}`;
+  const cached = providerUsageCache.get(cacheKey);
+  if (cached?.epoch === epoch && shouldUseCachedUsage(cached, { force: options.force === true, maxAgeMs: PROVIDER_USAGE_CACHE_MS })) return cached.data;
+  let auth = readProviderUsageAuth(accountId);
+  if (!auth) {
+    const currentAccount = migrateState(store.loadState())?.accounts?.find((item) => item.id === accountId);
+    if (currentAccount?.usageConnection && providerUsageEpoch(accountId) === epoch) markProviderUsageExpired(accountId);
+    const error = new Error('尚未连接 DeepSeek 官方账号');
+    error.code = 'AUTH_MISSING';
+    throw error;
+  }
+  const assertCurrentAuth = () => {
+    assertProviderUsageEpoch(accountId, epoch);
+    const latest = readProviderUsageAuth(accountId);
+    if (!latest || latest.token !== auth.token) throw providerUsageCancelledError();
+    if (!migrateState(store.loadState())?.accounts?.some((item) => item.id === accountId)) throw providerUsageCancelledError();
+  };
+  const requestController = new AbortController();
+  const forgetRequest = rememberProviderUsageRequest(accountId, requestController);
+  const request = async () => {
+    const partition = providerUsagePartition(accountId);
+    const usageSession = session.fromPartition(partition);
+    const forgetSession = rememberProviderUsageSession(accountId, usageSession);
+    try {
+      await clearProviderUsageBrowserStorage(accountId, usageSession);
+      await usageSession.setProxy(currentProxyConfig());
+      await restoreDeepSeekCookies(usageSession, auth.cookies);
+      return await fetchDeepSeekUsage(auth.token, (url, init) => usageSession.fetch(url, init), {
+        startDate: range.startDate,
+        endDate: range.endDate,
+        timezoneOffsetSec: DEEPSEEK_TIMEZONE_OFFSET_SEC,
+        timeoutMs: Math.min(120_000, Math.max(5_000, Number(options.timeoutMs) || 20_000)),
+        signal: requestController.signal,
+      });
+    } finally {
+      await clearProviderUsageBrowserStorage(accountId, usageSession);
+      forgetSession();
+    }
+  };
+  try {
+    let data;
+    try { data = await request(); }
+    catch (error) {
+      if (error?.code !== 'AUTH_EXPIRED') throw error;
+      assertCurrentAuth();
+      auth = await recoverDeepSeekUsageAuth(accountId, epoch);
+      if (!auth) {
+        if (providerUsageEpoch(accountId) === epoch) markProviderUsageExpired(accountId);
+        throw error;
+      }
+      try { data = await request(); }
+      catch (retryError) {
+        if (retryError?.code === 'AUTH_EXPIRED' && providerUsageEpoch(accountId) === epoch) markProviderUsageExpired(accountId);
+        throw retryError;
+      }
+    }
+    assertCurrentAuth();
+    providerUsageCache.set(cacheKey, { at: Date.now(), epoch, data });
+    markProviderUsageConnected(accountId, auth, false);
+    return data;
+  } finally {
+    forgetRequest();
+  }
+};
+
+const disconnectProviderUsage = async (accountId) => {
+  bumpProviderUsageEpoch(accountId);
+  abortProviderUsageRequests(accountId);
+  closeProviderUsageWindows(accountId);
+  store.deleteSecretVariable(accountId, PROVIDER_USAGE_AUTH_KEY);
+  await clearProviderUsageSession(accountId);
+  const state = withAccountUsageConnection(accountId, (account) => {
+    const { usageConnection, ...rest } = account;
+    return rest;
+  });
+  return { state: { ...state, runtime: runtimeStatus() } };
+};
+
 const notifyWaste = (state, account, provider) => {
   if (!state.settings?.alerts || !Notification.isSupported()) return;
   const rules = Array.isArray(state.settings.reminderRules) ? state.settings.reminderRules : [];
@@ -399,11 +907,14 @@ async function pollState(accountIds = null) {
   sendState(current);
   const ids = accountIds ? new Set(accountIds) : null;
   const nextAccounts = [];
+  const processedIds = new Set();
+  const originalAccounts = new Map((current.accounts || []).map((account) => [account.id, account]));
   for (const account of current.accounts || []) {
     // 定时巡检跳过停用账号（数据冻结、不产生新历史点与提醒）；点名轮询不受限，
     // 「测试连接」与启用后的立即补拉都靠它验证停用中的账号
     if (account.disabled && !ids) { nextAccounts.push(account); continue; }
     if (ids && !ids.has(account.id)) { nextAccounts.push(account); continue; }
+    processedIds.add(account.id);
     const provider = (current.providers || []).find((item) => item.id === account.providerId);
     if (!provider) {
       nextAccounts.push({ ...account, status: 'warning', lastError: '找不到厂商配置', lastChecked: new Date().toISOString() });
@@ -419,7 +930,7 @@ async function pollState(accountIds = null) {
       const checkedAt = new Date().toISOString();
       // 查询成功后刷新身份信息（续期后的最新凭据重新解析一次）
       const identityPatch = cliIdentityPatch(account, provider.requestConfig?.adapterMode, store.getSecrets(account.id));
-      const updated = { ...account, ...(identityPatch || {}), windows, status: 'active', lastError: null, lastChecked: checkedAt, lastTestAt: checkedAt };
+      const updated = { ...account, ...(identityPatch || {}), windows, status: 'active', authStatus: null, lastError: null, lastChecked: checkedAt, lastTestAt: checkedAt };
       nextAccounts.push(updated);
       store.appendHistory(account.id, windows, historyRetentionDays());
       // 周期浪费归档：从该账号历史中提取已结束的周期（周/月等厂商预设窗口），永久保存
@@ -427,10 +938,29 @@ async function pollState(accountIds = null) {
       notifyWaste(current, updated, provider);
     } catch (error) {
       const checkedAt = new Date().toISOString();
-      nextAccounts.push({ ...account, status: 'warning', lastError: error.message, lastChecked: checkedAt, lastTestAt: checkedAt });
+      nextAccounts.push({ ...account, status: 'warning', authStatus: authStatusForPollError(error), lastError: error.message, lastChecked: checkedAt, lastTestAt: checkedAt });
     }
   }
-  const next = cleanState({ ...current, accounts: nextAccounts, lastSync: new Date().toISOString() });
+  // Network requests above yield to other IPC work. Merge only polling-owned fields
+  // into the newest state so a concurrent settings edit, account deletion, or
+  // DeepSeek usage connect/disconnect cannot be overwritten by this older snapshot.
+  const latest = migrateState(store.loadState()) || current;
+  const polledAccounts = new Map(nextAccounts.map((account) => [account.id, account]));
+  const mergedAccounts = (latest.accounts || []).map((latestAccount) => {
+    if (!processedIds.has(latestAccount.id)) return latestAccount;
+    const polled = polledAccounts.get(latestAccount.id);
+    const original = originalAccounts.get(latestAccount.id);
+    if (!polled || !original) return latestAccount;
+    const merged = { ...latestAccount };
+    for (const key of ['windows', 'status', 'authStatus', 'lastError', 'lastChecked', 'lastTestAt']) {
+      if (Object.prototype.hasOwnProperty.call(polled, key)) merged[key] = polled[key];
+    }
+    for (const key of ['identity', 'cliFingerprint', 'cliAuthSource']) {
+      if (polled[key] !== original[key] && latestAccount[key] === original[key]) merged[key] = polled[key];
+    }
+    return merged;
+  });
+  const next = cleanState({ ...latest, accounts: mergedAccounts, lastSync: new Date().toISOString() });
   store.saveState(next);
   pollInProgress = false;
   refreshLiveIdentities();
@@ -598,18 +1128,24 @@ function registerIpc() {
     if (state) store.saveState(cleanState(state));
     return state ? { ...state, runtime: runtimeStatus() } : null;
   });
-  ipcMain.handle('state:save', (_event, state) => {
+  ipcMain.handle('state:save', async (_event, state) => {
     // 记录保存前的开关状态：只在“自动检查更新”从关闭切换为开启时补一次立即检查，避免每次保存设置都请求 GitHub
-    const autoUpdateWasDisabled = store.loadState()?.settings?.autoUpdate === false;
-    const saved = store.saveState(cleanState(state));
-    // 账号被删除时连同它的额度历史与周期档案一起清掉
-    store.pruneHistoryAccounts((saved.accounts || []).map((account) => account.id), historyRetentionDays());
-    store.pruneCyclesAccounts((saved.accounts || []).map((account) => account.id));
+    const previous = migrateState(store.loadState());
+    const autoUpdateWasDisabled = previous?.settings?.autoUpdate === false;
+    const saved = store.saveState(cleanState(mergeMainOwnedUsageConnections(state, previous)));
+    const savedIds = new Set((saved.accounts || []).map((account) => account.id));
+    const removedIds = (previous?.accounts || []).filter((account) => !savedIds.has(account.id)).map((account) => account.id);
+    // 账号被删除时连同凭据、官方网页登录分区、额度历史与周期档案一起清掉。
+    // 这也覆盖没有先调用 credential:delete 的调用方。
+    const removalCleanup = Promise.all(removedIds.map((accountId) => deleteAccountLocalData(accountId)));
+    store.pruneHistoryAccounts([...savedIds], historyRetentionDays());
+    store.pruneCyclesAccounts([...savedIds]);
     applyProxySetting();
     schedulePolling();
     sendState(saved);
     refreshTray();
     if (autoUpdateWasDisabled && saved?.settings?.autoUpdate && backgroundUpdateCheckAllowed()) checkForUpdates();
+    await removalCleanup;
     return saved;
   });
   ipcMain.handle('credential:save', (_event, { accountId, credential = '', variables }) => {
@@ -618,10 +1154,34 @@ function registerIpc() {
     if (!String(credential).trim() && !hasVariables) return true;
     return store.saveCredential(accountId, String(credential).trim(), variables);
   });
-  ipcMain.handle('credential:delete', (_event, accountId) => store.deleteCredential(accountId));
+  ipcMain.handle('credential:delete', (_event, accountId) => deleteAccountLocalData(String(accountId || '')));
   ipcMain.handle('quota:poll-all', () => pollState());
   ipcMain.handle('quota:poll-account', (_event, accountId) => pollState([accountId]));
   ipcMain.handle('history:get', (_event, accountId) => store.getHistory(String(accountId || ''), historyRetentionDays()));
+  ipcMain.handle('usage:get', async (_event, accountId, options = {}) => {
+    const id = String(accountId || '');
+    const state = migrateState(store.loadState());
+    const account = (state?.accounts || []).find((item) => item.id === id);
+    if (!account) throw new Error('找不到要查询的账号');
+    if (account.providerId !== 'deepseek') throw new Error('该厂商暂不支持官方账号用量');
+    return queryDeepSeekUsage(id, options);
+  });
+  ipcMain.handle('usage:connect', async (_event, accountId) => {
+    const id = String(accountId || '');
+    const state = migrateState(store.loadState());
+    const account = (state?.accounts || []).find((item) => item.id === id);
+    if (!account) throw new Error('找不到要连接的账号');
+    if (account.providerId !== 'deepseek') throw new Error('该厂商暂不支持官方账号登录');
+    return connectDeepSeekUsage(id);
+  });
+  ipcMain.handle('usage:disconnect', (_event, accountId) => {
+    const id = String(accountId || '');
+    const state = migrateState(store.loadState());
+    const account = (state?.accounts || []).find((item) => item.id === id);
+    if (!account) throw new Error('找不到要断开连接的账号');
+    if (account.providerId !== 'deepseek') throw new Error('该厂商没有可断开的官方账号登录');
+    return disconnectProviderUsage(id);
+  });
   ipcMain.handle('history:clear', () => { store.clearHistory(); return store.clearCycles(); });
   // 周期浪费档案：永久保留，不受历史保留时长影响
   ipcMain.handle('cycles:get', (_event, accountId) => store.getCycles(String(accountId || '')));
@@ -1004,8 +1564,9 @@ function registerIpc() {
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => { mainWindow?.show(); mainWindow?.focus(); });
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     store = new DesktopStore();
+    await scrubLegacyProviderUsagePartitions();
     applyProxySetting();
     refreshLiveIdentities();
     registerIpc();
@@ -1022,5 +1583,19 @@ else {
   });
 }
 
-app.on('before-quit', () => { quitting = true; if (pollTimer) clearInterval(pollTimer); if (updateCheckTimer) clearInterval(updateCheckTimer); });
+app.on('before-quit', () => {
+  quitting = true;
+  if (pollTimer) clearInterval(pollTimer);
+  if (updateCheckTimer) clearInterval(updateCheckTimer);
+  const usageAccountIds = new Set([
+    ...providerUsageWindows.keys(),
+    ...providerUsageSessions.keys(),
+    ...providerUsageRequests.keys(),
+  ]);
+  for (const accountId of usageAccountIds) {
+    bumpProviderUsageEpoch(accountId);
+    abortProviderUsageRequests(accountId);
+    closeProviderUsageWindows(accountId);
+  }
+});
 app.on('window-all-closed', () => {});

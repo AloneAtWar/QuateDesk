@@ -711,3 +711,100 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .danger-button { padding: 9px 12px; border: 1px solid transparent; border-radius: 7px; font-size: 11px; font-weight: 700; color: #231009; background: var(--coral); }
 .danger-button:hover { background: var(--coral-deep); }
 :root[data-theme='light'] .danger-button { color: #fff; }
+
+/* ── 厂商官方账号服务端用量（一比一复刻 DeepSeek 界面演示）── */
+/* 三个页签统一 271px 主体；热力图方格按容器宽度自适应（5–14px），近 1 年 53 周完整铺满一屏 */
+.history-view-switch button { padding-left: 8px; padding-right: 8px; }
+.provider-usage-view { height: 271px; min-width: 0; display: flex; flex-direction: column; padding: 7px 12px 5px; }
+/* 顶部统计卡片：彩色圆底图标在左，标签 + 数值在右 */
+.provider-usage-summary { flex: 0 0 auto; display: flex; gap: 7px; }
+.provider-stat { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 7px; padding: 5px 9px; border: 1px solid var(--line-inner); border-radius: 10px; background: var(--surface-2); }
+.stat-icon { width: 20px; height: 20px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; }
+.provider-stat .stat-copy { min-width: 0; display: grid; gap: 2px; }
+.provider-stat .stat-copy > span { color: var(--faint); font-size: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.provider-stat strong { color: var(--ink); font-size: 12px; line-height: 1.2; font-weight: 700; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 顶部图标配色（参考图）：花费红闪电 / Token 蓝机器人 / 活跃日绿日历；下方详情行用不同图标避免重复 */
+.provider-stat.cost .stat-icon { color: var(--coral); background: var(--coral-bg); }
+.provider-stat.tokens .stat-icon { color: var(--sky); background: color-mix(in srgb, var(--sky) 15%, transparent); }
+.provider-stat.days .stat-icon { color: var(--green-deep); background: var(--green-bg); }
+/* 热力图标题行：标题在左，「较少→较多」图例在右 */
+.provider-heatmap-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 5px 1px 0; }
+.provider-heatmap-title { color: var(--ink-soft); font-size: 10px; font-weight: 700; }
+.provider-heatmap-legend { display: flex; align-items: center; gap: 3px; color: var(--faint); font-size: 7px; }
+.provider-heatmap-legend .provider-heatmap-cell { width: 7px; height: 7px; }
+.provider-heatmap-legend .provider-heatmap-cell.level-1 { background: color-mix(in srgb, var(--cyan) 35%, var(--surface-3)); }
+.provider-heatmap-legend .provider-heatmap-cell.level-2 { background: color-mix(in srgb, var(--cyan) 58%, var(--surface-3)); }
+.provider-heatmap-legend .provider-heatmap-cell.level-3 { background: color-mix(in srgb, var(--cyan) 82%, var(--surface-3)); }
+.provider-heatmap-legend .provider-heatmap-cell.level-4 { background: color-mix(in srgb, var(--cyan) 88%, white 12%); }
+.provider-heatmap-scroll { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; overflow: hidden; padding: 4px 3px; border: 1px solid var(--line-inner); border-radius: 8px; background: var(--surface-2); }
+.provider-heatmap-scroll:focus-visible { outline: 2px solid var(--focus-border); outline-offset: -2px; }
+.provider-heatmap-board { display: grid; grid-template-columns: 10px auto; grid-template-rows: 11px auto; align-items: flex-start; gap: 3px 7px; width: fit-content; max-width: 100%; margin: auto; }
+.provider-heatmap-corner { grid-column: 1; grid-row: 1; }
+.provider-heatmap-months { grid-column: 2; grid-row: 1; position: relative; height: 11px; overflow: visible; color: var(--faint); font-size: 8px; white-space: nowrap; }
+.provider-heatmap-weekdays { grid-column: 1; grid-row: 2; width: 10px; display: grid; grid-template-rows: repeat(7, var(--hm-cell-h)); color: var(--faint); font-size: 8px; text-align: center; }
+.provider-heatmap-weekdays span { display: grid; place-items: center; }
+.provider-heatmap-grid { grid-column: 2; grid-row: 2; display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, var(--hm-cell-h)); grid-auto-columns: var(--hm-cell); gap: 0; }
+/* 方格：GitHub 式圆角小方块，色阶为参考图同款青色系；无数据的日子与空档同色 */
+.provider-heatmap-cell { width: 8px; height: 8px; display: block; flex: 0 0 auto; border-radius: 3px; background: var(--surface-3); }
+.provider-heatmap-grid button.provider-heatmap-cell { width: var(--hm-cell); height: var(--hm-cell-h); appearance: none; border: 0; padding: 0; border-radius: 3px; background: var(--surface-3); }
+.provider-heatmap-grid button.provider-heatmap-cell.level-1 { background: color-mix(in srgb, var(--cyan) 35%, var(--surface-3)); }
+.provider-heatmap-grid button.provider-heatmap-cell.level-2 { background: color-mix(in srgb, var(--cyan) 58%, var(--surface-3)); }
+.provider-heatmap-grid button.provider-heatmap-cell.level-3 { background: color-mix(in srgb, var(--cyan) 82%, var(--surface-3)); }
+.provider-heatmap-grid button.provider-heatmap-cell.level-4 { background: color-mix(in srgb, var(--cyan) 88%, white 12%); }
+.provider-heatmap-grid button.provider-heatmap-cell.level-missing { background: var(--surface-3); }
+.provider-heatmap-grid button.provider-heatmap-cell:hover { box-shadow: 0 0 0 1px var(--ink-soft); }
+.provider-heatmap-grid button.provider-heatmap-cell.selected { box-shadow: 0 0 0 2px var(--focus-border); }
+.provider-heatmap-grid button.provider-heatmap-cell:focus-visible { outline: 2px solid var(--focus-border); outline-offset: 1px; }
+.provider-heatmap-cell.blank { width: var(--hm-cell); height: var(--hm-cell-h); visibility: hidden; }
+/* 当日明细：淡青描边卡片，一个卡片内三段纯文字、竖线分隔（参考图无图标）；标签「当日花费」默认显示，切到其他日子换成具体日期 */
+.provider-day-card { flex: 0 0 auto; margin: 6px 1px 0; padding: 4px 10px; border: 1px solid color-mix(in srgb, var(--cyan) 30%, var(--line)); border-radius: 10px; background: var(--surface-2); display: grid; grid-template-columns: repeat(3, 1fr); }
+.day-cell { min-width: 0; display: flex; align-items: center; padding: 2px 4px; }
+.day-cell + .day-cell { border-left: 1px solid var(--line-inner); padding-left: 12px; }
+.day-cell > div { min-width: 0; display: grid; gap: 1px; }
+.day-cell > div > span { color: var(--muted); font-size: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.day-cell b { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ink); font-size: 10px; font-weight: 700; white-space: nowrap; }
+.provider-usage-state { height: 271px; display: flex; align-items: center; justify-content: center; gap: 11px; padding: 22px 28px; color: var(--muted); }
+.provider-usage-state > svg { flex: 0 0 auto; color: var(--green); }
+.provider-usage-state-icon { width: 36px; height: 36px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 10px; color: var(--green-deep); background: var(--green-bg); }
+.provider-usage-state > div { min-width: 0; display: grid; gap: 4px; flex: 1; }
+.provider-usage-state b { color: var(--ink); font-size: 12px; }
+.provider-usage-state small { color: var(--muted); font-size: 10px; line-height: 1.45; }
+.provider-usage-state em { color: var(--coral-deep); font-size: 9px; font-style: normal; }
+.provider-usage-state.auth-required .provider-usage-state-icon { color: var(--coral-deep); background: var(--coral-bg); }
+.provider-usage-state .outline-button, .provider-usage-state .primary-button { flex: 0 0 auto; padding: 7px 9px; }
+
+/* DeepSeek 账号编辑页中的可选连接：状态与余额 API 分开表达，防止用户误以为
+   断开官方账号会停止原有额度巡检。 */
+.provider-login-option { min-width: 0; margin: 2px 0 10px; padding: 11px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.provider-login-option > span { min-width: 0; }
+.provider-login-option b small { margin-left: 4px; color: var(--green-deep); font-size: 8px; font-weight: 500; }
+.provider-login-option i { flex: 0 0 auto; }
+.provider-login-option { cursor: pointer; }
+.provider-login-option input:focus-visible + i { outline: 2px solid var(--focus-border); outline-offset: 2px; box-shadow: 0 0 0 4px var(--focus-ring); }
+.provider-connection-card { display: grid; gap: 9px; margin: 12px 0 16px; padding: 11px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: transparent; }
+.provider-connection-copy { display: flex; align-items: flex-start; gap: 9px; }
+.provider-connection-icon { width: 28px; height: 28px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 8px; color: var(--green-deep); background: var(--green-bg); }
+.provider-connection-copy > div { min-width: 0; display: grid; gap: 3px; }
+.provider-connection-copy b { color: var(--ink); font-size: 11px; }
+.provider-connection-copy b em { margin-left: 4px; padding: 1px 5px; border-radius: 7px; color: var(--muted); background: var(--chip-bg); font-size: 8px; font-style: normal; font-weight: 500; }
+.provider-connection-copy small { color: var(--faint); font-size: 9px; line-height: 1.45; }
+.provider-connection-status { display: flex; align-items: center; gap: 7px; padding: 7px 8px; border: 1px solid var(--line-inner); border-radius: 7px; background: var(--surface); }
+.provider-connection-status > i { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--faint); }
+.provider-connection-status > span { min-width: 0; display: flex; align-items: baseline; gap: 7px; }
+.provider-connection-status b { color: var(--ink-soft); font-size: 10px; white-space: nowrap; }
+.provider-connection-status small { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--faint); font-size: 9px; white-space: nowrap; }
+.provider-connection-status.connected > i { background: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 13%, transparent); }
+.provider-connection-status.connected b { color: var(--green-deep); }
+.provider-connection-status.reauth > i { background: var(--coral); box-shadow: 0 0 0 3px color-mix(in srgb, var(--coral) 13%, transparent); }
+.provider-connection-status.reauth b { color: var(--coral-deep); }
+.provider-connection-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.provider-connection-actions .outline-button, .provider-connection-actions .primary-button { padding: 6px 9px; font-size: 10px; }
+.provider-connection-actions .text-button.disconnect { color: var(--coral-deep); }
+.provider-connection-actions .text-button.disconnect.confirming { padding: 4px 7px; border-radius: 6px; color: var(--coral-deep); background: var(--coral-bg); font-weight: 700; }
+.provider-connection-actions button:disabled { cursor: wait; opacity: .62; }
+.provider-connection-feedback { display: flex; align-items: flex-start; gap: 5px; padding-top: 7px; border-top: 1px solid var(--line-inner); color: var(--muted); font-size: 9px; line-height: 1.4; }
+.provider-connection-feedback svg { flex: 0 0 auto; margin-top: 1px; }
+.provider-connection-feedback.ok { color: var(--green-deep); }
+.provider-connection-feedback.fail { color: var(--coral-deep); }
+
+.provider-heatmap-months span { position: absolute; top: 0; line-height: 11px; }
