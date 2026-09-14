@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { app, safeStorage } = require('electron');
 const { appendHistoryPoint, pruneHistory } = require('./history.cjs');
-const { extractCycles, mergeCycles } = require('./waste.cjs');
+const { extractCycles, mergeCycles, purgeGhostCycles } = require('./waste.cjs');
 
 const readJson = (filePath, fallback) => {
   try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); }
@@ -52,15 +52,23 @@ class DesktopStore {
     const points = this.loadHistory()[accountId] || [];
     if (points.length < 2) return;
     const all = this.loadCycles();
-    const existing = all[accountId] || [];
-    const merged = mergeCycles(existing, extractCycles(points, windowKeys));
-    if (merged.length !== existing.length) {
+    // 合并前先清掉旧版算法可能留下的幽灵档案（early+natural 重复归档），有变化就回写
+    const previous = all[accountId] || [];
+    const merged = mergeCycles(purgeGhostCycles(previous), extractCycles(points, windowKeys));
+    if (JSON.stringify(merged) !== JSON.stringify(previous)) {
       all[accountId] = merged;
       writeJson(this.cyclesPath, all);
     }
   }
 
-  getCycles(accountId) { return this.loadCycles()[accountId] || []; }
+  getCycles(accountId) { return purgeGhostCycles(this.loadCycles()[accountId] || []); }
+
+  // 启动时全量清洗一次：历史账号（已停更/停用）的幽灵档案也一并清除
+  purgeAllCycles() {
+    const all = this.loadCycles();
+    const next = Object.fromEntries(Object.entries(all).map(([accountId, cycles]) => [accountId, purgeGhostCycles(cycles)]));
+    if (JSON.stringify(next) !== JSON.stringify(all)) writeJson(this.cyclesPath, next);
+  }
 
   clearCycles() { writeJson(this.cyclesPath, {}); return true; }
 

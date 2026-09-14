@@ -1018,6 +1018,7 @@ else {
   app.on('second-instance', () => { mainWindow?.show(); mainWindow?.focus(); });
   app.whenReady().then(() => {
     store = new DesktopStore();
+    store.purgeAllCycles();
     applyProxySetting();
     refreshLiveIdentities();
     registerIpc();

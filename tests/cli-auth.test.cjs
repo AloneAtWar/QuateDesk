@@ -339,7 +339,7 @@ test('Kimi 续期被拒绝标记为永久失败，网络错误保持瞬时', asy
   );
 });
 
-test('Kimi 订阅额度查询：一个接口出三个窗口，ratio 换算为剩余百分比，月度取 coding 口径', async () => {
+test('Kimi 订阅额度查询：一个接口出三个窗口，ratio 换算为剩余百分比，月度取会员池口径 amountUsedRatio', async () => {
   const seen = [];
   const fetcher = async (url, init) => {
     seen.push({ url, method: init.method, authorization: init.headers.Authorization });
@@ -354,8 +354,15 @@ test('Kimi 订阅额度查询：一个接口出三个窗口，ratio 换算为剩
   assert.deepEqual(windows.map((item) => item.key), ['five_hour', 'weekly', 'monthly']);
   assert.equal(windows[0].remaining, 54.66);
   assert.equal(windows[1].remaining, 62.32);
-  assert.equal(windows[2].remaining, 92.48);
+  assert.equal(windows[2].remaining, 91.16);
   assert.equal(windows[2].resetAt, '2026-10-10T00:00:00Z');
+});
+
+test('Kimi 订阅额度查询：缺 amountUsedRatio 时月度退回 coding 口径 kimiCodeUsedRatio', async () => {
+  const payload = { ...kimiStatsPayload, subscriptionBalance: { ...kimiStatsPayload.subscriptionBalance, amountUsedRatio: undefined } };
+  const fetcher = async () => ({ ok: true, status: 200, json: async () => payload });
+  const windows = await queryAccount({ id: 'k1' }, kimiProvider, '', fetcher, { [SNAPSHOT_KEY]: JSON.stringify(kimiSnapshot()) });
+  assert.equal(windows[2].remaining, 92.48);
 });
 
 test('Kimi 订阅额度查询：401 自动续期后重试，并把新凭据回传主进程', async () => {

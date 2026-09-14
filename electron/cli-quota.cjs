@@ -181,9 +181,9 @@ async function queryKimiWebQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS,
     kimiRatioRow('five_hour', payload?.ratelimitCode5h),
     kimiRatioRow('weekly', payload?.ratelimitCode7d),
   ];
-  // 月度窗口取 coding 专属口径 kimiCodeUsedRatio，缺失时退到整个会员池的 amountUsedRatio
+  // 月度窗口取整个会员池的 amountUsedRatio（订阅额度的真实用量），缺失时退到 coding 专属口径 kimiCodeUsedRatio
   const balance = payload?.subscriptionBalance;
-  const monthlyUsed = Number(balance?.kimiCodeUsedRatio ?? balance?.amountUsedRatio);
+  const monthlyUsed = Number(balance?.amountUsedRatio ?? balance?.kimiCodeUsedRatio);
   if (Number.isFinite(monthlyUsed)) rows.push({ key: 'monthly', remaining: Math.max(0, Math.min(100, 100 - monthlyUsed * 100)), resetAt: balance.expireTime || null });
   const windows = rows.filter(Boolean).map((row) => meter(row.key, row.remaining, 100, '%', row.resetAt));
   if (!windows.length) throw new Error('Kimi 订阅响应中没有可识别的额度窗口');

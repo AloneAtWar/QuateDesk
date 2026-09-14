@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { medianGapMs, detectCycleClose, extractCycles, mergeCycles, computeWasteStats, resolveWasteWindows } = require('../electron/waste.cjs');
+const { medianGapMs, detectCycleClose, extractCycles, mergeCycles, purgeGhostCycles, computeWasteStats, resolveWasteWindows } = require('../electron/waste.cjs');
 
 const T0 = Date.parse('2026-09-01T02:00:00Z'); // 周期重置时刻（周二 10:00 +08）
 const H = 3_600_000;
@@ -171,6 +171,22 @@ test('mergeCycles：按 窗口:类型:结束时间 去重，可安全重复扫�
   // 再次扫描同样的历史，不会产生重复档案
   const again = mergeCycles(merged, extractCycles(points, ['weekly']));
   assert.equal(again.length, 1);
+});
+
+test('purgeGhostCycles：与 natural 共享 observedAt 的幽灵 early 被删除，真实提前重置保留', () => {
+  // 真实化石形态（wlb 09/07 双重归档）：旧版算法的突升兜底和新算法各自归档了同一次自然重置
+  const natural = { window: 'weekly', kind: 'natural', end: '2026-09-07T02:00:00.000Z', observedAt: '2026-09-07T01:57:36.463Z', remaining: 84.09, reliable: true };
+  const ghost = { window: 'weekly', kind: 'early', end: '2026-09-07T01:57:36.463Z', observedAt: '2026-09-07T01:57:36.463Z', remaining: 84.09, reliable: false };
+  // 没有同观测点 natural 对照的真实提前重置，不能误伤
+  const genuine = { window: 'weekly', kind: 'early', end: '2026-09-08T04:47:31.761Z', observedAt: '2026-09-08T04:47:31.761Z', remaining: 57.71, reliable: false };
+  assert.deepEqual(purgeGhostCycles([ghost, natural, genuine]), [natural, genuine]);
+});
+
+test('purgeGhostCycles：无 natural 对照或空列表时原样返回', () => {
+  const early = { window: 'weekly', kind: 'early', end: '2026-09-08T04:47:31.761Z', observedAt: '2026-09-08T04:47:31.761Z' };
+  assert.deepEqual(purgeGhostCycles([early]), [early]);
+  assert.deepEqual(purgeGhostCycles([]), []);
+  assert.deepEqual(purgeGhostCycles(null), []);
 });
 
 test('computeWasteStats：失真与提前重置不计入平均和累计', () => {

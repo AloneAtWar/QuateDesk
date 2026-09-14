@@ -110,6 +110,16 @@ const mergeCycles = (existing, extracted) => {
   return [...(existing || []), ...added].sort((a, b) => a.end.localeCompare(b.end));
 };
 
+// 幽灵档案清理：旧版算法的「剩余率突升兜底」给同一次重置重复归档 early+natural 两条记录，
+// 二者共享同一个 observedAt（周期最后一次观测点）。这种 early 是误报，删除只留 natural；
+// 真实的提前重置不会与 natural 共享观测点（改期后的旧 resetAt 永远不会被跨过），不受影响。
+const purgeGhostCycles = (cycles) => {
+  const list = cycles || [];
+  const naturalObserved = new Set(list.filter((record) => record.kind === 'natural').map((record) => record.observedAt));
+  if (!naturalObserved.size) return list;
+  return list.filter((record) => !(record.kind === 'early' && naturalObserved.has(record.observedAt)));
+};
+
 // 浪费统计聚合：只有「可靠 + 自然到期」的周期计入平均与累计；失真/提前重置只展示不统计
 const computeWasteStats = (cycles, windowKey) => {
   const list = (cycles || []).filter((record) => record.window === windowKey);
@@ -130,4 +140,4 @@ const resolveWasteWindows = (requestConfig) => {
   return (requestConfig?.windows || []).filter((key) => ['weekly', 'monthly'].includes(key));
 };
 
-module.exports = { medianGapMs, detectCycleClose, extractCycles, mergeCycles, computeWasteStats, resolveWasteWindows, RESET_JITTER_MS, RELIABLE_FACTOR };
+module.exports = { medianGapMs, detectCycleClose, extractCycles, mergeCycles, purgeGhostCycles, computeWasteStats, resolveWasteWindows, RESET_JITTER_MS, RELIABLE_FACTOR };

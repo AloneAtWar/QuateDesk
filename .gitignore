@@ -7,3 +7,4 @@ work/
 .DS_Store
 release-new/
 release-r2/
+build-cache/
