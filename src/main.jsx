@@ -234,6 +234,23 @@ const PROVIDER_USAGE_COPY = {
     connectedDetail: '可读取最近 1 年服务端历史',
     disconnectTitle: '断开 Codex 官方用量',
   },
+  minimax: {
+    display: 'MiniMax',
+    loading: '查询最近 1 年的每日账单与 Token',
+    connectHint: '登录 MiniMax 开放平台后读取每日账单与 Token 用量；登录凭据不会暴露给界面。',
+    connectAction: '登录官方账号',
+    connecting: '等待登录…',
+    reauthLabel: '需要重新登录',
+    reauthDetail: 'MiniMax 官方登录已过期',
+    reauthHint: '重新登录后即可继续读取 MiniMax 服务端历史，不影响 API Key 余额巡检。',
+    emptyHint: 'MiniMax 已连接，但没有返回可绘制的每日账单或 Token。',
+    editHint: '保存后打开 MiniMax 官方登录，用于读取每日账单与 Token 历史',
+    connectedToast: '已连接 MiniMax 官方账号，可在历史详情查看每日用量',
+    savedToast: '账号已保存，并已连接 MiniMax 官方用量',
+    saveAction: '保存并登录',
+    connectedDetail: '可读取最近 1 年服务端历史',
+    disconnectTitle: '断开 MiniMax 官方账号',
+  },
 };
 const providerUsageCopy = (provider) => PROVIDER_USAGE_COPY[provider?.id] || null;
 const providerUsageSupported = (account, provider) => Boolean(providerUsageCopy(provider))

@@ -21,6 +21,10 @@ const {
   normalizeZaiOrigin,
   buildCodexUsageRequest,
   normalizeCodexTokenUsage,
+  fetchMinimaxUsage,
+  probeMinimaxSession,
+  isAllowedMinimaxLoginUrl,
+  isMinimaxCookieDomain,
   ProviderUsageError,
   shouldUseCachedUsage,
 } = require('./provider-usage.cjs');
@@ -421,7 +425,9 @@ const cleanState = (state) => ({
 // API Key 仍负责日常余额轮询；官方用量只作为可选增强，用于读取厂商侧的
 // 账号级历史用量。每家厂商一个 PROVIDER_USAGE_CONFIGS 配置：
 // - browser-token（DeepSeek）：网页登录窗口捕获 userToken + Cookie，令牌持久化并支持失效恢复
+// - browser-cookie（MiniMax）：网页登录窗口捕获控制台 Cookie，账单探针验证会话
 // - api-key（Z.ai）：复用账号已保存的 API Key 直接查询，无需登录窗口
+// - cli-oauth（Codex）：复用本机 CLI 的 ChatGPT 登录快照，过期自动续期
 // 网页登录窗口使用非 persist 分区，凭据不会写进 Chromium 的磁盘目录；只把恢复
 // 所需的 Cookie/token 写入 safeStorage，且永远不进入公开 state 或 renderer。
 const providerUsagePartitionBase = (accountId) => `quota-desk-usage-${crypto.createHash('sha256').update(String(accountId)).digest('hex').slice(0, 20)}`;
@@ -710,6 +716,23 @@ const PROVIDER_USAGE_CONFIGS = {
     timezoneOffsetSec: 0,
     missingAuthMessage: '尚未连接 Codex 官方用量',
     expiredMessage: 'Codex 本机登录已失效，请运行一次 Codex CLI 或重新导入登录快照',
+  },
+  minimax: {
+    id: 'minimax',
+    mode: 'browser-cookie',
+    timezoneOffsetSec: 8 * 60 * 60,
+    missingAuthMessage: '尚未连接 MiniMax 官方账号',
+    expiredMessage: 'MiniMax 官方账号登录已过期，请重新连接',
+    browser: {
+      loginUrl: 'https://platform.minimaxi.com/user-center/payment/coding-plan?cycle_type=3',
+      loginTitle: '连接 MiniMax 官方账号',
+      isAllowedLoginUrl: isAllowedMinimaxLoginUrl,
+      isCookieDomain: isMinimaxCookieDomain,
+      requiresToken: false,
+      readCredential: null,
+      validate: (_auth, sessionFetch, signal) => probeMinimaxSession(sessionFetch, { timeoutMs: 15_000, signal }),
+      fetchUsage: (_auth, sessionFetch, options) => fetchMinimaxUsage(sessionFetch, options),
+    },
   },
 };
 

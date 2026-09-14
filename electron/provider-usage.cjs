@@ -1406,6 +1406,286 @@ const normalizeCodexTokenUsage = (payload, options = {}) => {
     fetchedAt: new Date().toISOString(),
   };
 };
+// ── MiniMax 官方账号账单历史 ────────────────────────────────────────────────
+// MiniMax 控制台没有 API Key 可用的历史接口，逐日用量来自网页会话的分页账单
+// （platform.minimaxi.com/account/amount，与 CodexBar 的 MiniMaxBillingHistory
+// 同一路径）。登录走浏览器窗口捕获 Cookie；consume_cash 系字段全为 0 时说明
+// 是纯套餐用量，界面自动退回 Token 口径着色。
+const MINIMAX_PLATFORM_ORIGIN = 'https://platform.minimaxi.com';
+const MINIMAX_BILLING_PATH = '/account/amount';
+const MINIMAX_BILLING_PAGE_LIMIT = 100;
+const MINIMAX_MAX_BILLING_PAGES = 40;
+const MINIMAX_TIMEZONE_OFFSET_SEC = 8 * 60 * 60;
+const MINIMAX_LABEL = 'MiniMax 平台';
+const MINIMAX_AUTH_EXPIRED_MESSAGE = 'MiniMax 官方账号登录已失效，请重新连接';
+// 控制台登录链路可能跳转的域名（密码/扫码登录、OAuth 回跳）。第三方脚本与
+// iframe 不走这个白名单；列表刻意保持精确主机收敛。
+const MINIMAX_LOGIN_HOSTS = new Set([
+  'platform.minimaxi.com',
+  'platform.minimax.io',
+  'www.minimaxi.com',
+  'www.minimax.io',
+  'passport.minimaxi.com',
+  'passport.minimax.io',
+  'account.minimaxi.com',
+  'account.minimax.io',
+  'api.minimaxi.com',
+  'api.minimax.io',
+]);
+
+const isAllowedMinimaxLoginUrl = (rawUrl) => {
+  try {
+    const url = new URL(String(rawUrl || ''));
+    return url.protocol === 'https:'
+      && !url.username
+      && !url.password
+      && (!url.port || url.port === '443')
+      && MINIMAX_LOGIN_HOSTS.has(url.hostname.toLowerCase());
+  } catch { return false; }
+};
+
+const isMinimaxCookieDomain = (value) => {
+  const domain = String(value || '').toLowerCase().replace(/^\./, '');
+  return domain === 'minimaxi.com' || domain.endsWith('.minimaxi.com')
+    || domain === 'minimax.io' || domain.endsWith('.minimax.io');
+};
+
+// 账单接口只发往 MiniMax 官方控制台主机；自定义地址一律回落默认域名，避免泄露 Cookie
+const normalizeMinimaxOrigin = (raw) => {
+  try {
+    const url = new URL(String(raw || '').trim());
+    const host = url.hostname.toLowerCase();
+    if (url.protocol === 'https:' && !url.username && !url.password && (/(^|\.)minimaxi\.com$/.test(host) || /(^|\.)minimax\.io$/.test(host))) return url.origin;
+  } catch {}
+  return MINIMAX_PLATFORM_ORIGIN;
+};
+
+const minimaxBillingPage = async (fetcher, origin, page, timeoutMs, signal) => {
+  const payload = await requestProviderJson({
+    label: MINIMAX_LABEL,
+    fetcher,
+    url: `${origin}${MINIMAX_BILLING_PATH}?page=${page}&limit=${MINIMAX_BILLING_PAGE_LIMIT}&aggregate=false`,
+    credentials: 'include',
+    headers: {
+      Origin: origin,
+      Referer: `${origin}/account`,
+      'x-requested-with': 'XMLHttpRequest',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    },
+    timeoutMs,
+    signal,
+    authMessage: MINIMAX_AUTH_EXPIRED_MESSAGE,
+    isBusinessAuthError: (body) => Number(body?.base_resp?.status_code) === 1004
+      || /cookie|登录|log in/i.test(String(body?.base_resp?.status_msg || '')),
+    businessError: (body) => {
+      const code = Number(body?.base_resp?.status_code ?? 0);
+      return code !== 0 ? `MiniMax 平台返回错误：${String(body?.base_resp?.status_msg || '未知错误').slice(0, 120)}` : null;
+    },
+  });
+  const records = payload?.charge_records;
+  if (records !== undefined && records !== null && !Array.isArray(records)) {
+    throw new ProviderUsageError('MiniMax 账单响应结构不兼容', 'SCHEMA_INCOMPATIBLE');
+  }
+  const total = finiteNumber(payload?.total_cnt);
+  return { records: Array.isArray(records) ? records : [], totalCount: total === null ? null : Math.max(0, Math.floor(total)) };
+};
+
+// 登录探针：一页账单能读通即视为会话有效（capture 流程在窗口会话内带 Cookie 调用）
+const probeMinimaxSession = async (fetcher, options = {}) => {
+  const timeoutMs = usageTimeoutMs(options.timeoutMs);
+  const signal = normalizeAbortSignal(options.signal);
+  const result = await minimaxBillingPage(fetcher, normalizeMinimaxOrigin(options.origin), 1, timeoutMs, signal);
+  return { records: result.records.length, totalCount: result.totalCount };
+};
+
+const minimaxRecordDate = (record, timezoneOffsetSec) => {
+  const epoch = finiteNumber(record?.created_at);
+  if (epoch !== null && epoch > 0) return dateOfEpoch(epoch, timezoneOffsetSec);
+  const ymd = String(record?.ymd || '').trim();
+  if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(ymd)) return strictResponseDate(ymd);
+  if (/^\d{8}$/.test(ymd)) return strictResponseDate(`${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}`);
+  const slashed = /^(\d{4})\/(\d{1,2})\/(\d{1,2})$/.exec(ymd);
+  if (slashed) return strictResponseDate(`${slashed[1]}-${slashed[2].padStart(2, '0')}-${slashed[3].padStart(2, '0')}`);
+  const consume = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/.exec(String(record?.consume_time || '').trim());
+  if (consume) return strictResponseDate(`${consume[1]}-${consume[2].padStart(2, '0')}-${consume[3].padStart(2, '0')}`);
+  return null;
+};
+
+// 与 CodexBar 一致：result/status 存在且不是 SUCCESS 的记录不计入用量
+const minimaxRecordSucceeded = (record) => {
+  const result = String(record?.result ?? record?.status ?? '').trim();
+  return !result || result.toUpperCase() === 'SUCCESS';
+};
+
+const minimaxRecordTokens = (record) => {
+  const total = finiteNumber(record?.consume_token);
+  if (total !== null && total > 0) return Math.floor(total);
+  return countOf(record?.consume_input_token) + countOf(record?.consume_output_token);
+};
+
+const minimaxRecordCash = (record) => finiteNumber(record?.consume_cash_after_voucher) ?? finiteNumber(record?.consume_cash);
+
+/**
+ * Fetch MiniMax console billing history (cookie session) into the shared usage shape.
+ * startDate/endDate are inclusive YYYY-MM-DD dates in timezoneOffsetSec (UTC+8).
+ */
+const fetchMinimaxUsage = async (fetcher, options = {}) => {
+  if (typeof fetcher !== 'function') throw new ProviderUsageError('缺少网络请求实现', 'INVALID_ARGUMENT');
+  const timezoneOffsetSec = normalizeUsageTimezoneOffset(options.timezoneOffsetSec, MINIMAX_TIMEZONE_OFFSET_SEC, 'MiniMax 用量');
+  const fallbackRange = defaultRange(timezoneOffsetSec, options.nowMs);
+  const start = parseDate(options.startDate || fallbackRange.startDate, 'startDate');
+  const end = parseDate(options.endDate || fallbackRange.endDate, 'endDate');
+  if (start.ordinal > end.ordinal) throw new ProviderUsageError('startDate 不能晚于 endDate', 'INVALID_ARGUMENT');
+  if ((end.ordinal - start.ordinal) / DAY_MS + 1 > MAX_RANGE_DAYS) {
+    throw new ProviderUsageError('MiniMax 用量查询范围不能超过 3660 天', 'INVALID_ARGUMENT');
+  }
+  const timeoutMs = usageTimeoutMs(options.timeoutMs);
+  const signal = normalizeAbortSignal(options.signal);
+  throwIfAborted(signal);
+  const origin = normalizeMinimaxOrigin(options.origin);
+
+  const days = new Map();
+  const issues = [];
+  let totalCount = null;
+  let fetched = 0;
+  let reachedRangeStart = false;
+  let page = 1;
+  for (; page <= MINIMAX_MAX_BILLING_PAGES; page += 1) {
+    throwIfAborted(signal);
+    let result;
+    try {
+      result = await minimaxBillingPage(fetcher, origin, page, timeoutMs, signal);
+    } catch (error) {
+      if (error?.code === 'AUTH_EXPIRED' || error?.code === 'ABORTED') throw error;
+      // 首页失败视为整体不可用；后续页失败保留已翻到的部分并如实标注
+      if (page === 1) throw error;
+      issues.push({ period: `page ${page}`, code: error?.code || 'USAGE_UNAVAILABLE' });
+      break;
+    }
+    if (result.totalCount !== null) totalCount = result.totalCount;
+    if (!result.records.length) break;
+    fetched += result.records.length;
+    let oldestInPage = null;
+    for (const record of result.records) {
+      if (!objectOf(record) || !minimaxRecordSucceeded(record)) continue;
+      const date = minimaxRecordDate(record, timezoneOffsetSec);
+      if (!date) continue;
+      if (!oldestInPage || date < oldestInPage) oldestInPage = date;
+      if (!inRange(date, start.value, end.value)) continue;
+      const day = ensureDay(days, date);
+      const counts = {
+        tokens: minimaxRecordTokens(record),
+        inputTokens: countOf(record?.consume_input_token),
+        outputTokens: countOf(record?.consume_output_token),
+        promptTokens: 0,
+        cacheHitTokens: 0,
+        cacheMissTokens: 0,
+        requests: 1,
+      };
+      addTokens(day, record?.model, counts);
+      const cash = minimaxRecordCash(record);
+      if (cash !== null) addCost(day, record?.model, 'CNY', cash);
+    }
+    if (oldestInPage && oldestInPage <= start.value) { reachedRangeStart = true; break; }
+    if (totalCount !== null && fetched >= totalCount) break;
+  }
+  if (!reachedRangeStart && (totalCount === null || fetched < totalCount) && page > MINIMAX_MAX_BILLING_PAGES) {
+    issues.push({ period: `${start.value}~${end.value}`, code: 'PAGE_CAP' });
+  }
+
+  // 纯套餐账单的 consume_cash 全为 0：金额没有区分度，退回 Token 口径
+  const anyPositiveCash = [...days.values()].some((day) => [...day.costs.values()].some((amount) => amount > 0));
+  const complete = reachedRangeStart || (totalCount !== null && fetched >= totalCount);
+
+  const daily = [];
+  for (let ordinal = start.ordinal; ordinal <= end.ordinal; ordinal += DAY_MS) {
+    const date = dateStringOfOrdinal(ordinal);
+    const accumulated = days.get(date) || createDayAccumulator(date);
+    const costs = anyPositiveCash ? currencyAmounts(accumulated.costs) : [];
+    daily.push({
+      date,
+      cost: anyPositiveCash ? (accumulated.costs.get('CNY') || 0) : null,
+      currency: anyPositiveCash ? 'CNY' : null,
+      costs,
+      tokens: accumulated.tokens,
+      inputTokens: accumulated.inputTokens,
+      outputTokens: accumulated.outputTokens,
+      promptTokens: null,
+      cacheHitTokens: null,
+      cacheMissTokens: null,
+      requests: accumulated.requests,
+      models: [...accumulated.models.values()].map((model) => ({
+        model: model.model,
+        cost: anyPositiveCash ? (model.costs.get('CNY') || 0) : null,
+        currency: anyPositiveCash ? 'CNY' : null,
+        costs: anyPositiveCash ? currencyAmounts(model.costs) : [],
+        tokens: model.tokens,
+        inputTokens: model.inputTokens,
+        outputTokens: model.outputTokens,
+        cacheHitTokens: null,
+        cacheMissTokens: null,
+        requests: model.requests,
+      })).filter((model) => model.tokens !== 0 || model.cost !== 0).sort((left, right) => (right.cost || 0) - (left.cost || 0) || (right.tokens || 0) - (left.tokens || 0)),
+      coverage: { tokens: true, cost: anyPositiveCash },
+    });
+  }
+
+  const knownTokens = daily.reduce((sum, day) => sum + (day.tokens || 0), 0);
+  const knownCost = daily.reduce((sum, day) => sum + (day.cost || 0), 0);
+  const activeDays = daily.filter((day) => (day.cost || 0) > 0 || (day.tokens || 0) > 0).length;
+  const peakDailyTokens = daily.reduce((peak, day) => Math.max(peak, day.tokens || 0), 0);
+  const peakDailyCost = anyPositiveCash ? daily.reduce((peak, day) => Math.max(peak, day.cost || 0), 0) : null;
+  const tokensCoverage = {
+    complete,
+    coveredPeriods: complete ? 1 : 0,
+    totalPeriods: 1,
+    sources: fetched ? ['billing-history'] : [],
+    legacyFallback: false,
+  };
+  const costCoverage = {
+    complete: anyPositiveCash && complete,
+    coveredPeriods: anyPositiveCash ? tokensCoverage.coveredPeriods : 0,
+    totalPeriods: tokensCoverage.totalPeriods,
+    sources: anyPositiveCash ? ['billing-history'] : [],
+    legacyFallback: false,
+  };
+
+  return {
+    provider: 'minimax',
+    metric: anyPositiveCash ? 'cost' : 'tokens',
+    currency: anyPositiveCash ? 'CNY' : null,
+    summary: {
+      balance: null,
+      grantedBalance: null,
+      toppedUpBalance: null,
+      totalCost: null,
+      rangeCost: anyPositiveCash && complete ? knownCost : null,
+      knownRangeCost: anyPositiveCash ? knownCost : null,
+      peakDailyCost,
+      rangeTokens: complete ? knownTokens : null,
+      knownRangeTokens: knownTokens,
+      peakDailyTokens,
+      activeDays,
+      inputTokens: complete ? daily.reduce((sum, day) => sum + (day.inputTokens || 0), 0) : null,
+      outputTokens: complete ? daily.reduce((sum, day) => sum + (day.outputTokens || 0), 0) : null,
+      requests: complete ? daily.reduce((sum, day) => sum + (day.requests || 0), 0) : null,
+      planName: null,
+    },
+    coverage: {
+      start: start.value,
+      end: end.value,
+      timeZone: timezoneOffsetSec,
+      timezoneOffsetSec,
+      source: fetched ? 'billing-history' : 'unavailable',
+      partial: !complete,
+      tokens: tokensCoverage,
+      cost: costCoverage,
+      issues,
+    },
+    days: daily,
+    fetchedAt: new Date().toISOString(),
+  };
+};
 module.exports = {
   fetchDeepSeekUsage,
   fetchDeepSeekSummary,
@@ -1419,6 +1699,11 @@ module.exports = {
   normalizeZaiOrigin,
   buildCodexUsageRequest,
   normalizeCodexTokenUsage,
+  fetchMinimaxUsage,
+  probeMinimaxSession,
+  isAllowedMinimaxLoginUrl,
+  isMinimaxCookieDomain,
+  normalizeMinimaxOrigin,
   shouldUseCachedUsage,
   __test: {
     ZAI_DEFAULT_ORIGIN,
@@ -1427,6 +1712,13 @@ module.exports = {
     ZAI_TIMEZONE_OFFSET_SEC,
     CODEX_USAGE_PROFILE_URL,
     CODEX_TIMEZONE_OFFSET_SEC,
+    MINIMAX_PLATFORM_ORIGIN,
+    MINIMAX_BILLING_PATH,
+    MINIMAX_TIMEZONE_OFFSET_SEC,
+    MINIMAX_MAX_BILLING_PAGES,
+    minimaxRecordDate,
+    minimaxRecordSucceeded,
+    minimaxRecordTokens,
     zaiLabelDate,
     zaiModelUsageData,
     DEEPSEEK_PLATFORM_ORIGIN,
