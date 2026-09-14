@@ -2,6 +2,8 @@
 // 归档永久保留、不受历史保留时长影响，供「浪费统计」视图使用。
 // 这里是纯逻辑（不依赖 electron），方便单元测试；文件读写由 storage.cjs 负责。
 
+const { realQuotaPair } = require('./history.cjs');
+
 const RESET_JITTER_MS = 5 * 60_000; // resetAt 抖动容差：差值 5 分钟内视为同一周期
 const RELIABLE_FACTOR = 2;          // 最后观测距重置 ≤ 2×轮询中位间隔 → 记录可信
 const FALLBACK_POLL_MS = 5 * 60_000;
@@ -43,18 +45,21 @@ const detectCycleClose = (prev, curr, prevAt, currAt) => {
 };
 
 // 归档一条周期记录：end/observedAt 的间隔即失真程度，reliable 在归档时按当时轮询节奏算好
-const buildCycleRecord = (windowKey, prev, fromMs, close, medianMs) => ({
-  window: windowKey,
-  from: new Date(fromMs).toISOString(),
-  end: new Date(close.end).toISOString(),
-  kind: close.kind,
-  observedAt: new Date(prev.atMs).toISOString(),
-  remaining: Number(prev.sample.remaining) || 0,
-  amount: Number.isFinite(Number(prev.sample.amount)) ? Number(prev.sample.amount) : null,
-  limit: Number.isFinite(Number(prev.sample.limit)) ? Number(prev.sample.limit) : null,
-  gapMs: Math.max(0, close.end - prev.atMs),
-  reliable: close.kind === 'natural' && (close.end - prev.atMs) <= RELIABLE_FACTOR * medianMs,
-});
+const buildCycleRecord = (windowKey, prev, fromMs, close, medianMs) => {
+  const pair = realQuotaPair(prev.sample.amount, prev.sample.limit, prev.sample.unit);
+  return {
+    window: windowKey,
+    from: new Date(fromMs).toISOString(),
+    end: new Date(close.end).toISOString(),
+    kind: close.kind,
+    observedAt: new Date(prev.atMs).toISOString(),
+    remaining: Number(prev.sample.remaining) || 0,
+    amount: pair.amount,
+    limit: pair.limit,
+    gapMs: Math.max(0, close.end - prev.atMs),
+    reliable: close.kind === 'natural' && (close.end - prev.atMs) <= RELIABLE_FACTOR * medianMs,
+  };
+};
 
 const cycleKey = (record) => `${record.window}:${record.kind}:${record.end}`;
 

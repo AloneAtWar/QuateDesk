@@ -58,12 +58,30 @@ const formatDisabledDuration = (iso) => {
 };
 
 const formatAmount = (meter) => meter.key === 'balance' || meter.unit !== '%' ? `${meter.unit === 'CNY' ? '¥' : meter.unit}${Number(meter.amount ?? meter.remaining).toFixed(2)}` : `${Math.round(meter.remaining)}%`;
-// “已用 / 总量”明细只在窗口真的带有具体数值时展示；数值缺失、总量为 0 或就是 100 的纯百分比窗口不显示
+// 百分比窗口只有带真实总量时才展示“剩 X / Y”；总量缺失、为 0 或就是 100 的纯百分比占位不算
+const hasRealQuotaNumbers = (amount, limit, unit = '%') => {
+  const a = Number(amount);
+  const l = Number(limit);
+  if (!Number.isFinite(a) || !Number.isFinite(l) || l <= 0) return false;
+  if ((unit || '%') === '%' && l === 100) return false;
+  return true;
+};
+// “已用 / 总量”明细只在窗口真的带有具体数值时展示
 const formatQuotaDetail = (meter) => {
+  if (meter.unit !== '%' || !hasRealQuotaNumbers(meter.amount, meter.limitAmount, meter.unit)) return '';
   const amount = Number(meter.amount);
   const limit = Number(meter.limitAmount);
-  if (meter.unit !== '%' || !Number.isFinite(amount) || !Number.isFinite(limit) || limit <= 0 || limit === 100) return '';
   return `已用 ${Math.max(0, limit - amount).toFixed(2)} / ${limit.toFixed(2)}`;
+};
+const reorderById = (list, fromId, toId) => {
+  if (!fromId || !toId || fromId === toId) return list;
+  const from = list.findIndex((item) => item.id === fromId);
+  const to = list.findIndex((item) => item.id === toId);
+  if (from < 0 || to < 0) return list;
+  const next = [...list];
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
+  return next;
 };
 
 const defaultEndpoint = (provider) => {
@@ -390,10 +408,8 @@ const formatChartNumber = (value) => Number.isInteger(value) ? String(value) : N
 // 悬停详情：百分比之外带上具体数值（剩余 / 总量）；与卡片明细同规则，纯百分比窗口（总量缺失、为 0 或就是 100）没有额外数值，不显示
 const formatChartDetail = (sample) => {
   const base = formatChartValue(sample, chartValue(sample));
-  const amount = Number(sample.amount);
-  const limit = Number(sample.limit);
-  if (sample.unit !== '%' || !Number.isFinite(amount) || !Number.isFinite(limit) || limit <= 0 || limit === 100) return base;
-  return `${base} · 剩 ${formatChartNumber(amount)} / ${formatChartNumber(limit)}`;
+  if (sample.unit !== '%' || !hasRealQuotaNumbers(sample.amount, sample.limit, sample.unit)) return base;
+  return `${base} · 剩 ${formatChartNumber(sample.amount)} / ${formatChartNumber(sample.limit)}`;
 };
 const formatChartStamp = (at) => { const d = new Date(at); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 // 该快照点的刷新周期：重置的绝对时间 + 相对该点的倒计时
@@ -650,10 +666,10 @@ function WasteView({ account, wasteWindows }) {
       <span>{formatResetCompact(cycle.end)} 后重置 · 记录 {formatChartStamp(account.lastChecked)}</span>
     </>;
     const observed = <span>记录于 <b>{formatChartStamp(cycle.observedAt)}</b></span>;
-    const amount = Number.isFinite(cycle.amount) && Number.isFinite(cycle.limit) ? <span>剩 <b>{cycle.amount} / {cycle.limit}</b></span> : null;
+    const amount = hasRealQuotaNumbers(cycle.amount, cycle.limit) ? <span>剩 <b>{formatChartNumber(cycle.amount)} / {formatChartNumber(cycle.limit)}</b></span> : null;
     if (cycle.kind === 'early') return <><span className="when">{range} 周期</span><span className="warn">⚡ 厂商提前重置：剩余 {Math.round(cycle.remaining)}% 被清零</span>{observed}</>;
     if (!cycle.reliable) return <><span className="when">{range} 周期</span><span>浪费 <b>≤{Math.round(cycle.remaining)}%</b></span>{amount}{observed}<span className="warn">可能失真：距重置约 {formatWasteGap(cycle.gapMs)}</span></>;
-    return <><span className="when">{range} 周期</span><span>浪费 <b>{Math.round(cycle.remaining)}%</b>（剩余未用）</span>{amount}{observed}</>;
+    return <><span className="when">{range} 周期</span><span>浪费 <b>{Math.round(cycle.remaining)}%</b></span>{amount}{observed}</>;
   };
   // 周期过多柱宽触底时横向拖动平移
   const startDrag = (event) => { const el = scrollRef.current; if (!el) return; dragRef.current = { x: event.clientX, left: el.scrollLeft }; el.setPointerCapture?.(event.pointerId); setDragging(true); };
@@ -777,27 +793,129 @@ function DisabledAccountCard({ account, provider, onOpenHistory }) {
   </div>;
 }
 
-function StatusView({ accounts, providers, runtime, onTestAccount, testingAccountId, testResults, reminderRules, mode = 'rings', onModeChange, onOpenSettings, lastSync, onRefresh, refreshing, onOpenHistory, onRelogin }) {
+const CARD_DRAG_MOVE_PX = 6;
+const isCardChrome = (target) => Boolean(target?.closest?.('button, a, [role="link"], input, select, textarea'));
+// 账号名、额度数字、标签等可复制文字：落在这些上面时拖动走系统选中复制，不启动排序
+const isSelectableText = (target) => {
+  if (!target?.closest) return false;
+  if (target.closest('.provider-logo, .quota-ring, .concentric-rings, .meter-track, .meter-fill, .ring-dot, .card-status-icon')) return false;
+  const text = target.closest('strong, b, em, small, span, p');
+  return Boolean(text && text.textContent?.trim());
+};
+const selectionIn = (root) => {
+  const sel = window.getSelection?.();
+  if (!sel || sel.isCollapsed || !String(sel).trim()) return false;
+  return Boolean(root && (root.contains(sel.anchorNode) || root.contains(sel.focusNode)));
+};
+
+function OverviewCard({ account, provider, feedback, onOpenHistory, onRelogin, onReorder, sortable, dragId, overId, onDragId, onOverId, skipClickRef }) {
+  const canDrag = sortable && onReorder;
+  const cardRef = useRef(null);
+  const pressRef = useRef(null);
+  const liftingRef = useRef(false);
+  const relogin = account.status === 'warning' && (provider?.id === 'kimi-subscription' || provider?.requestConfig?.adapterMode === 'kimi' || provider?.id === 'grok' || provider?.requestConfig?.adapterMode === 'grok');
+  const grok = provider?.id === 'grok' || provider?.requestConfig?.adapterMode === 'grok';
+  const lifting = dragId === account.id;
+  const clearPress = () => { pressRef.current = null; };
+  const beginDrag = (pointerId) => {
+    if (liftingRef.current) return;
+    liftingRef.current = true;
+    window.getSelection?.()?.removeAllRanges?.();
+    skipClickRef.current = true;
+    onDragId?.(account.id);
+    cardRef.current?.setPointerCapture?.(pointerId);
+  };
+  const cardIdAt = (clientX, clientY) => {
+    const stack = document.elementsFromPoint?.(clientX, clientY) || [];
+    for (const el of stack) {
+      const card = el.closest?.('.overview-card');
+      const id = card?.dataset.accountId;
+      if (id && id !== account.id) return id;
+    }
+    return null;
+  };
+  const finishDrag = (clientX, clientY) => {
+    const targetId = cardIdAt(clientX, clientY) || overId;
+    if (targetId && targetId !== account.id) onReorder?.(account.id, targetId);
+    onDragId?.(null);
+    onOverId?.(null);
+    skipClickRef.current = true;
+    setTimeout(() => { skipClickRef.current = false; }, 0);
+  };
+  const open = () => {
+    if (skipClickRef?.current) { skipClickRef.current = false; return; }
+    if (selectionIn(cardRef.current)) return;
+    onOpenHistory?.(account);
+  };
+  const desc = [...(account.windows || [])].sort((a, b) => (durationOrder[b.key] || 9) - (durationOrder[a.key] || 9)).slice(0, 4);
+  return <div
+    ref={cardRef}
+    data-account-id={account.id}
+    className={`overview-card ${account.status} clickable${lifting ? ' dragging' : ''}${overId === account.id && dragId && dragId !== account.id ? ' drag-over' : ''}`}
+    role="button" tabIndex={0}
+    title={canDrag ? '点击查看额度趋势 · 按住空白处拖动排序' : '点击查看额度趋势'}
+    onClick={open} onKeyDown={(event) => { if (event.key === 'Enter') open(); }}
+    onDragStart={(event) => { if (dragId) event.preventDefault(); }}
+    onPointerDown={(event) => {
+      if (!canDrag || event.button !== 0 || isCardChrome(event.target) || isSelectableText(event.target)) return;
+      pressRef.current = { x: event.clientX, y: event.clientY, pointerId: event.pointerId };
+    }}
+    onPointerMove={(event) => {
+      const press = pressRef.current;
+      if (press && !liftingRef.current && Math.hypot(event.clientX - press.x, event.clientY - press.y) > CARD_DRAG_MOVE_PX) beginDrag(press.pointerId);
+      if (liftingRef.current) onOverId?.(cardIdAt(event.clientX, event.clientY));
+    }}
+    onPointerUp={(event) => {
+      const wasLifted = liftingRef.current;
+      liftingRef.current = false;
+      clearPress();
+      if (wasLifted) finishDrag(event.clientX, event.clientY);
+    }}
+    onPointerCancel={() => {
+      const wasLifted = liftingRef.current;
+      liftingRef.current = false;
+      clearPress();
+      if (wasLifted) { onDragId?.(null); onOverId?.(null); }
+    }}
+  >
+    <div className="overview-head">
+      <AccountIdentity account={account} provider={provider} />
+      <div className="card-actions">
+        {relogin
+          ? <button type="button" className={`card-status-icon ${account.status} relogin`} title={grok ? 'Grok 令牌已失效，点击重新导入本机 CLI 登录' : 'Kimi 订阅令牌已失效，点击重新扫码登录'} aria-label={`${grok ? '重新导入' : '重新扫码'}登录 ${account.name}`} onClick={(event) => { event.stopPropagation(); onRelogin?.(account); }}><AlertCircle size={14} /></button>
+          : <span className={`card-status-icon ${account.status}`} title={account.status === 'warning' ? (account.lastError || '连接检查失败') : (feedback?.message || `连接正常 · ${account.windows.length} 个额度窗口`)}>{account.status === 'warning' ? <AlertCircle size={14} /> : <ShieldCheck size={14} />}</span>}
+      </div>
+    </div>
+    <div className="overview-body">
+      <ConcentricRings account={account} />
+      <div className="overview-meters">{[...desc].reverse().map((meter) => {
+        const detail = `${formatReset(meter.resetAt)}${formatQuotaDetail(meter) ? ` · ${formatQuotaDetail(meter)}` : ''}`;
+        return <div className="overview-meter" key={meter.key}><span><i className={`ring-dot ring-dot-${desc.indexOf(meter)}`} />{windowCatalog[meter.key]?.label || meter.key}</span><b>{formatAmount(meter)}</b><small title={detail}>{detail}</small></div>;
+      })}</div>
+    </div>
+  </div>;
+}
+
+function StatusView({ accounts, providers, runtime, onTestAccount, testingAccountId, testResults, reminderRules, mode = 'rings', onModeChange, onOpenSettings, lastSync, onRefresh, refreshing, onOpenHistory, onRelogin, onReorderAccounts }) {
   // 停用账号从所有视图的常规列表里分离出来：rows/periods 直接不显示（resetAt 已过期会污染时间排序），
   // rings 视图单独收进置底的折叠分组；组内按停用时间倒序（最近停的排最前）
   const disabledAccounts = accounts.filter((a) => a.disabled)
     .sort((a, b) => new Date(b.disabledAt || 0).getTime() - new Date(a.disabledAt || 0).getTime());
   const activeAccounts = accounts.filter((a) => !a.disabled);
   const [disabledOpen, setDisabledOpen] = useState(false);
+  const [dragId, setDragId] = useState(null);
+  const [overId, setOverId] = useState(null);
+  const skipClickRef = useRef(false);
   const allDisabledHint = disabledAccounts.length > 0 && activeAccounts.length === 0
     ? <div className="settings-empty all-disabled-empty">所有账号均已停用。切换到「账号总览」视图，或在设置的账号列表中可重新启用。</div>
     : null;
   if (mode === 'rows') return <div className="view-stack">{activeAccounts.length ? <WindowsView accounts={activeAccounts} providers={providers} reminderRules={reminderRules} embedded onOpenHistory={onOpenHistory} onRelogin={onRelogin} /> : allDisabledHint}</div>;
   if (mode === 'periods') return <div className="view-stack">{activeAccounts.length ? <PriorityView accounts={activeAccounts} providers={providers} reminderRules={reminderRules} onOpenHistory={onOpenHistory} /> : allDisabledHint}</div>;
-  const groups = { active: activeAccounts.filter((a) => a.status === 'active'), warning: activeAccounts.filter((a) => a.status === 'warning') };
+  // 总览按账号列表顺序展示（不再按状态分组），以便拖拽排序；异常账号仍用警告样式标出
   return <div className="view-stack">
-    <section className="overview-grid">{[...groups.active, ...groups.warning].map((account) => {
+    <section className="overview-grid">{activeAccounts.map((account) => {
       const provider = providers.find((item) => item.id === account.providerId);
-      const feedback = testResults[account.id];
-      const testing = testingAccountId === account.id;
-      return <div className={`overview-card ${account.status} clickable`} key={account.id} role="button" tabIndex={0} title="点击查看额度趋势" onClick={() => onOpenHistory?.(account)} onKeyDown={(event) => { if (event.key === 'Enter') onOpenHistory?.(account); }}><div className="overview-head"><AccountIdentity account={account} provider={provider} /><div className="card-actions">{account.status === 'warning' && (provider?.id === 'kimi-subscription' || provider?.requestConfig?.adapterMode === 'kimi' || provider?.id === 'grok' || provider?.requestConfig?.adapterMode === 'grok')
-        ? <button type="button" className={`card-status-icon ${account.status} relogin`} title={(provider?.id === 'grok' || provider?.requestConfig?.adapterMode === 'grok') ? 'Grok 令牌已失效，点击重新导入本机 CLI 登录' : 'Kimi 订阅令牌已失效，点击重新扫码登录'} aria-label={`${(provider?.id === 'grok' || provider?.requestConfig?.adapterMode === 'grok') ? '重新导入' : '重新扫码'}登录 ${account.name}`} onClick={(event) => { event.stopPropagation(); onRelogin?.(account); }}><AlertCircle size={14} /></button>
-        : <span className={`card-status-icon ${account.status}`} title={account.status === 'warning' ? (account.lastError || '连接检查失败') : (feedback?.message || `连接正常 · ${account.windows.length} 个额度窗口`)}>{account.status === 'warning' ? <AlertCircle size={14} /> : <ShieldCheck size={14} />}</span>}</div></div><div className="overview-body"><ConcentricRings account={account} /><div className="overview-meters">{(() => { const desc = [...account.windows].sort((a, b) => (durationOrder[b.key] || 9) - (durationOrder[a.key] || 9)).slice(0, 4); return [...desc].reverse().map((meter) => { const detail = `${formatReset(meter.resetAt)}${formatQuotaDetail(meter) ? ` · ${formatQuotaDetail(meter)}` : ''}`; return <div className="overview-meter" key={meter.key}><span><i className={`ring-dot ring-dot-${desc.indexOf(meter)}`} />{windowCatalog[meter.key]?.label || meter.key}</span><b>{formatAmount(meter)}</b><small title={detail}>{detail}</small></div>; }); })()}</div></div></div>;
+      return <OverviewCard key={account.id} account={account} provider={provider} feedback={testResults[account.id]} onOpenHistory={onOpenHistory} onRelogin={onRelogin} onReorder={onReorderAccounts} sortable={activeAccounts.length > 1} dragId={dragId} overId={overId} onDragId={setDragId} onOverId={setOverId} skipClickRef={skipClickRef} />;
     })}</section>
     {disabledAccounts.length > 0 && <>
       <button type="button" className="disabled-fold" onClick={() => setDisabledOpen((prev) => !prev)}>
@@ -1741,6 +1859,16 @@ function App() {
     await new Promise((resolve) => setTimeout(resolve, 450));
     return { ok: true, message: '模拟测试通过（网页演示模式）' };
   };
+  const reorderAccounts = async (fromId, toId) => {
+    const nextAccounts = reorderById(accounts, fromId, toId);
+    if (nextAccounts === accounts) return;
+    if (bridge) {
+      const state = serializableState({ accounts: nextAccounts });
+      lastSaved.current = JSON.stringify(state);
+      await bridge.saveState(state);
+    }
+    setAccounts(nextAccounts);
+  };
   const saveAccount = async (draft) => {
     const id = `${draft.providerId}-${Date.now()}`;
     const account = { id, providerId: draft.providerId, name: draft.name, identity: draft.identity, tags: draft.tags, endpoint: draft.endpoint, variables: draft.variables || {}, windowKeys: draft.windowKeys, timeoutSeconds: clampAccountTimeout(draft.timeoutSeconds), status: 'warning', lastChecked: new Date().toISOString(), lastError: '等待首次连接测试', windows: [] };
@@ -1839,7 +1967,7 @@ function App() {
     <header className="titlebar"><span className="titlebar-drag"><img src="./quota-desk.svg" alt="" /><b>Quota Desk</b></span><div className="titlebar-controls"><span className="last-checked" title="最后一次额度检查时间"><Clock3 size={11} />{formatChecked(lastSync)}</span>{update && ['available', 'downloading', 'downloaded', 'error'].includes(update.status) && <button className={`update-badge ${update.status}`} onClick={() => setUpdateOpen(true)} title="查看版本更新"><Download size={11} />{update.status === 'available' && `v${update.version} 可更新`}{update.status === 'downloading' && `下载中 ${update.percent || 0}%`}{update.status === 'downloaded' && '重启升级'}{update.status === 'error' && '更新失败'}</button>}<button className="control-solo" onClick={refreshAll} disabled={refreshing} title="立即刷新全部账号" aria-label="立即刷新全部账号"><RefreshCw size={13} className={refreshing ? 'spinning' : ''} /></button><div className="overview-controls" aria-label="账号总览展示方式"><button className={overviewMode === 'rings' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rings'); }} title="账号总览" aria-label="账号总览"><CircleGauge size={13} /></button><button className={overviewMode === 'rows' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rows'); }} title="行式明细" aria-label="行式明细"><Rows3 size={13} /></button><button className={overviewMode === 'periods' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('periods'); }} title="周期明细" aria-label="周期明细"><Clock3 size={13} /></button></div></div><div className="titlebar-actions"><button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={13} /></button>{bridge && <><button className={pinned ? 'active' : ''} title={pinned ? '取消固定' : '固定在桌面最前面'} aria-label="固定在桌面最前面" onClick={async () => setPinned(await bridge.togglePin())}><Pin size={13} /></button><button title="关闭到托盘" aria-label="关闭到托盘" onClick={() => bridge.closeMainWindow()}><X size={14} /></button></>}</div></header>
     {toast && <div className={`toast ${toast.ok ? 'ok' : 'fail'}`} role="status">{toast.ok ? <Check size={13} /> : <AlertCircle size={13} />}<span>{toast.message}</span></div>}
     <main className="main-shell">
-      <div className="content-area">{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{accounts.length === 0 ? <section className="empty-workspace"><div className="empty-mark"><CircleGauge size={22} /></div><div><h2>把第一份 Coding Plan 接进来</h2><p>凭据将由 Windows 加密保存，额度请求只在本机发出。</p></div><button className="primary-button" onClick={() => setModal('account')}><Plus size={15} /> 添加账号</button><button className="outline-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> 设置</button>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button" onClick={() => setModal('import-ccswitch')}><Download size={15} /> 从 cc-switch 导入</button>}</section> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const adapterMode = provider?.requestConfig?.adapterMode || provider?.adapter; setModal({ type: adapterMode === 'grok' ? 'grok-relogin' : 'kimi-relogin', account }); }} />}</div>
+      <div className="content-area">{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{accounts.length === 0 ? <section className="empty-workspace"><div className="empty-mark"><CircleGauge size={22} /></div><div><h2>把第一份 Coding Plan 接进来</h2><p>凭据将由 Windows 加密保存，额度请求只在本机发出。</p></div><button className="primary-button" onClick={() => setModal('account')}><Plus size={15} /> 添加账号</button><button className="outline-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> 设置</button>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button" onClick={() => setModal('import-ccswitch')}><Download size={15} /> 从 cc-switch 导入</button>}</section> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} onReorderAccounts={reorderAccounts} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const adapterMode = provider?.requestConfig?.adapterMode || provider?.adapter; setModal({ type: adapterMode === 'grok' ? 'grok-relogin' : 'kimi-relogin', account }); }} />}</div>
     </main>
     {settingsOpen && <SettingsDrawer accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)} openModal={setModal} onDeleteAccount={deleteAccount} onToggleAccountDisabled={toggleAccountDisabled} onTestAccount={testAccount} testingAccountId={testingAccountId} onEditProvider={editProvider} autoLaunch={autoLaunch} onToggleAutoLaunch={toggleAutoLaunch} appVersion={appVersion} update={update} onOpenUpdate={() => setUpdateOpen(true)} onCheckUpdate={onCheckUpdate} onClearHistory={clearHistory} runtime={runtime} />}
     {confirmState && <ConfirmModal confirm={confirmState} onClose={() => setConfirmState(null)} />}

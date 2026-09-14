@@ -191,6 +191,26 @@ test('computeWasteStats：失真与提前重置不计入平均和累计', () => 
   assert.equal(computeWasteStats([], 'weekly').avgWaste, null);
 });
 
+test('extractCycles：0/0 与 limit=100 的百分比占位不写入档案', () => {
+  const t = (m) => new Date(T0 + m * 60_000).toISOString();
+  const after = { at: t(10), windows: { weekly: { remaining: 99, amount: 0, limit: 0, unit: '%', resetAt: t(7 * 24 * 60) } } };
+  const zero = extractCycles([
+    { at: t(-10), windows: { weekly: { remaining: 5, amount: 0, limit: 0, unit: '%', resetAt: t(0) } } },
+    { at: t(-5), windows: { weekly: { remaining: 5, amount: 0, limit: 0, unit: '%', resetAt: t(0) } } },
+    after,
+  ], ['weekly']);
+  assert.equal(zero.length, 1);
+  assert.equal(zero[0].amount, null);
+  assert.equal(zero[0].limit, null);
+  const pct = extractCycles([
+    { at: t(-10), windows: { weekly: { remaining: 66, amount: 66, limit: 100, unit: '%', resetAt: t(0) } } },
+    { at: t(-5), windows: { weekly: { remaining: 66, amount: 66, limit: 100, unit: '%', resetAt: t(0) } } },
+    after,
+  ], ['weekly']);
+  assert.equal(pct[0].amount, null);
+  assert.equal(pct[0].limit, null);
+});
+
 test('resolveWasteWindows：预设优先，缺省取周期类型窗口', () => {
   assert.deepEqual(resolveWasteWindows({ windows: ['five_hour', 'weekly'], wasteWindows: ['weekly'] }), ['weekly']);
   assert.deepEqual(resolveWasteWindows({ windows: ['five_hour', 'weekly'], wasteWindows: [] }), []);

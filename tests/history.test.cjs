@@ -1,11 +1,32 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { appendHistoryPoint, pruneHistory, clampRetentionDays } = require('../electron/history.cjs');
+const { appendHistoryPoint, pruneHistory, clampRetentionDays, realQuotaPair, snapshotWindows } = require('../electron/history.cjs');
 
 const windows = [
   { key: 'five_hour', remaining: 68, unit: '%', amount: 680, resetAt: null },
   { key: 'weekly', remaining: 42, unit: '%', amount: 4200 },
 ];
+
+test('realQuotaPair 丢弃 0/0 与纯百分比 100 占位，保留真实总量', () => {
+  assert.deepEqual(realQuotaPair(0, 0, '%'), { amount: null, limit: null });
+  assert.deepEqual(realQuotaPair(66, 100, '%'), { amount: null, limit: null });
+  assert.deepEqual(realQuotaPair(61.9, 120, '%'), { amount: 61.9, limit: 120 });
+  assert.deepEqual(realQuotaPair(680, null, '%'), { amount: 680, limit: null });
+  assert.deepEqual(realQuotaPair(26.94, 26.94, 'CNY'), { amount: 26.94, limit: 26.94 });
+});
+
+test('snapshotWindows 不把 0/0 写进历史', () => {
+  const snapped = snapshotWindows([
+    { key: 'five_hour', remaining: 49, unit: '%', amount: 0, limitAmount: 0, resetAt: null },
+    { key: 'weekly', remaining: 66, unit: '%', amount: 66, limitAmount: 100, resetAt: null },
+    { key: 'monthly', remaining: 51.6, unit: '%', amount: 61.9, limitAmount: 120, resetAt: null },
+  ]);
+  assert.equal(snapped.five_hour.amount, null);
+  assert.equal(snapped.five_hour.limit, null);
+  assert.equal(snapped.weekly.amount, null);
+  assert.equal(snapped.weekly.limit, null);
+  assert.deepEqual(snapped.monthly, { remaining: 51.6, amount: 61.9, limit: 120, unit: '%', resetAt: null });
+});
 
 test('appendHistoryPoint 追加快照并只保留画图字段', () => {
   const history = appendHistoryPoint({}, 'acc-1', windows, Date.parse('2026-08-20T08:00:00Z'));

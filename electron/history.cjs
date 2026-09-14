@@ -18,14 +18,29 @@ const clampRetentionDays = (value) => {
   return Number.isFinite(days) && days > 0 ? Math.min(MAX_RETENTION_DAYS, Math.max(1, Math.round(days))) : DEFAULT_RETENTION_DAYS;
 };
 
+// 百分比窗口只有带真实总量时才保留 amount/limit。
+// 总量缺失、为 0，或就是 100 的纯百分比占位（Grok/CLI 把剩余率写成 amount、limit=100）都不是真实额度数字。
+const realQuotaPair = (amount, limit, unit) => {
+  const a = amount == null ? null : Number(amount);
+  const l = limit == null ? null : Number(limit);
+  const amountOk = a != null && Number.isFinite(a);
+  const limitOk = l != null && Number.isFinite(l);
+  if (limitOk && (l <= 0 || ((unit || '%') === '%' && l === 100))) return { amount: null, limit: null };
+  return { amount: amountOk ? a : null, limit: limitOk ? l : null };
+};
+
 // 只保留画折线图需要的字段：百分比窗口看 remaining，余额窗口看 amount；limit 为窗口总量（悬停详情用）
-const snapshotWindows = (windows) => Object.fromEntries((windows || []).map((meter) => [meter.key, {
-  remaining: Number(meter.remaining) || 0,
-  amount: meter.amount == null || !Number.isFinite(Number(meter.amount)) ? null : Number(meter.amount),
-  limit: meter.limitAmount == null || !Number.isFinite(Number(meter.limitAmount)) ? null : Number(meter.limitAmount),
-  unit: meter.unit || '%',
-  resetAt: meter.resetAt || null,
-}]));
+const snapshotWindows = (windows) => Object.fromEntries((windows || []).map((meter) => {
+  const unit = meter.unit || '%';
+  const pair = realQuotaPair(meter.amount, meter.limitAmount, unit);
+  return [meter.key, {
+    remaining: Number(meter.remaining) || 0,
+    amount: pair.amount,
+    limit: pair.limit,
+    unit,
+    resetAt: meter.resetAt || null,
+  }];
+}));
 
 // 追加一条快照并按保留天数裁剪；返回新的 history 对象（{ accountId: [{ at, windows }] }）
 const appendHistoryPoint = (history, accountId, windows, now = Date.now(), retentionDays = DEFAULT_RETENTION_DAYS) => {
@@ -70,4 +85,4 @@ const pruneHistory = (history, retentionDays = DEFAULT_RETENTION_DAYS, now = Dat
   return next;
 };
 
-module.exports = { appendHistoryPoint, pruneHistory, clampRetentionDays, snapshotWindows, downsampleHistory, MAX_RETENTION_DAYS, PERMANENT_RETENTION };
+module.exports = { appendHistoryPoint, pruneHistory, clampRetentionDays, snapshotWindows, realQuotaPair, downsampleHistory, MAX_RETENTION_DAYS, PERMANENT_RETENTION };

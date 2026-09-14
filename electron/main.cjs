@@ -392,21 +392,28 @@ const notifyWaste = (state, account, provider) => {
   }
 };
 
+// 巡检结果按当前已保存的账号顺序回写：成功/失败只更新该账号字段，绝不重排。
+// 巡检过程中用户拖拽改序时，以最新 state 的顺序为准，避免用巡检开始时的快照覆盖。
+const mergePolledAccounts = (latestAccounts, polled) => {
+  const byId = new Map((polled || []).map((account) => [account.id, account]));
+  return (latestAccounts || []).map((account) => byId.get(account.id) || account);
+};
+
 async function pollState(accountIds = null) {
   const current = migrateState(store.loadState());
   if (!current) throw new Error('桌面状态尚未初始化');
   pollInProgress = true;
   sendState(current);
   const ids = accountIds ? new Set(accountIds) : null;
-  const nextAccounts = [];
+  const polled = [];
   for (const account of current.accounts || []) {
     // 定时巡检跳过停用账号（数据冻结、不产生新历史点与提醒）；点名轮询不受限，
     // 「测试连接」与启用后的立即补拉都靠它验证停用中的账号
-    if (account.disabled && !ids) { nextAccounts.push(account); continue; }
-    if (ids && !ids.has(account.id)) { nextAccounts.push(account); continue; }
+    if (account.disabled && !ids) continue;
+    if (ids && !ids.has(account.id)) continue;
     const provider = (current.providers || []).find((item) => item.id === account.providerId);
     if (!provider) {
-      nextAccounts.push({ ...account, status: 'warning', lastError: '找不到厂商配置', lastChecked: new Date().toISOString() });
+      polled.push({ ...account, status: 'warning', lastError: '找不到厂商配置', lastChecked: new Date().toISOString() });
       continue;
     }
     try {
@@ -420,17 +427,22 @@ async function pollState(accountIds = null) {
       // 查询成功后刷新身份信息（续期后的最新凭据重新解析一次）
       const identityPatch = cliIdentityPatch(account, provider.requestConfig?.adapterMode, store.getSecrets(account.id));
       const updated = { ...account, ...(identityPatch || {}), windows, status: 'active', lastError: null, lastChecked: checkedAt, lastTestAt: checkedAt };
-      nextAccounts.push(updated);
+      polled.push(updated);
       store.appendHistory(account.id, windows, historyRetentionDays());
       // 周期浪费归档：从该账号历史中提取已结束的周期（周/月等厂商预设窗口），永久保存
       store.archiveCycles(account.id, resolveWasteWindows(provider.requestConfig));
       notifyWaste(current, updated, provider);
     } catch (error) {
       const checkedAt = new Date().toISOString();
-      nextAccounts.push({ ...account, status: 'warning', lastError: error.message, lastChecked: checkedAt, lastTestAt: checkedAt });
+      polled.push({ ...account, status: 'warning', lastError: error.message, lastChecked: checkedAt, lastTestAt: checkedAt });
     }
   }
-  const next = cleanState({ ...current, accounts: nextAccounts, lastSync: new Date().toISOString() });
+  const latest = migrateState(store.loadState()) || current;
+  const next = cleanState({
+    ...latest,
+    accounts: mergePolledAccounts(latest.accounts, polled),
+    lastSync: new Date().toISOString(),
+  });
   store.saveState(next);
   pollInProgress = false;
   refreshLiveIdentities();
