@@ -217,6 +217,23 @@ const PROVIDER_USAGE_COPY = {
     connectedDetail: '可读取最近 1 年服务端历史',
     disconnectTitle: '断开 Z.ai 官方用量',
   },
+  codex: {
+    display: 'Codex',
+    loading: '查询最近 1 年的每日 Token 用量',
+    connectHint: '复用本机 Codex CLI 的 ChatGPT 登录，读取官方每日 Token 用量统计；凭据不会暴露给界面。',
+    connectAction: '连接官方用量',
+    connecting: '验证登录…',
+    reauthLabel: '需要重新连接',
+    reauthDetail: 'Codex 本机登录已失效',
+    reauthHint: '运行一次 Codex CLI 或重新导入登录快照后重新连接，即可继续读取 Codex 服务端历史。',
+    emptyHint: 'Codex 已连接，但暂时没有返回每日 Token 用量。',
+    editHint: '保存后验证本机 Codex 登录，用于读取每日 Token 用量统计',
+    connectedToast: '已连接 Codex 官方用量，可在历史详情查看每日用量',
+    savedToast: '账号已保存，并已连接 Codex 官方用量',
+    saveAction: '保存并连接',
+    connectedDetail: '可读取最近 1 年服务端历史',
+    disconnectTitle: '断开 Codex 官方用量',
+  },
 };
 const providerUsageCopy = (provider) => PROVIDER_USAGE_COPY[provider?.id] || null;
 const providerUsageSupported = (account, provider) => Boolean(providerUsageCopy(provider))

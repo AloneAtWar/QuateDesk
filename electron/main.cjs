@@ -9,7 +9,7 @@ const { resolveWasteWindows } = require('./waste.cjs');
 const { builtinConfigs } = require('./builtin-configs.cjs');
 const { scanCcswitch } = require('./ccswitch.cjs');
 const { mergeMainOwnedUsageConnections } = require('./provider-usage-state.cjs');
-const { CLI_KINDS, SNAPSHOT_KEY, readLiveAuth, cliIdentity, resolveCliAuth, authVersionMatches, writeLiveIfCurrent } = require('./cli-auth.cjs');
+const { CLI_KINDS, SNAPSHOT_KEY, readLiveAuth, cliIdentity, resolveCliAuth, authVersionMatches, writeLiveIfCurrent, fetchWithCliAuth } = require('./cli-auth.cjs');
 const {
   fetchDeepSeekUsage,
   fetchDeepSeekSummary,
@@ -19,6 +19,9 @@ const {
   normalizeDeepSeekUserToken,
   normalizeZaiApiKey,
   normalizeZaiOrigin,
+  buildCodexUsageRequest,
+  normalizeCodexTokenUsage,
+  ProviderUsageError,
   shouldUseCachedUsage,
 } = require('./provider-usage.cjs');
 
@@ -700,6 +703,14 @@ const PROVIDER_USAGE_CONFIGS = {
     validateApiKey: (apiKey, sessionFetch, usageOptions) => fetchZaiPlanSummary(apiKey, sessionFetch, { origin: usageOptions.origin, timeoutMs: 15_000 }),
     fetchUsage: (apiKey, sessionFetch, usageOptions) => fetchZaiUsage(apiKey, sessionFetch, usageOptions),
   },
+  codex: {
+    id: 'codex',
+    mode: 'cli-oauth',
+    // token-activity 的桶日期是服务端本地日历日（UTC 口径），不做时区平移
+    timezoneOffsetSec: 0,
+    missingAuthMessage: '尚未连接 Codex 官方用量',
+    expiredMessage: 'Codex 本机登录已失效，请运行一次 Codex CLI 或重新导入登录快照',
+  },
 };
 
 const captureBrowserUsageLogin = async (config, { accountId, interactive, timeoutMs = 0, cookies = [] }) => {
@@ -859,6 +870,7 @@ const connectProviderUsage = async (accountId) => {
   if (!config) throw new Error('该厂商暂不支持官方账号登录');
   const provider = (state?.providers || []).find((item) => item.id === account.providerId);
   if (config.mode === 'api-key') return connectApiKeyUsage(accountId, account, provider);
+  if (config.mode === 'cli-oauth') return connectCliUsage(accountId, account);
   return connectBrowserUsage(config, accountId);
 };
 
@@ -992,6 +1004,74 @@ const queryApiKeyUsageData = async (config, accountId, account, provider, epoch,
   }
 };
 
+// cli-oauth 模式查询（Codex）：复用本机 CLI 登录快照，token 过期时经 fetchWithCliAuth
+// 自动续期并回写快照；续期后仍 401/403 才判定为登录失效，不做网页恢复
+const queryCliUsageData = async (config, accountId, account, epoch, range, timeoutMs, signal) => {
+  const resolved = resolveCliAuth('codex', store.getSecrets(accountId).variables);
+  if (!resolved) {
+    const message = '未检测到 Codex 的 ChatGPT 登录（~/.codex/auth.json 无 OAuth tokens），可先「导入本机 CLI 登录」保存为账号快照';
+    if (account.usageConnection && providerUsageEpoch(accountId) === epoch) markProviderUsageExpired(accountId, config, message);
+    const error = new Error(message);
+    error.code = 'AUTH_MISSING';
+    throw error;
+  }
+  try {
+    const payload = await withProviderUsageFetchSession(accountId, async (sessionFetch) => {
+      const response = await fetchWithCliAuth('codex', {
+        auth: resolved.auth,
+        source: resolved.source,
+        fetcher: sessionFetch,
+        timeoutMs,
+        buildRequest: buildCodexUsageRequest,
+        onAuthUpdate: (kind, next, previous, source) => persistCliAuthUpdate(accountId, { kind, next, previous, source }),
+      });
+      if (response.status === 401 || response.status === 403) {
+        throw new ProviderUsageError(config.expiredMessage, 'AUTH_EXPIRED', response.status);
+      }
+      if (!response.ok) throw new ProviderUsageError(`ChatGPT 用量接口返回 HTTP ${response.status}`, 'HTTP_ERROR', response.status);
+      return response.json();
+    });
+    if (signal?.aborted) throw providerUsageCancelledError();
+    assertProviderUsageEpoch(accountId, epoch);
+    const data = normalizeCodexTokenUsage(payload, {
+      startDate: range.startDate,
+      endDate: range.endDate,
+      timezoneOffsetSec: config.timezoneOffsetSec,
+    });
+    markProviderUsageConnected(accountId, config, account.usageConnection?.connectedAt || new Date().toISOString(), false);
+    return data;
+  } catch (error) {
+    if ((error?.code === 'AUTH_EXPIRED' || error?.code === 'AUTH_MISSING') && providerUsageEpoch(accountId) === epoch) {
+      markProviderUsageExpired(accountId, config, error.message);
+    }
+    throw error;
+  }
+};
+
+// cli-oauth 模式连接：不弹登录窗口，取一次用量档案验证本机登录态即连接
+const connectCliUsage = async (accountId, account) => {
+  const config = PROVIDER_USAGE_CONFIGS[account.providerId];
+  const existing = providerUsageLoginFlows.get(accountId);
+  const currentEpoch = providerUsageEpoch(accountId);
+  if (existing?.epoch === currentEpoch) return existing.flow;
+  const epoch = bumpProviderUsageEpoch(accountId);
+  abortProviderUsageRequests(accountId);
+  closeProviderUsageWindows(accountId);
+  const flow = (async () => {
+    assertProviderUsageEpoch(accountId, epoch);
+    const probeRange = providerUsageDateRange(config, 7);
+    await queryCliUsageData(config, accountId, account, epoch, probeRange, 15_000, null);
+    assertProviderUsageEpoch(accountId, epoch);
+    clearProviderUsageCache(accountId);
+    const state = markProviderUsageConnected(accountId, config, account.usageConnection?.connectedAt || new Date().toISOString(), true);
+    return { cancelled: false, connection: state.accounts.find((item) => item.id === accountId)?.usageConnection, state: { ...state, runtime: runtimeStatus() } };
+  })();
+  const entry = { epoch, flow };
+  providerUsageLoginFlows.set(accountId, entry);
+  try { return await flow; }
+  finally { if (providerUsageLoginFlows.get(accountId) === entry) providerUsageLoginFlows.delete(accountId); }
+};
+
 const queryProviderUsage = async (accountId, options = {}) => {
   const state = migrateState(store.loadState());
   const account = (state?.accounts || []).find((item) => item.id === accountId);
@@ -1010,7 +1090,9 @@ const queryProviderUsage = async (accountId, options = {}) => {
   try {
     const data = config.mode === 'api-key'
       ? await queryApiKeyUsageData(config, accountId, account, provider, epoch, range, timeoutMs, requestController.signal)
-      : await queryBrowserUsageData(config, accountId, epoch, range, timeoutMs, requestController.signal);
+      : config.mode === 'cli-oauth'
+        ? await queryCliUsageData(config, accountId, account, epoch, range, timeoutMs, requestController.signal)
+        : await queryBrowserUsageData(config, accountId, epoch, range, timeoutMs, requestController.signal);
     assertProviderUsageEpoch(accountId, epoch);
     providerUsageCache.set(cacheKey, { at: Date.now(), epoch, data });
     return data;

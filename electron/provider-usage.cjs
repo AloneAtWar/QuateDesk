@@ -1272,6 +1272,140 @@ const fetchZaiUsage = async (apiKeyRaw, fetcher, options = {}) => {
     fetchedAt: new Date().toISOString(),
   };
 };
+// ── Codex（ChatGPT 订阅）逐日 Token 用量 ─────────────────────────────────
+// 复用本机 Codex CLI 的 ChatGPT OAuth 登录（与额度巡检同一份凭据，支持自动续期），
+// 查询 chatgpt.com 的 token-activity 摘要：每日 Token 桶 + 累计/峰值/连续天数。
+// 接口字段对齐 codex-rs 的 TokenUsageProfile（backend-client/src/types.rs）。
+const CODEX_USAGE_PROFILE_URL = 'https://chatgpt.com/backend-api/wham/profiles/me';
+const CODEX_TIMEZONE_OFFSET_SEC = 0;
+const CODEX_LABEL = 'Codex 平台';
+
+const buildCodexUsageRequest = (auth) => {
+  const headers = {
+    Authorization: `Bearer ${auth?.tokens?.access_token}`,
+    'User-Agent': 'codex-cli',
+    Accept: 'application/json',
+  };
+  if (auth?.tokens?.account_id) headers['ChatGPT-Account-Id'] = auth.tokens.account_id;
+  return { url: CODEX_USAGE_PROFILE_URL, init: { headers } };
+};
+
+const codexStatsOf = (payload) => {
+  const stats = objectOf(payload?.stats);
+  if (!stats) return null;
+  const buckets = stats.daily_usage_buckets;
+  if (buckets !== null && buckets !== undefined) {
+    if (!Array.isArray(buckets)) return null;
+    for (const bucket of buckets) {
+      if (!objectOf(bucket) || strictResponseDate(bucket.start_date) === null || finiteNumber(bucket.tokens) === null) return null;
+    }
+  }
+  return stats;
+};
+
+const optionalCount = (value) => {
+  const number = finiteNumber(value);
+  return number === null || number < 0 ? null : Math.floor(number);
+};
+
+/**
+ * Normalize a ChatGPT token-activity profile into the shared usage shape.
+ * Codex has no cost/request metrics — tokens only. Bucket dates are server-local
+ * calendar days; days without a bucket count as covered with zero usage.
+ */
+const normalizeCodexTokenUsage = (payload, options = {}) => {
+  const timezoneOffsetSec = normalizeUsageTimezoneOffset(options.timezoneOffsetSec, CODEX_TIMEZONE_OFFSET_SEC, 'Codex 用量');
+  const fallbackRange = defaultRange(timezoneOffsetSec, options.nowMs);
+  const start = parseDate(options.startDate || fallbackRange.startDate, 'startDate');
+  const end = parseDate(options.endDate || fallbackRange.endDate, 'endDate');
+  if (start.ordinal > end.ordinal) throw new ProviderUsageError('startDate 不能晚于 endDate', 'INVALID_ARGUMENT');
+  if ((end.ordinal - start.ordinal) / DAY_MS + 1 > MAX_RANGE_DAYS) {
+    throw new ProviderUsageError('Codex 用量查询范围不能超过 3660 天', 'INVALID_ARGUMENT');
+  }
+  const stats = codexStatsOf(payload);
+  if (!stats) throw new ProviderUsageError('Codex 用量响应结构不兼容', 'SCHEMA_INCOMPATIBLE');
+
+  const hasBuckets = Array.isArray(stats.daily_usage_buckets);
+  const bucketByDate = new Map();
+  if (hasBuckets) {
+    for (const bucket of stats.daily_usage_buckets) {
+      const date = strictResponseDate(bucket.start_date);
+      const tokens = countOf(bucket.tokens);
+      if (!date) continue;
+      bucketByDate.set(date, (bucketByDate.get(date) || 0) + tokens);
+    }
+  }
+
+  const daily = [];
+  for (let ordinal = start.ordinal; ordinal <= end.ordinal; ordinal += DAY_MS) {
+    const date = dateStringOfOrdinal(ordinal);
+    daily.push({
+      date,
+      cost: null,
+      currency: null,
+      costs: [],
+      tokens: hasBuckets ? (bucketByDate.get(date) || 0) : null,
+      inputTokens: null,
+      outputTokens: null,
+      promptTokens: null,
+      cacheHitTokens: null,
+      cacheMissTokens: null,
+      requests: null,
+      models: [],
+      coverage: { tokens: hasBuckets, cost: false },
+    });
+  }
+
+  const knownTokens = daily.reduce((sum, day) => sum + (day.tokens || 0), 0);
+  const activeDays = daily.filter((day) => (day.tokens || 0) > 0).length;
+  const tokensCoverage = {
+    complete: hasBuckets,
+    coveredPeriods: hasBuckets ? 1 : 0,
+    totalPeriods: 1,
+    sources: hasBuckets ? ['token-activity'] : [],
+    legacyFallback: false,
+  };
+  const costCoverage = { complete: false, coveredPeriods: 0, totalPeriods: 0, sources: [], legacyFallback: false };
+
+  return {
+    provider: 'codex',
+    metric: 'tokens',
+    currency: null,
+    summary: {
+      balance: null,
+      grantedBalance: null,
+      toppedUpBalance: null,
+      totalCost: null,
+      rangeCost: null,
+      peakDailyCost: null,
+      totalTokens: optionalCount(stats.lifetime_tokens),
+      rangeTokens: hasBuckets ? knownTokens : null,
+      knownRangeTokens: knownTokens,
+      peakDailyTokens: optionalCount(stats.peak_daily_tokens),
+      currentStreakDays: optionalCount(stats.current_streak_days),
+      longestStreakDays: optionalCount(stats.longest_streak_days),
+      longestRunningTurnSec: optionalCount(stats.longest_running_turn_sec),
+      activeDays,
+      inputTokens: null,
+      outputTokens: null,
+      requests: null,
+      planName: null,
+    },
+    coverage: {
+      start: start.value,
+      end: end.value,
+      timeZone: timezoneOffsetSec,
+      timezoneOffsetSec,
+      source: hasBuckets ? 'token-activity' : 'unavailable',
+      partial: !hasBuckets,
+      tokens: tokensCoverage,
+      cost: costCoverage,
+      issues: hasBuckets ? [] : [{ period: `${start.value}~${end.value}`, code: 'NO_DAILY_BUCKETS' }],
+    },
+    days: daily,
+    fetchedAt: new Date().toISOString(),
+  };
+};
 module.exports = {
   fetchDeepSeekUsage,
   fetchDeepSeekSummary,
@@ -1283,12 +1417,16 @@ module.exports = {
   fetchZaiPlanSummary,
   normalizeZaiApiKey,
   normalizeZaiOrigin,
+  buildCodexUsageRequest,
+  normalizeCodexTokenUsage,
   shouldUseCachedUsage,
   __test: {
     ZAI_DEFAULT_ORIGIN,
     ZAI_MODEL_USAGE_PATH,
     ZAI_QUOTA_LIMIT_PATH,
     ZAI_TIMEZONE_OFFSET_SEC,
+    CODEX_USAGE_PROFILE_URL,
+    CODEX_TIMEZONE_OFFSET_SEC,
     zaiLabelDate,
     zaiModelUsageData,
     DEEPSEEK_PLATFORM_ORIGIN,
