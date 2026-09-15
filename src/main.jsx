@@ -185,6 +185,8 @@ const openProviderWebsite = (provider) => {
 const PROVIDER_USAGE_COPY = {
   deepseek: {
     display: 'DeepSeek',
+    // 卡片较多，隐藏「当前连续」保持四卡布局
+    hideCurrentStreak: true,
     loading: '查询最近 1 年的每日花费与 Token',
     connectHint: '登录 DeepSeek 官方账号后读取每日花费与 Token；登录凭据不会暴露给界面。',
     connectAction: '登录官方账号',
@@ -931,12 +933,15 @@ function ProviderUsageView({ account, provider, onState }) {
 
   if (!supported) return null;
   const copy = providerUsageCopy(provider) || PROVIDER_USAGE_COPY.deepseek;
+  if (status === 'disconnected') return <div className="provider-usage-state connect-guide">
+    <span className="provider-usage-state-icon"><Globe size={18} /></span>
+    <div><b>连接 {copy.display} 官方用量</b><small>{copy.connectHint}</small>{error && <em>{error}</em>}</div>
+    <button type="button" className="primary-button" disabled={connecting} onClick={connect}><Globe size={13} />{connecting ? copy.connecting : copy.connectAction}</button>
+  </div>;
   if (status === 'reauth_required') return <div className="provider-usage-state auth-required">
     <span className="provider-usage-state-icon"><AlertCircle size={18} /></span>
     <div><b>官方用量连接已失效</b><small>{account.usageConnection?.lastError || copy.reauthHint}</small>{error && <em>{error}</em>}</div>
-    {copy.hideConnect
-      ? <span className="provider-usage-hint">官方用量统计已停用（需登录窗口）</span>
-      : <button type="button" className="primary-button" disabled={connecting} onClick={connect}><Globe size={13} />{connecting ? copy.connecting : '重新连接'}</button>}
+    <button type="button" className="primary-button" disabled={connecting} onClick={connect}><Globe size={13} />{connecting ? copy.connecting : '重新连接'}</button>
   </div>;
   if (loading && !data) return <div className="provider-usage-state"><RefreshCw size={17} className="spinning" /><div><b>正在读取 {copy.display} 服务端用量</b><small>{copy.loading}</small></div></div>;
   if ((error || empty) && !data) return <div className="provider-usage-state">
@@ -1069,7 +1074,7 @@ function ProviderUsageView({ account, provider, onState }) {
         <strong>{peakIsCost ? formatProviderUsageCost(peakCost, data.currency) : formatProviderUsageSummaryTokens(peakTokens)}</strong>
       </div>
     </div>,
-    streakDays !== null && <div key="streak" className="provider-stat streak" title="当前连续使用天数">
+    streakDays !== null && !copy.hideCurrentStreak && <div key="streak" className="provider-stat streak" title="当前连续使用天数">
       <span className="stat-icon"><Flame size={13} /></span>
       <div className="stat-copy">
         <span>当前连续</span>
@@ -1130,10 +1135,8 @@ function HistoryView({ account, provider, onBack, onProviderUsageState }) {
     return tracked ? base.filter((key) => tracked.includes(key)) : base;
   }, [provider, account]);
   const usageStatus = providerUsageStatus(account);
-  // 从未连接的账号不在历史页露出空的服务端统计；登录过期则保留入口，
-  // 让用户能在原位置直接重新连接。
-  const showProviderUsageEntry = providerUsageSupported(account, provider)
-    && ['connected', 'reauth_required'].includes(usageStatus);
+  // 用量统计入口常驻：未连接时页内直接引导登录，登录过期也能在原位置重新连接。
+  const showProviderUsageEntry = providerUsageSupported(account, provider);
   const showWaste = view === 'waste' && wasteWindows.length > 0;
   const showProviderUsage = view === 'provider-usage' && showProviderUsageEntry;
   useEffect(() => {
@@ -1498,7 +1501,7 @@ function AccountModalV2({ providers, onClose, onSave, onTestDraft, embedded = fa
   const canRun = !((credentialRequired && !credential.trim()) || missingRequiredVariables || !selected.length || !accountEndpoint);
   const canSave = !(saving || (credentialRequired && !credential.trim()) || missingRequiredVariables || !selected.length || !accountEndpoint);
   const usageCopy = providerUsageCopy(provider);
-  const usageConnectOption = usageCopy && !usageCopy.hideConnect && window.quotaDesk?.connectProviderUsage
+  const usageConnectOption = usageCopy && window.quotaDesk?.connectProviderUsage
     ? <label className="setting-toggle provider-login-option"><span><b>官方账号用量 <small>可选</small></b><small>{usageCopy.editHint}</small></span><input type="checkbox" checked={connectUsageAfterSave} onChange={(event) => setConnectUsageAfterSave(event.target.checked)} /><i /></label>
     : null;
   const actions = (onCancel) => <div className="modal-actions"><button type="button" className="outline-button" onClick={onCancel}>{embedded ? '返回' : '取消'}</button><button type="button" className="outline-button" disabled={testing || !canRun} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" type="submit" form={embedded ? 'custom-account-form' : undefined} disabled={!canSave}>{saving ? '正在保存' : (connectUsageAfterSave ? (usageCopy?.saveAction || '保存并登录') : '保存')}</button></div>;
@@ -1595,9 +1598,7 @@ function ProviderUsageConnectionCard({ account, provider, onState }) {
         <button type="button" className="outline-button" disabled={Boolean(busy)} onClick={refresh}><RefreshCw size={12} className={busy === 'refresh' ? 'spinning' : ''} />{busy === 'refresh' ? '刷新中…' : '刷新'}</button>
         <button type="button" className={`text-button disconnect ${confirmDisconnect ? 'confirming' : ''}`} disabled={Boolean(busy)} title={confirmDisconnect ? '再次点击确认清除官方登录会话' : copy.disconnectTitle} onClick={requestDisconnect}><Power size={12} />{busy === 'disconnect' ? '断开中…' : (confirmDisconnect ? '确认断开' : '断开')}</button>
       </> : <>
-        {copy.hideConnect
-          ? <span className="provider-connection-hint">官方用量统计已停用（需登录窗口）</span>
-          : <button type="button" className="primary-button" disabled={Boolean(busy)} onClick={connect}><Globe size={12} />{busy === 'connect' ? copy.connecting : (status === 'reauth_required' ? '重新连接' : copy.connectAction)}</button>}
+        <button type="button" className="primary-button" disabled={Boolean(busy)} onClick={connect}><Globe size={12} />{busy === 'connect' ? copy.connecting : (status === 'reauth_required' ? '重新连接' : copy.connectAction)}</button>
         {status === 'reauth_required' && <button type="button" className={`text-button disconnect ${confirmDisconnect ? 'confirming' : ''}`} disabled={Boolean(busy)} title={confirmDisconnect ? '再次点击确认清除官方登录会话' : copy.disconnectTitle} onClick={requestDisconnect}><Power size={12} />{confirmDisconnect ? '确认断开' : '断开'}</button>}
       </>}
     </div>}

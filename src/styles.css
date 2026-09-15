@@ -775,8 +775,9 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .provider-usage-state small { color: var(--muted); font-size: 10px; line-height: 1.45; }
 .provider-usage-state em { color: var(--coral-deep); font-size: 9px; font-style: normal; }
 .provider-usage-state.auth-required .provider-usage-state-icon { color: var(--coral-deep); background: var(--coral-bg); }
+.provider-usage-state.connect-guide .provider-usage-state-icon { color: var(--sky); background: color-mix(in srgb, var(--sky) 15%, transparent); }
+.provider-usage-state.connect-guide .primary-button { padding: 8px 14px; }
 .provider-usage-state .outline-button, .provider-usage-state .primary-button { flex: 0 0 auto; padding: 7px 9px; }
-.provider-usage-hint { color: var(--muted); font-size: 11px; font-style: italic; }
 
 /* DeepSeek 账号编辑页中的可选连接：状态与余额 API 分开表达，防止用户误以为
    断开官方账号会停止原有额度巡检。 */
@@ -807,7 +808,6 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .provider-connection-actions .text-button.disconnect { color: var(--coral-deep); }
 .provider-connection-actions .text-button.disconnect.confirming { padding: 4px 7px; border-radius: 6px; color: var(--coral-deep); background: var(--coral-bg); font-weight: 700; }
 .provider-connection-actions button:disabled { cursor: wait; opacity: .62; }
-.provider-connection-hint { color: var(--muted); font-size: 10px; font-style: italic; }
 .provider-connection-feedback { display: flex; align-items: flex-start; gap: 5px; padding-top: 7px; border-top: 1px solid var(--line-inner); color: var(--muted); font-size: 9px; line-height: 1.4; }
 .provider-connection-feedback svg { flex: 0 0 auto; margin-top: 1px; }
 .provider-connection-feedback.ok { color: var(--green-deep); }
