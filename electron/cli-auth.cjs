@@ -256,11 +256,12 @@ const shouldRefreshFirst = (kind, auth) => {
 
 // refresh 失败分为永久（invalid_grant/refresh_token 失效，需要重新登录）与瞬时（网络）两类
 class CliRefreshError extends Error {
-  constructor(message, { permanent = false, transient = false } = {}) {
+  constructor(message, { permanent = false, transient = false, authStatus = null } = {}) {
     super(message);
     this.name = 'CliRefreshError';
     this.permanent = permanent;
     this.transient = transient;
+    if (authStatus) this.authStatus = authStatus;
   }
 }
 
@@ -278,7 +279,7 @@ const postTokenRequest = async (fetcher, url, { json, form, headers = {}, timeou
 
 async function refreshCodexAuth(auth, fetcher, timeoutMs) {
   const previousRefresh = auth.tokens?.refresh_token || '';
-  if (!previousRefresh) throw new CliRefreshError('Codex 登录快照缺少 refresh_token，无法续期', { permanent: true });
+  if (!previousRefresh) throw new CliRefreshError('Codex 登录快照缺少 refresh_token，无法续期', { permanent: true, authStatus: 'reauth_required' });
   let response;
   let payload;
   try {
@@ -291,7 +292,7 @@ async function refreshCodexAuth(auth, fetcher, timeoutMs) {
   if (!response.ok) {
     const code = payload?.error?.code || payload?.error || payload?.code;
     const permanent = response.status === 401 || response.status === 400 || /invalid_grant|refresh_token/i.test(String(code));
-    throw new CliRefreshError(`Codex 登录续期被拒绝（HTTP ${response.status}${code ? ` · ${code}` : ''}），请在 Codex CLI 重新登录该账号后重新导入`, { permanent });
+    throw new CliRefreshError(`Codex 登录续期被拒绝（HTTP ${response.status}${code ? ` · ${code}` : ''}），请在 Codex CLI 重新登录该账号后重新导入`, { permanent, authStatus: permanent ? 'reauth_required' : null });
   }
   const tokens = { ...auth.tokens };
   if (payload.access_token) tokens.access_token = payload.access_token;
@@ -308,7 +309,7 @@ async function refreshCodexAuth(auth, fetcher, timeoutMs) {
 
 async function refreshClaudeAuth(auth, fetcher, timeoutMs) {
   const oauth = auth.claudeOauth || {};
-  if (!oauth.refreshToken) throw new CliRefreshError('Claude 登录快照缺少 refreshToken，无法续期', { permanent: true });
+  if (!oauth.refreshToken) throw new CliRefreshError('Claude 登录快照缺少 refreshToken，无法续期', { permanent: true, authStatus: 'reauth_required' });
   let response;
   let payload;
   try {
@@ -321,7 +322,7 @@ async function refreshClaudeAuth(auth, fetcher, timeoutMs) {
   } catch (error) { throw asRefreshError('Claude', error); }
   if (!response.ok) {
     const permanent = response.status === 401 || response.status === 400 || /invalid_grant|refresh_token/i.test(String(payload?.error || ''));
-    throw new CliRefreshError(`Claude 登录续期被拒绝（HTTP ${response.status}），请在 Claude Code 重新登录该账号后重新导入`, { permanent });
+    throw new CliRefreshError(`Claude 登录续期被拒绝（HTTP ${response.status}），请在 Claude Code 重新登录该账号后重新导入`, { permanent, authStatus: permanent ? 'reauth_required' : null });
   }
   const nextOauth = { ...oauth };
   if (payload.access_token) nextOauth.accessToken = payload.access_token;
@@ -332,7 +333,7 @@ async function refreshClaudeAuth(auth, fetcher, timeoutMs) {
 }
 
 async function refreshGeminiAuth(auth, fetcher, timeoutMs) {
-  if (!auth.refresh_token) throw new CliRefreshError('Gemini 登录快照缺少 refresh_token，无法续期', { permanent: true });
+  if (!auth.refresh_token) throw new CliRefreshError('Gemini 登录快照缺少 refresh_token，无法续期', { permanent: true, authStatus: 'reauth_required' });
   let response;
   let payload;
   try {
@@ -344,7 +345,7 @@ async function refreshGeminiAuth(auth, fetcher, timeoutMs) {
   } catch (error) { throw asRefreshError('Gemini', error); }
   if (!response.ok) {
     const permanent = response.status === 401 || response.status === 400 || /invalid_grant|unauthorized_client/i.test(String(payload?.error || ''));
-    throw new CliRefreshError(`Gemini 登录续期被拒绝（HTTP ${response.status}${payload?.error ? ` · ${payload.error}` : ''}），请在 Gemini CLI 重新登录该账号后重新导入`, { permanent });
+    throw new CliRefreshError(`Gemini 登录续期被拒绝（HTTP ${response.status}${payload?.error ? ` · ${payload.error}` : ''}），请在 Gemini CLI 重新登录该账号后重新导入`, { permanent, authStatus: permanent ? 'reauth_required' : null });
   }
   const next = { ...auth };
   if (payload.access_token) next.access_token = payload.access_token;
@@ -354,24 +355,68 @@ async function refreshGeminiAuth(auth, fetcher, timeoutMs) {
   return next;
 }
 
+const kimiErrorCode = (payload) => {
+  const raw = payload?.error?.code ?? payload?.error ?? payload?.code ?? payload?.status;
+  const numeric = Number(raw);
+  const grpcCodes = {
+    4: 'deadline_exceeded',
+    7: 'permission_denied',
+    8: 'resource_exhausted',
+    13: 'internal',
+    14: 'unavailable',
+    16: 'unauthenticated',
+  };
+  if (Number.isInteger(numeric) && grpcCodes[numeric]) return grpcCodes[numeric];
+  const value = String(raw || '').trim().toLowerCase().replace(/[^a-z0-9_.-]/g, '');
+  const known = new Set([
+    'aborted', 'cancelled', 'data_loss', 'deadline_exceeded', 'failed_precondition',
+    'internal', 'invalid_argument', 'invalid_grant', 'invalid_token', 'expired_token',
+    'not_found', 'permission_denied', 'resource_exhausted', 'unauthenticated', 'unavailable', 'unknown',
+  ]);
+  return known.has(value) ? value : '';
+};
+
+const kimiRefreshFailure = (status, payload) => {
+  const code = kimiErrorCode(payload);
+  const retryableCode = new Set([
+    'aborted', 'cancelled', 'data_loss', 'deadline_exceeded', 'internal',
+    'resource_exhausted', 'unavailable', 'unknown',
+  ]).has(code);
+  const permanentCode = new Set([
+    'expired_token', 'failed_precondition', 'invalid_argument', 'invalid_grant',
+    'invalid_token', 'not_found', 'permission_denied', 'unauthenticated',
+  ]).has(code);
+  const retryableStatus = status === 408 || status === 425 || status === 429 || status >= 500;
+  // Connect RPC 的 401/403 和其它非重试型 4xx 都表示当前登录不能再续期；限流、超时和
+  // 服务端错误则保留为瞬时失败，避免 UI 错误地要求用户重新扫码。
+  const permanent = permanentCode || (!retryableCode && !retryableStatus && status >= 400 && status < 500);
+  const transient = !permanent;
+  const detail = code ? ` · ${code}` : '';
+  const message = permanent
+    ? `Kimi 订阅登录已失效（HTTP ${status}${detail}），请重新扫码「导入订阅登录」`
+    : `Kimi 订阅续期暂时失败（HTTP ${status}${detail}），请稍后重试`;
+  return new CliRefreshError(message, { permanent, transient, authStatus: permanent ? 'reauth_required' : null });
+};
+
 async function refreshKimiWebAuth(auth, fetcher, timeoutMs) {
-  if (!auth.refreshToken) throw new CliRefreshError('Kimi 订阅快照缺少 refreshToken，无法续期', { permanent: true });
+  if (!auth.refreshToken) throw new CliRefreshError('Kimi 订阅快照缺少 refreshToken，无法续期', { permanent: true, authStatus: 'reauth_required' });
   const host = String(auth.authHost || KIMI_AUTH_HOST).replace(/\/$/, '');
   let response;
-  let payload;
   try {
     response = await postTokenRequest(fetcher, `${host}${KIMI_REFRESH_PATH}`, {
       json: { refreshToken: auth.refreshToken },
       headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36' },
       timeoutMs,
     });
-    payload = await response.json();
   } catch (error) { throw asRefreshError('Kimi', error); }
-  if (!response.ok) {
-    const permanent = response.status === 401 || response.status === 403;
-    throw new CliRefreshError(`Kimi 订阅续期被拒绝（HTTP ${response.status}），请重新扫码「导入订阅登录」`, { permanent });
+  let payload = null;
+  try { payload = await response?.json(); } catch {}
+  if (!response?.ok) throw kimiRefreshFailure(Number(response?.status || 0), payload);
+  if (!payload?.accessToken || !payload?.refreshToken) {
+    // 少数网关会用 HTTP 200 包一层 Connect 错误；显式鉴权码仍应标为登录失效。
+    if (kimiErrorCode(payload)) throw kimiRefreshFailure(Number(response?.status || 0), payload);
+    throw new CliRefreshError('Kimi 订阅续期响应缺少令牌，请稍后重试', { transient: true });
   }
-  if (!payload?.accessToken || !payload?.refreshToken) throw new CliRefreshError('Kimi 订阅续期响应缺少令牌', { permanent: false });
   // 软轮换：响应同时返回新的成对令牌，旧 refresh_token 有宽限期但仍以最新一对为准
   return { ...auth, accessToken: payload.accessToken, refreshToken: payload.refreshToken };
 }
@@ -408,7 +453,17 @@ const grokRefreshFailure = (status, payload, prefix = 'Grok 登录续期') => {
   const transient = status === 408 || status === 425 || status === 429 || status >= 500 || /temporar|unavailable|timeout|try_again/i.test(code);
   const permanent = !transient && (status >= 400 || /invalid_grant|invalid_token|unauthorized|expired/i.test(code));
   const detail = code ? ` · ${code}` : '';
-  return new CliRefreshError(`${prefix}被拒绝（HTTP ${status}${detail}），${permanent ? '请重新运行 grok login 后再次导入' : '请稍后重试'}`, { permanent, transient });
+  return new CliRefreshError(`${prefix}被拒绝（HTTP ${status}${detail}），${permanent ? '请重新运行 grok login 后再次导入' : '请稍后重试'}`, { permanent, transient, authStatus: permanent ? 'reauth_required' : null });
+};
+const grokDiscoveryFailure = (status, payload) => {
+  const code = grokErrorCode(payload);
+  const transient = status === 408 || status === 425 || status === 429 || status >= 500 || /temporar|unavailable|timeout|try_again/i.test(code);
+  const detail = code ? ` · ${code}` : '';
+  // Discovery 请求不携带用户凭据；即使网关返回 401/403，也不能据此判定登录已失效。
+  return new CliRefreshError(`Grok OIDC discovery ${transient ? '暂时不可用' : '返回异常'}（HTTP ${status}${detail}），请稍后重试`, {
+    permanent: !transient,
+    transient,
+  });
 };
 const grokNetworkFailure = () => new CliRefreshError('Grok 登录续期网络请求失败，请稍后重试', { transient: true });
 
@@ -425,7 +480,7 @@ async function discoverGrokTokenEndpoint(fetcher, timeoutMs) {
     });
     payload = await grokResponsePayload(response);
   } catch { throw grokNetworkFailure(); }
-  if (!response?.ok) throw grokRefreshFailure(Number(response?.status || 0), payload, 'Grok OIDC discovery');
+  if (!response?.ok) throw grokDiscoveryFailure(Number(response?.status || 0), payload);
   const issuer = String(payload?.issuer || '').replace(/\/$/, '');
   const endpoint = String(payload?.token_endpoint || '').trim();
   if (issuer !== GROK_ISSUER) throw new CliRefreshError('Grok OIDC discovery issuer 不匹配，已拒绝续期', { permanent: true });
@@ -436,7 +491,7 @@ async function discoverGrokTokenEndpoint(fetcher, timeoutMs) {
 async function refreshGrokAuth(auth, fetcher, timeoutMs) {
   const entry = grokEntryOf(auth);
   const previousRefresh = grokEntryRefreshToken(entry);
-  if (!previousRefresh) throw new CliRefreshError('Grok 登录快照缺少 refresh_token，无法续期，请重新 grok login', { permanent: true });
+  if (!previousRefresh) throw new CliRefreshError('Grok 登录快照缺少 refresh_token，无法续期，请重新 grok login', { permanent: true, authStatus: 'reauth_required' });
   const tokenEndpoint = await discoverGrokTokenEndpoint(fetcher, timeoutMs);
   const clientId = GROK_CLIENT_ID;
   let response;
@@ -456,7 +511,7 @@ async function refreshGrokAuth(auth, fetcher, timeoutMs) {
   } catch { throw grokNetworkFailure(); }
   if (!response?.ok) throw grokRefreshFailure(Number(response?.status || 0), payload);
   const accessToken = String(payload?.access_token || payload?.accessToken || '').trim();
-  if (!accessToken) throw new CliRefreshError('Grok 续期响应缺少 access_token，请重新 grok login', { permanent: false });
+  if (!accessToken) throw new CliRefreshError('Grok 续期响应缺少 access_token，请稍后重试', { transient: true });
   const next = { ...entry, key: accessToken };
   // 某些实现使用 access_token 字段；保留该形态并同步，便于跨版本 auth.json 兼容。
   if (Object.prototype.hasOwnProperty.call(entry, 'access_token')) next.access_token = accessToken;
@@ -552,23 +607,40 @@ const writeLiveIfCurrent = (kind, previousAuth, nextAuth) => {
   catch { return false; }
 };
 
-// 同一个账号可能同时触发手动刷新、定时轮询和窗口刷新。xAI 会轮换 refresh_token，
-// 因此相同旧 token 的并发请求必须共享一次刷新结果，避免第二个请求拿旧 token 再刷新。
-const grokRefreshInFlight = new Map();
+// 同一个账号可能同时触发手动刷新、定时轮询和窗口刷新。Kimi / xAI 都会轮换
+// refresh_token，因此相同旧 token 的并发请求必须共享一次刷新结果。业务请求的
+// 401 可能错峰返回，成功结果需保留到一次请求超时窗口结束，避免迟到请求复用旧 token。
+const refreshInFlight = new Map();
+const refreshFlightKey = (kind, refreshToken) => `${kind}:${crypto.createHash('sha256').update(refreshToken).digest('hex')}`;
+const retainRefreshEntry = (key, entry, timeoutMs) => {
+  const requestTimeout = Number.isFinite(Number(timeoutMs)) ? Number(timeoutMs) : 15_000;
+  const keepMs = Math.min(125_000, Math.max(5_000, requestTimeout + 5_000));
+  entry.expiresAt = Date.now() + keepMs;
+  const timer = setTimeout(() => {
+    if (refreshInFlight.get(key) === entry) refreshInFlight.delete(key);
+  }, keepMs);
+  timer.unref?.();
+};
 const refreshForRequest = async (kind, auth, fetcher, timeoutMs) => {
-  if (kind !== 'grok') return refreshCliAuth(kind, auth, fetcher, timeoutMs);
+  if (kind !== 'kimi' && kind !== 'grok') return refreshCliAuth(kind, auth, fetcher, timeoutMs);
   const refresh = refreshTokenOf(kind, auth);
   if (!refresh) return refreshCliAuth(kind, auth, fetcher, timeoutMs);
-  const key = `${kind}:${refresh}`;
-  const existing = grokRefreshInFlight.get(key);
-  if (existing) return existing;
+  const key = refreshFlightKey(kind, refresh);
+  const existing = refreshInFlight.get(key);
+  if (existing && existing.expiresAt > Date.now()) return existing.promise;
+  if (existing) refreshInFlight.delete(key);
   const promise = refreshCliAuth(kind, auth, fetcher, timeoutMs);
-  grokRefreshInFlight.set(key, promise);
-  // Keep the completed promise through the current microtask turn so concurrent callers
-  // that wake on the same response reuse it; no long-lived token cache is retained.
-  promise.finally(() => setTimeout(() => {
-    if (grokRefreshInFlight.get(key) === promise) grokRefreshInFlight.delete(key);
-  }, 0)).catch(() => {});
+  const entry = { promise, expiresAt: Infinity };
+  refreshInFlight.set(key, entry);
+  promise.then(
+    () => retainRefreshEntry(key, entry, timeoutMs),
+    (error) => {
+      // A rejected login should not be hammered by every late 401. Transient failures are
+      // removed immediately so the normal retry loop can try again.
+      if (error?.permanent) retainRefreshEntry(key, entry, timeoutMs);
+      else if (refreshInFlight.get(key) === entry) refreshInFlight.delete(key);
+    },
+  );
   return promise;
 };
 

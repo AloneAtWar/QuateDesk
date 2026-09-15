@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const cliAuth = require('../electron/cli-auth.cjs');
-const { queryAccount } = require('../electron/poller.cjs');
+const { queryAccount, authStatusForPollError } = require('../electron/poller.cjs');
 const { builtinConfigs } = require('../electron/builtin-configs.cjs');
 const { extractCodexOauth } = require('../electron/ccswitch.cjs');
 
@@ -326,17 +326,194 @@ test('Kimi 续期：connect-rpc 端点与 JSON 形态正确，软轮换成对更
   assert.ok(oversea);
 });
 
-test('Kimi 续期被拒绝标记为永久失败，网络错误保持瞬时', async () => {
-  const refused = async () => ({ ok: false, status: 401, json: async () => ({ code: 'unauthenticated' }) });
+test('Kimi 续期失败分类：登录失效要求重扫，限流 / 服务端 / 网络错误保持瞬时', async () => {
+  // 即使鉴权失败响应不是 JSON，也必须保留 HTTP 401，不能误判成网络抖动。
+  const refused = async () => ({ ok: false, status: 401, json: async () => { throw new SyntaxError('not json'); } });
   await assert.rejects(
     () => refreshCliAuth('kimi', kimiSnapshot(), refused, 5000),
-    (error) => error instanceof CliRefreshError && error.permanent === true && /重新扫码/.test(error.message),
+    (error) => error instanceof CliRefreshError
+      && error.permanent === true
+      && error.transient === false
+      && error.authStatus === 'reauth_required'
+      && /登录已失效.*HTTP 401.*重新扫码/.test(error.message),
+  );
+  const wrappedRefusal = async () => ({ ok: true, status: 200, json: async () => ({ code: 'unauthenticated' }) });
+  await assert.rejects(
+    () => refreshCliAuth('kimi', kimiSnapshot(), wrappedRefusal, 5000),
+    (error) => error instanceof CliRefreshError
+      && error.permanent === true
+      && error.transient === false
+      && /登录已失效.*unauthenticated.*重新扫码/.test(error.message),
+  );
+  const limited = async () => ({ ok: false, status: 429, json: async () => ({ code: 'resource_exhausted' }) });
+  await assert.rejects(
+    () => refreshCliAuth('kimi', kimiSnapshot(), limited, 5000),
+    (error) => error instanceof CliRefreshError
+      && error.permanent === false
+      && error.transient === true
+      && /暂时失败.*HTTP 429.*resource_exhausted.*稍后重试/.test(error.message),
+  );
+  const unavailable = async () => ({ ok: false, status: 503, json: async () => ({ code: 'unavailable' }) });
+  await assert.rejects(
+    () => refreshCliAuth('kimi', kimiSnapshot(), unavailable, 5000),
+    (error) => error instanceof CliRefreshError
+      && error.permanent === false
+      && error.transient === true
+      && /暂时失败.*HTTP 503.*unavailable.*稍后重试/.test(error.message),
   );
   const unreachable = async () => { throw new Error('fetch failed'); };
   await assert.rejects(
     () => refreshCliAuth('kimi', kimiSnapshot(), unreachable, 5000),
-    (error) => error instanceof CliRefreshError && error.permanent === false,
+    (error) => error instanceof CliRefreshError && error.permanent === false && error.transient === true,
   );
+  const incomplete = async () => ({ ok: true, status: 200, json: async () => ({ accessToken: 'only-half' }) });
+  await assert.rejects(
+    () => refreshCliAuth('kimi', kimiSnapshot(), incomplete, 5000),
+    (error) => error instanceof CliRefreshError
+      && error.permanent === false
+      && error.transient === true
+      && /响应缺少令牌.*稍后重试/.test(error.message),
+  );
+});
+
+test('Kimi 并发续期去重：同一把旧 refreshToken 的并发请求共享一次刷新', async () => {
+  const snapshot = kimiSnapshot({
+    accessToken: fakeJwt({ exp: Math.floor(Date.now() / 1000) - 60 }),
+    refreshToken: 'krt-concurrent',
+  });
+  let refreshCalls = 0;
+  const requestTokens = [];
+  const updates = [];
+  const fetcher = async (url, init) => {
+    if (url === `${__constants.KIMI_AUTH_HOST}${__constants.KIMI_REFRESH_PATH}`) {
+      refreshCalls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return { ok: true, status: 200, json: async () => ({ accessToken: 'at-concurrent-new', refreshToken: 'krt-concurrent-new' }) };
+    }
+    requestTokens.push(init.headers.Authorization);
+    return { ok: true, status: 200, json: async () => ({}) };
+  };
+  const args = {
+    auth: snapshot,
+    source: 'snapshot',
+    fetcher,
+    timeoutMs: 1000,
+    buildRequest: (auth) => ({ url: 'https://www.kimi.com/usage', init: { headers: { Authorization: `Bearer ${auth.accessToken}` } } }),
+    onAuthUpdate: (kind, next, previous, source) => updates.push({ kind, next, previous, source }),
+  };
+
+  await Promise.all([fetchWithCliAuth('kimi', args), fetchWithCliAuth('kimi', args), fetchWithCliAuth('kimi', args)]);
+
+  assert.equal(refreshCalls, 1);
+  assert.deepEqual(requestTokens, ['Bearer at-concurrent-new', 'Bearer at-concurrent-new', 'Bearer at-concurrent-new']);
+  assert.equal(updates.length, 3);
+  assert.ok(updates.every((item) => item.kind === 'kimi'
+    && item.source === 'snapshot'
+    && item.previous.refreshToken === 'krt-concurrent'
+    && item.next.refreshToken === 'krt-concurrent-new'));
+});
+
+test('Kimi 错峰 401 复用刚完成的续期结果，不会再次使用旧 refreshToken', async () => {
+  const snapshot = kimiSnapshot({
+    accessToken: fakeJwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
+    refreshToken: 'krt-staggered-old',
+  });
+  let refreshCalls = 0;
+  let oldRequests = 0;
+  let releaseLate401;
+  const late401 = new Promise((resolve) => { releaseLate401 = resolve; });
+  const fetcher = async (url, init) => {
+    if (url === `${__constants.KIMI_AUTH_HOST}${__constants.KIMI_REFRESH_PATH}`) {
+      refreshCalls += 1;
+      return { ok: true, status: 200, json: async () => ({ accessToken: 'at-staggered-new', refreshToken: 'krt-staggered-new' }) };
+    }
+    if (init.headers.Authorization !== 'Bearer at-staggered-new') {
+      oldRequests += 1;
+      if (oldRequests === 2) await late401;
+      return { ok: false, status: 401, json: async () => ({}) };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+  };
+  const args = {
+    auth: snapshot,
+    source: 'snapshot',
+    fetcher,
+    timeoutMs: 1000,
+    buildRequest: (auth) => ({ url: 'https://www.kimi.com/usage', init: { headers: { Authorization: `Bearer ${auth.accessToken}` } } }),
+  };
+
+  const first = fetchWithCliAuth('kimi', args);
+  const delayed = fetchWithCliAuth('kimi', args);
+  await first;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  releaseLate401();
+  await delayed;
+
+  assert.equal(oldRequests, 2);
+  assert.equal(refreshCalls, 1);
+});
+
+test('Kimi 限流重试耗尽后保留厂商提示，且不要求重新扫码', async () => {
+  const snapshot = kimiSnapshot({
+    accessToken: fakeJwt({ exp: Math.floor(Date.now() / 1000) - 60 }),
+    refreshToken: 'krt-rate-limited',
+  });
+  let refreshCalls = 0;
+  const fetcher = async () => {
+    refreshCalls += 1;
+    return { ok: false, status: 429, json: async () => ({ code: 'resource_exhausted' }) };
+  };
+  await assert.rejects(
+    () => queryAccount({ id: 'k-rate' }, kimiProvider, '', fetcher, { [SNAPSHOT_KEY]: JSON.stringify(snapshot) }, { retryDelaysMs: [0, 0] }),
+    (error) => error.transient === true
+      && authStatusForPollError(error) === 'temporary_error'
+      && /Kimi 订阅续期暂时失败.*HTTP 429.*稍后重试/.test(error.message)
+      && !/网络代理/.test(error.message),
+  );
+  assert.equal(refreshCalls, 3);
+});
+
+test('只有显式认证错误要求重新登录，永久的安全校验失败不会误导为重登', () => {
+  assert.equal(authStatusForPollError(Object.assign(new Error('revoked'), { authStatus: 'reauth_required', permanent: true })), 'reauth_required');
+  assert.equal(authStatusForPollError(Object.assign(new Error('issuer mismatch'), { permanent: true })), 'temporary_error');
+});
+
+test('Kimi 并发续期失败也只请求一次，并向所有调用返回一致的失效状态', async () => {
+  const snapshot = kimiSnapshot({
+    accessToken: fakeJwt({ exp: Math.floor(Date.now() / 1000) - 60 }),
+    refreshToken: 'krt-revoked-concurrent',
+  });
+  let refreshCalls = 0;
+  let releaseRefresh;
+  const refreshGate = new Promise((resolve) => { releaseRefresh = resolve; });
+  const fetcher = async (url) => {
+    assert.equal(url, `${__constants.KIMI_AUTH_HOST}${__constants.KIMI_REFRESH_PATH}`);
+    refreshCalls += 1;
+    await refreshGate;
+    return { ok: false, status: 401, json: async () => ({ code: 'unauthenticated' }) };
+  };
+  const args = {
+    auth: snapshot,
+    source: 'snapshot',
+    fetcher,
+    timeoutMs: 1000,
+    buildRequest: () => { throw new Error('失效续期后不应发出业务请求'); },
+  };
+
+  const requests = [
+    fetchWithCliAuth('kimi', args),
+    fetchWithCliAuth('kimi', args),
+    fetchWithCliAuth('kimi', args),
+  ];
+  releaseRefresh();
+  const results = await Promise.allSettled(requests);
+
+  assert.equal(refreshCalls, 1);
+  assert.ok(results.every((result) => result.status === 'rejected'
+    && result.reason instanceof CliRefreshError
+    && result.reason.permanent === true
+    && result.reason.transient === false
+    && /登录已失效.*unauthenticated.*重新扫码/.test(result.reason.message)));
 });
 
 test('Kimi 订阅额度查询：一个接口出三个窗口，ratio 换算为剩余百分比，月度取会员池口径 amountUsedRatio', async () => {
@@ -537,6 +714,12 @@ test('Grok 续期失败分类：invalid_grant 永久、429 瞬时、discovery �
     : { ok: false, status: 429, json: async () => ({}) };
   await assert.rejects(() => refreshCliAuth('grok', snapshot, limited, 1000),
     (error) => error instanceof CliRefreshError && error.transient === true && error.permanent !== true);
+  const blockedDiscovery = async () => ({ ok: false, status: 403, json: async () => ({ error: 'access_denied' }) });
+  await assert.rejects(() => refreshCliAuth('grok', snapshot, blockedDiscovery, 1000),
+    (error) => error instanceof CliRefreshError
+      && error.permanent === true
+      && error.authStatus === undefined
+      && authStatusForPollError(error) === 'temporary_error');
   // issuer 不匹配 / token endpoint 指向第三方：永久拒绝，refresh_token 不外发
   const evilIssuer = async () => ({ ok: true, status: 200, json: async () => ({ issuer: 'https://evil.example', token_endpoint: GROK.GROK_TOKEN_URL }) });
   await assert.rejects(() => refreshCliAuth('grok', snapshot, evilIssuer, 1000),

@@ -2,13 +2,14 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import {
-  AlertCircle, ArrowLeft, Bell, Check, ChevronDown, ChevronRight, CircleGauge, CircleStop, Clock3, Download, Eye, ExternalLink, Globe, HelpCircle, History, LayoutGrid,
-  Ellipsis, KeyRound, Monitor, Play, Plus, Power, RefreshCw, Rows3, Settings2, ShieldCheck, SlidersHorizontal, Square,
-  Pencil, Pin, Sparkles, SunMoon, Tag, Trash2, UploadCloud, X, Zap,
+  AlertCircle, ArrowLeft, Bell, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, CircleGauge, CircleStop, Clock3, Download, Eye, ExternalLink, Globe, HelpCircle, History, LayoutGrid,
+  Ellipsis, Flame, KeyRound, Monitor, Play, Plus, Power, RefreshCw, Rows3, Settings2, ShieldCheck, SlidersHorizontal, Square, Bot,
+  Pencil, Pin, Sparkles, SunMoon, Tag, Trash2, TrendingUp, Trophy, UploadCloud, X, Zap,
 } from 'lucide-react';
 import { initialAccounts, providerCatalog, windowCatalog } from './data';
 import { adapterDefinitions } from './adapters';
 import { newApiTemplateScript } from './newapi-template';
+import { computeUsageStreaks, formatProviderUsageCost, formatProviderUsageSummaryTokens } from './provider-usage-format';
 import qrcode from 'qrcode-generator';
 import './styles.css';
 
@@ -109,6 +110,9 @@ const resolveWasteWindows = (requestConfig) => {
 // CLI 官方订阅（Claude / Codex / Gemini / Kimi / Grok 订阅）：账号统一走「导入订阅登录」收录，不走普通添加表单
 const CLI_ADAPTER_MODES = ['claude', 'codex', 'gemini', 'kimi', 'grok'];
 const isCliProvider = (provider) => CLI_ADAPTER_MODES.includes(provider?.requestConfig?.adapterMode || provider?.adapter);
+const BUILTIN_API_KEY_PROVIDERS = new Set(['kimi', 'zai', 'deepseek', 'minimax']);
+const providerVariableRequired = (provider, variable) => Boolean(variable?.required
+  || (variable?.key === 'apiKey' && BUILTIN_API_KEY_PROVIDERS.has(provider?.id)));
 const providerVariableDefinitions = (provider) => {
   const config = provider?.requestConfig || {};
   const custom = Array.isArray(config.variables) ? config.variables : [];
@@ -118,7 +122,9 @@ const providerVariableDefinitions = (provider) => {
     { key: 'apiKey', label: 'API Key', defaultValue: '', required: false, secret: true, system: true },
   ];
   const merged = [...system, ...custom];
-  return merged.filter((item, index, list) => list.findIndex((candidate) => candidate.key === item.key) === index);
+  return merged
+    .filter((item, index, list) => list.findIndex((candidate) => candidate.key === item.key) === index)
+    .map((item) => providerVariableRequired(provider, item) ? { ...item, required: true } : item);
 };
 const defaultVariableValues = (provider, existing = {}) => Object.fromEntries(providerVariableDefinitions(provider).map((item) => [item.key, existing[item.key] ?? item.defaultValue ?? '']).filter(([key]) => key));
 const splitVariableValues = (provider, values) => {
@@ -189,6 +195,112 @@ const openProviderWebsite = (provider) => {
   if (window.quotaDesk?.openExternal) window.quotaDesk.openExternal(url).catch(() => {});
   else window.open(url, '_blank', 'noopener,noreferrer');
 };
+
+// 厂商服务端历史与本地额度快照是两套独立数据源。每家厂商的接入方式不同：
+// DeepSeek/MiniMax 走官方网页登录，Z.ai 复用账号 API Key，Codex 复用本机 CLI 登录；
+// 布局保持一致，文案与指标按厂商实际能力有所取舍。这里同时检查 bridge 和后端公开
+// 的连接状态，绝不拿本地 getHistory 数据拼装服务端用量。
+const PROVIDER_USAGE_COPY = {
+  deepseek: {
+    display: 'DeepSeek',
+    // 卡片较多，隐藏「当前连续」保持四卡布局
+    hideCurrentStreak: true,
+    loading: '查询最近 1 年的每日花费与 Token',
+    connectHint: '登录 DeepSeek 官方账号后读取每日花费与 Token；登录凭据不会暴露给界面。',
+    connectAction: '登录官方账号',
+    connecting: '等待登录…',
+    reauthLabel: '需要重新登录',
+    reauthDetail: 'DeepSeek 官方登录已过期',
+    reauthHint: '重新登录后即可继续读取 DeepSeek 服务端历史，不影响 API Key 余额巡检。',
+    emptyHint: 'DeepSeek 已连接，但没有返回可绘制的每日金额或 Token。',
+    editHint: '保存后打开 DeepSeek 官方登录，用于读取每日金额与 Token 历史',
+    connectedToast: '已连接 DeepSeek 官方账号，可在历史详情查看每日用量',
+    savedToast: '账号已保存，并已连接 DeepSeek 官方用量',
+    saveAction: '保存并登录',
+    connectedDetail: '可读取最近 1 年服务端历史',
+    disconnectTitle: '断开 DeepSeek 官方账号',
+  },
+  zai: {
+    display: 'Z.ai',
+    loading: '查询最近 1 年的每日模型 Token 用量',
+    connectHint: '复用账号已保存的 API Key，读取智谱开放平台的每日模型 Token 用量；无需额外登录。',
+    connectAction: '连接官方用量',
+    connecting: '验证凭据…',
+    reauthLabel: '需要重新连接',
+    reauthDetail: 'Z.ai API Key 无效或已过期',
+    reauthHint: '在账号设置中更新 API Key 后重新连接，即可继续读取 Z.ai 服务端历史。',
+    emptyHint: 'Z.ai 已连接，但没有返回可绘制的每日 Token 用量。',
+    editHint: '保存后验证 API Key，用于读取每日模型 Token 用量历史',
+    connectedToast: '已连接 Z.ai 官方用量，可在历史详情查看每日用量',
+    savedToast: '账号已保存，并已连接 Z.ai 官方用量',
+    saveAction: '保存并连接',
+    connectedDetail: '可读取最近 1 年服务端历史',
+    disconnectTitle: '断开 Z.ai 官方用量',
+  },
+  codex: {
+    display: 'Codex',
+    loading: '查询最近 1 年的每日 Token 用量',
+    connectHint: '复用本机 Codex CLI 的 ChatGPT 登录，读取官方每日 Token 用量统计；凭据不会暴露给界面。',
+    connectAction: '连接官方用量',
+    connecting: '验证登录…',
+    reauthLabel: '需要重新连接',
+    reauthDetail: 'Codex 本机登录已失效',
+    reauthHint: '运行一次 Codex CLI 或重新导入登录快照后重新连接，即可继续读取 Codex 服务端历史。',
+    emptyHint: 'Codex 已连接，但暂时没有返回每日 Token 用量。',
+    editHint: '保存后验证本机 Codex 登录，用于读取每日 Token 用量统计',
+    connectedToast: '已连接 Codex 官方用量，可在历史详情查看每日用量',
+    savedToast: '账号已保存，并已连接 Codex 官方用量',
+    saveAction: '保存并连接',
+    connectedDetail: '可读取最近 1 年服务端历史',
+    disconnectTitle: '断开 Codex 官方用量',
+  },
+  minimax: {
+    display: 'MiniMax',
+    loading: '查询最近 1 年的每日账单与 Token',
+    connectHint: '登录 MiniMax 开放平台后读取每日账单与 Token 用量；登录凭据不会暴露给界面。',
+    connectAction: '登录官方账号',
+    connecting: '等待登录…',
+    reauthLabel: '需要重新登录',
+    reauthDetail: 'MiniMax 官方登录已过期',
+    reauthHint: '重新登录后即可继续读取 MiniMax 服务端历史，不影响 API Key 余额巡检。',
+    emptyHint: 'MiniMax 已连接，但没有返回可绘制的每日账单或 Token。',
+    editHint: '保存后打开 MiniMax 官方登录，用于读取每日账单与 Token 历史',
+    connectedToast: '已连接 MiniMax 官方账号，可在历史详情查看每日用量',
+    savedToast: '账号已保存，并已连接 MiniMax 官方用量',
+    saveAction: '保存并登录',
+    connectedDetail: '可读取最近 1 年服务端历史',
+    disconnectTitle: '断开 MiniMax 官方账号',
+  },
+};
+const providerUsageCopy = (provider) => PROVIDER_USAGE_COPY[provider?.id] || null;
+const providerUsageSupported = (account, provider) => Boolean(providerUsageCopy(provider))
+  && account?.usageConnection?.supported !== false
+  && Boolean(window.quotaDesk?.getProviderUsage && window.quotaDesk?.connectProviderUsage && window.quotaDesk?.disconnectProviderUsage);
+const providerUsageStatus = (account) => {
+  const connection = account?.usageConnection || {};
+  if (connection.status) return connection.status;
+  if (connection.connected === true) return 'connected';
+  return 'disconnected';
+};
+const providerUsageHasNumber = (value) => value !== null && value !== undefined && Number.isFinite(Number(value));
+const providerUsageHasMetric = (data, metric) => Array.isArray(data?.days)
+  && data.days.some((day) => providerUsageHasNumber(day?.[metric]));
+const formatProviderUsageCount = (value, compact = true) => {
+  if (!providerUsageHasNumber(value)) return '—';
+  return new Intl.NumberFormat('zh-CN', compact
+    ? { notation: 'compact', maximumFractionDigits: 1 }
+    : { maximumFractionDigits: 0 }).format(Number(value));
+};
+const formatProviderUsageDate = (value) => {
+  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? `${match[2]}/${match[3]}` : String(value || '—');
+};
+const providerUsageToday = (timezoneOffsetSec = 8 * 60 * 60) => {
+  const shifted = new Date(Date.now() + Number(timezoneOffsetSec || 0) * 1000);
+  return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, '0')}-${String(shifted.getUTCDate()).padStart(2, '0')}`;
+};
+// 服务端用量固定展示近 1 年（与主进程 deepSeekDateRange 的上限一致），不提供范围切换
+const PROVIDER_USAGE_RANGE_DAYS = 365;
 
 function Logo({ provider, size = 'md', interactive = true }) {
   const [failed, setFailed] = useState(false);
@@ -390,7 +502,7 @@ function WindowsView({ accounts, providers, reminderRules, embedded = false, onO
       <div className="windows-list">{sorted.map((account) => {
         const provider = providers.find((item) => item.id === account.providerId);
         return <div className="account-window-row clickable" key={account.id} role="button" tabIndex={0} title="点击查看额度趋势" onClick={() => onOpenHistory?.(account)} onKeyDown={(event) => { if (event.key === 'Enter') onOpenHistory?.(account); }}>
-          <div className="account-side"><AccountIdentity account={account} provider={provider} /><div className={`account-status ${account.status}`}><span className="status-dot" />{account.status === 'warning' ? '需处理' : '正常'}<small>{formatChecked(account.lastChecked)}</small></div>{account.status === 'warning' && (provider?.id === 'kimi-subscription' || provider?.requestConfig?.adapterMode === 'kimi' || provider?.id === 'grok' || provider?.requestConfig?.adapterMode === 'grok') && <button type="button" className="text-button relogin-link" title={(provider?.id === 'grok' || provider?.requestConfig?.adapterMode === 'grok') ? 'Grok 令牌已失效，点击重新导入本机 CLI 登录' : 'Kimi 订阅令牌已失效，点击重新扫码登录'} onClick={(event) => { event.stopPropagation(); onRelogin?.(account); }}><RefreshCw size={11} />{(provider?.id === 'grok' || provider?.requestConfig?.adapterMode === 'grok') ? '重新导入' : '重新扫码'}</button>}<AccountRuleMarks account={account} rules={reminderRules} /></div>
+          <div className="account-side"><AccountIdentity account={account} provider={provider} /><div className={`account-status ${account.status}`}><span className="status-dot" />{account.status === 'warning' ? '需处理' : '正常'}<small>{formatChecked(account.lastChecked)}</small></div>{account.authStatus === 'reauth_required' && (provider?.id === 'kimi-subscription' || provider?.requestConfig?.adapterMode === 'kimi' || provider?.id === 'grok' || provider?.requestConfig?.adapterMode === 'grok') && <button type="button" className="text-button relogin-link" title={(provider?.id === 'grok' || provider?.requestConfig?.adapterMode === 'grok') ? 'Grok 令牌已失效，点击重新导入本机 CLI 登录' : 'Kimi 订阅令牌已失效，点击重新扫码登录'} onClick={(event) => { event.stopPropagation(); onRelogin?.(account); }}><RefreshCw size={11} />{(provider?.id === 'grok' || provider?.requestConfig?.adapterMode === 'grok') ? '重新导入' : '重新扫码'}</button>}<AccountRuleMarks account={account} rules={reminderRules} /></div>
           <div className="account-meters">{account.windows.map((meter) => <MeterBar key={meter.key} meter={meter} />)}</div>
         </div>;
       })}</div>
@@ -768,7 +880,313 @@ function WasteView({ account, wasteWindows }) {
   </div>;
 }
 
-function HistoryView({ account, provider, onBack }) {
+// 厂商控制台的逐日用量。默认按金额着色；只有服务端同时返回 Token 数据时才
+// 开放切换。每一格都来自 usage:get 的 days，和本地轮询历史完全隔离。
+function ProviderUsageView({ account, provider, onState }) {
+  const bridge = window.quotaDesk;
+  const reportedStatus = providerUsageStatus(account);
+  const supported = providerUsageSupported(account, provider);
+  const [status, setStatus] = useState(reportedStatus);
+  const [data, setData] = useState(null);
+  const [empty, setEmpty] = useState(false);
+  const [selectedDate, setSelectedDate] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [error, setError] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
+  const heatmapRef = useRef(null);
+  const forceNextRequest = useRef(false);
+
+  useEffect(() => {
+    setStatus(reportedStatus);
+    setData(null);
+    setEmpty(false);
+    setSelectedDate('');
+  }, [account.id, reportedStatus]);
+
+  useEffect(() => {
+    if (!supported || status !== 'connected') return undefined;
+    let active = true;
+    const force = forceNextRequest.current;
+    forceNextRequest.current = false;
+    setLoading(true);
+    setError('');
+    bridge.getProviderUsage(account.id, { days: PROVIDER_USAGE_RANGE_DAYS, force }).then((result) => {
+      if (!active) return;
+      // provider 字段是服务端适配器的来源声明；未来契约若提供显式
+      // supported / connected，也一并尊重，绝不在后端拒绝时误展示。
+      const responseSupported = result?.supported ?? result?.capability?.supported;
+      const responseConnected = result?.connected ?? result?.connection?.connected;
+      const fromExpectedProvider = result?.provider === provider?.id;
+      const hasCost = providerUsageHasMetric(result, 'cost');
+      const hasTokens = providerUsageHasMetric(result, 'tokens');
+      if (!fromExpectedProvider || responseSupported === false || responseConnected === false || (!hasCost && !hasTokens)) {
+        setData(null);
+        setEmpty(true);
+        return;
+      }
+      setData(result);
+      setEmpty(false);
+      const resultDays = [...(result.days || [])]
+        .filter((day) => /^\d{4}-\d{2}-\d{2}$/.test(String(day?.date || '')))
+        .sort((left, right) => left.date.localeCompare(right.date));
+      const today = providerUsageToday(result.coverage?.timezoneOffsetSec);
+      setSelectedDate((old) => resultDays.some((day) => day.date === old)
+        ? old
+        : (resultDays.find((day) => day.date === today)?.date || resultDays[resultDays.length - 1]?.date || ''));
+    }).catch((usageError) => {
+      if (!active) return;
+      const message = usageError?.message || '读取厂商用量失败';
+      setError(message);
+      if (/AUTH_|登录已失效|尚未连接|重新连接/.test(message)) setStatus('reauth_required');
+    }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [account.id, bridge, provider?.id, reloadKey, status, supported]);
+
+  // 服务端返回的逐日数据：只保留合法日期并按时间排序，后面所有展示都基于这一份
+  const sortedDays = useMemo(() => [...(data?.days || [])]
+    .filter((day) => /^\d{4}-\d{2}-\d{2}$/.test(String(day?.date || '')))
+    .sort((left, right) => left.date.localeCompare(right.date)), [data]);
+  // 热力图列数（周数）：首行按第一天的星期补空位，与渲染时的铺格规则一致
+  const weekCount = useMemo(() => {
+    if (!sortedDays.length) return 1;
+    const first = String(sortedDays[0].date).split('-').map(Number);
+    const leading = (new Date(Date.UTC(first[0], first[1] - 1, first[2])).getUTCDay() + 6) % 7;
+    return Math.ceil((leading + sortedDays.length) / 7);
+  }, [sortedDays]);
+  // 近 1 年热力图整幅铺满：列宽由容器宽度决定（无缝排列），行高吃满剩余纵向空间
+  // （方格优先，富余时最多加高到列宽的 1.4 倍），整块热力图约占视图 40%，与参考图同比例
+  const heatmapWrapRef = useRef(null);
+  const [cellPx, setCellPx] = useState(8);
+  const [cellH, setCellH] = useState(8);
+  useEffect(() => {
+    const el = heatmapWrapRef.current;
+    if (!el) return undefined;
+    const measure = () => {
+      // 可用宽度 = 容器 clientWidth − 自身左右 padding(4×2) − 星期列(10) − 星期列与网格的列间距(7)
+      const avail = el.clientWidth - 8 - 10 - 7;
+      const w = Math.min(12, Math.max(5, Math.floor(avail / weekCount)));
+      // 可用高度 = clientHeight − 上下 padding(5×2) − 边框(2) − 月份行(10) − 行距(3)
+      const h = Math.min(Math.round(w * 1.75), Math.max(w, Math.floor((el.clientHeight - 10 - 2 - 10 - 3) / 7)));
+      setCellPx(w);
+      setCellH(h);
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [weekCount]);
+
+  const refreshUsage = () => {
+    forceNextRequest.current = true;
+    setReloadKey((value) => value + 1);
+  };
+
+  const connect = async () => {
+    if (!bridge?.connectProviderUsage || connecting) return;
+    setConnecting(true);
+    setError('');
+    try {
+      const result = await bridge.connectProviderUsage(account.id);
+      if (result?.cancelled) { setError('未完成官方账号登录，服务端用量仍未连接'); return; }
+      if (result?.state) onState?.(result.state);
+      setStatus(result?.connection?.status || 'connected');
+      refreshUsage();
+    } catch (connectError) { setError(connectError?.message || '连接官方账号失败'); }
+    finally { setConnecting(false); }
+  };
+
+  if (!supported) return null;
+  const copy = providerUsageCopy(provider) || PROVIDER_USAGE_COPY.deepseek;
+  if (status === 'disconnected') return <div className="provider-usage-state connect-guide">
+    <span className="provider-usage-state-icon"><Globe size={18} /></span>
+    <div><b>连接 {copy.display} 官方用量</b><small>{copy.connectHint}</small>{error && <em>{error}</em>}</div>
+    <button type="button" className="primary-button" disabled={connecting} onClick={connect}><Globe size={13} />{connecting ? copy.connecting : copy.connectAction}</button>
+  </div>;
+  if (status === 'reauth_required') return <div className="provider-usage-state auth-required">
+    <span className="provider-usage-state-icon"><AlertCircle size={18} /></span>
+    <div><b>官方用量连接已失效</b><small>{account.usageConnection?.lastError || copy.reauthHint}</small>{error && <em>{error}</em>}</div>
+    <button type="button" className="primary-button" disabled={connecting} onClick={connect}><Globe size={13} />{connecting ? copy.connecting : '重新连接'}</button>
+  </div>;
+  if (loading && !data) return <div className="provider-usage-state"><RefreshCw size={17} className="spinning" /><div><b>正在读取 {copy.display} 服务端用量</b><small>{copy.loading}</small></div></div>;
+  if ((error || empty) && !data) return <div className="provider-usage-state">
+    <span className="provider-usage-state-icon"><History size={18} /></span>
+    <div><b>{error ? '服务端用量暂时不可用' : '这个区间没有厂商历史数据'}</b><small>{error || copy.emptyHint}</small></div>
+    <button type="button" className="outline-button" disabled={loading} onClick={refreshUsage}><RefreshCw size={13} /> 重试</button>
+  </div>;
+  if (!data) return null;
+
+  const hasCost = providerUsageHasMetric(data, 'cost');
+  const hasTokens = providerUsageHasMetric(data, 'tokens');
+  // 参考图没有指标切换：热力图固定按金额着色，账号没有金额数据时才退回 Token
+  const metric = hasCost ? 'cost' : 'tokens';
+  // 花费卡片：DeepSeek 摘要的 totalCost 是账号累计花费；拿不到时退回区间累计
+  const accountTotalCost = providerUsageHasNumber(data.summary?.totalCost) ? data.summary.totalCost : null;
+  const rangeCostExact = providerUsageHasNumber(data.summary?.rangeCost) ? data.summary.rangeCost : null;
+  const rangeCostKnown = providerUsageHasNumber(data.summary?.knownRangeCost) ? data.summary.knownRangeCost : null;
+  const costTotal = accountTotalCost != null
+    ? accountTotalCost
+    : (data.coverage?.cost?.complete && rangeCostExact != null ? rangeCostExact : rangeCostKnown);
+  const costLabel = accountTotalCost != null ? '累计花费' : '区间花费';
+  // Token 口径：部分厂商摘要直接提供账号累计（totalTokens）；否则退回区间口径，
+  // 覆盖不完整时如实标注
+  const accountTotalTokens = providerUsageHasNumber(data.summary?.totalTokens) ? data.summary.totalTokens : null;
+  const tokensExact = providerUsageHasNumber(data.summary?.rangeTokens) ? data.summary.rangeTokens : null;
+  const tokensKnown = providerUsageHasNumber(data.summary?.knownRangeTokens) ? data.summary.knownRangeTokens : null;
+  const tokensTotal = accountTotalTokens != null
+    ? accountTotalTokens
+    : (data.coverage?.tokens?.complete && tokensExact != null ? tokensExact : tokensKnown);
+  const tokensLabel = accountTotalTokens != null || (data.coverage?.tokens?.complete && tokensExact != null) ? '累计消耗 Token' : '已覆盖区间 Token';
+  const values = sortedDays.map((day) => day[metric]).filter(providerUsageHasNumber).map(Number);
+  const maxValue = Math.max(0, ...values);
+  const firstDate = sortedDays[0]?.date;
+  const firstParts = String(firstDate || '').split('-').map(Number);
+  const leading = firstParts.length === 3
+    ? (new Date(Date.UTC(firstParts[0], firstParts[1] - 1, firstParts[2])).getUTCDay() + 6) % 7
+    : 0;
+  const heatmapCells = [...Array(leading).fill(null), ...sortedDays];
+  const monthMarkers = [];
+  let previousMonth = '';
+  heatmapCells.forEach((day, index) => {
+    if (!day) return;
+    const month = day.date.slice(0, 7);
+    if (month === previousMonth) return;
+    previousMonth = month;
+    monthMarkers.push({ key: month, label: `${Number(month.slice(5))}月`, column: Math.floor(index / 7) + 1 });
+  });
+  const selectedDay = sortedDays.find((day) => day.date === selectedDate) || null;
+  const selectedIndex = selectedDay ? sortedDays.indexOf(selectedDay) : -1;
+  // 详情标签：默认（今天）叫「当日」，切到其他日子显示具体日期 + 空格（当日花费 / 2026-05-14 花费）
+  const today = providerUsageToday(data.coverage?.timezoneOffsetSec);
+  const dayLabel = selectedDay && selectedDay.date === today ? '当日' : `${selectedDay?.date || ''} `;
+  const valueLabel = (day, selectedMetric = metric) => selectedMetric === 'cost'
+    ? formatProviderUsageCost(day?.cost, day?.currency || data.currency)
+    : `${formatProviderUsageCount(day?.tokens, false)} Token`;
+  // 热力图深度分级：基于重度 Coding Agent 用户的真实量级（日均 2000万-6000万 Token）
+  // 固定阈值让颜色深度反映绝对使用量，不同天之间能看出明显波动
+  const levelOf = (day) => {
+    if (!providerUsageHasNumber(day?.[metric])) return 'missing';
+    const value = Number(day[metric]);
+    if (value <= 0) return '0';
+    if (metric === 'tokens') {
+      // Token 口径（日均）：< 1000万 轻度 | 1000-3000万 中度 | 3000-8000万 重度 | > 8000万 极重度
+      if (value < 10_000_000) return '1';
+      if (value < 30_000_000) return '2';
+      if (value < 80_000_000) return '3';
+      return '4';
+    }
+    // 金额口径（¥/天）：< ¥30 轻度 | ¥30-100 中度 | ¥100-250 重度 | > ¥250 极重度
+    if (value < 30) return '1';
+    if (value < 100) return '2';
+    if (value < 250) return '3';
+    return '4';
+  };
+  const dayAriaLabel = (day) => [
+    day.date,
+    providerUsageHasNumber(day.cost) ? `花费 ${valueLabel(day, 'cost')}` : '花费未覆盖',
+    providerUsageHasNumber(day.tokens) ? `Token ${valueLabel(day, 'tokens')}` : 'Token 未覆盖',
+    providerUsageHasNumber(day.requests) ? `请求 ${formatProviderUsageCount(day.requests, false)}` : null,
+  ].filter(Boolean).join('，');
+  // 方向键浏览热力图：上下 = 前后一天，左右 = 前后一周（列 = 周、行 = 星期一到日）
+  const stepTo = (index) => {
+    const next = sortedDays[Math.max(0, Math.min(sortedDays.length - 1, index))];
+    if (!next) return;
+    setSelectedDate(next.date);
+    requestAnimationFrame(() => heatmapRef.current?.querySelector(`[data-usage-date="${next.date}"]`)?.focus());
+  };
+  const handleHeatmapKey = (event) => {
+    if (!sortedDays.length) return;
+    const base = selectedIndex >= 0 ? selectedIndex : sortedDays.length - 1;
+    if (event.key === 'Home') { event.preventDefault(); stepTo(0); return; }
+    if (event.key === 'End') { event.preventDefault(); stepTo(sortedDays.length - 1); return; }
+    const delta = { ArrowUp: -1, ArrowDown: 1, ArrowLeft: -7, ArrowRight: 7 }[event.key];
+    if (delta === undefined) return;
+    event.preventDefault();
+    stepTo(base + delta);
+  };
+
+  // 统计卡片按厂商实际返回的指标组装：花费/Token/套餐/连续使用按需出现，活跃日固定收尾
+  const planName = typeof data.summary?.planName === 'string' && data.summary.planName.trim() ? data.summary.planName.trim() : null;
+  // 连续天数：优先用厂商接口的账号级口径（如 Z.ai）；接口不提供时按逐日数据本地计算
+  const computedStreaks = computeUsageStreaks(sortedDays);
+  const streakDays = providerUsageHasNumber(data.summary?.currentStreakDays) ? Number(data.summary.currentStreakDays) : computedStreaks.current;
+  const longestStreak = providerUsageHasNumber(data.summary?.longestStreakDays) ? Number(data.summary.longestStreakDays) : computedStreaks.longest;
+  const peakTokens = providerUsageHasNumber(data.summary?.peakDailyTokens) ? Number(data.summary.peakDailyTokens) : null;
+  const peakCost = providerUsageHasNumber(data.summary?.peakDailyCost) ? Number(data.summary.peakDailyCost) : null;
+  const peakIsCost = metric === 'cost' && peakCost !== null;
+  const peakReady = peakIsCost || peakTokens !== null;
+  const peakDate = typeof data.summary?.peakDailyTokensDate === 'string' && data.summary.peakDailyTokensDate ? data.summary.peakDailyTokensDate : null;
+  const hasRequests = providerUsageHasMetric(data, 'requests');
+  const summaryCards = [
+    hasCost && <div key="cost" className="provider-stat cost" title={formatProviderUsageCost(costTotal, data.currency)}>
+      <span className="stat-icon"><Zap size={13} /></span>
+      <div className="stat-copy">
+        <span>{costLabel}</span>
+        <strong>{formatProviderUsageCost(costTotal, data.currency)}</strong>
+      </div>
+    </div>,
+    hasTokens && <div key="tokens" className="provider-stat tokens" title={providerUsageHasNumber(tokensTotal) ? `${formatProviderUsageCount(tokensTotal, false)} Token` : ''}>
+      <span className="stat-icon"><Bot size={13} /></span>
+      <div className="stat-copy">
+        <span>{tokensLabel}</span>
+        <strong>{providerUsageHasNumber(tokensTotal) ? formatProviderUsageSummaryTokens(tokensTotal) : '—'}</strong>
+      </div>
+    </div>,
+    peakReady && <div key="peak" className="provider-stat peak" title={peakDate && !peakIsCost ? `峰值日期 ${peakDate}` : '区间内单日最高消耗'}>
+      <span className="stat-icon"><TrendingUp size={13} /></span>
+      <div className="stat-copy">
+        <span>{peakIsCost ? '峰值花费' : '峰值 Token'}</span>
+        <strong>{peakIsCost ? formatProviderUsageCost(peakCost, data.currency) : formatProviderUsageSummaryTokens(peakTokens)}</strong>
+      </div>
+    </div>,
+    streakDays !== null && !copy.hideCurrentStreak && <div key="streak" className="provider-stat streak" title="当前连续使用天数">
+      <span className="stat-icon"><Flame size={13} /></span>
+      <div className="stat-copy">
+        <span>当前连续</span>
+        <strong>{`${formatProviderUsageCount(streakDays, false)} 天`}</strong>
+      </div>
+    </div>,
+    longestStreak !== null && <div key="longest" className="provider-stat longest" title="历史最长连续使用天数">
+      <span className="stat-icon"><Trophy size={13} /></span>
+      <div className="stat-copy">
+        <span>最长连续</span>
+        <strong>{`${formatProviderUsageCount(longestStreak, false)} 天`}</strong>
+      </div>
+    </div>,
+  ].filter(Boolean);
+
+  return <div className="provider-usage-view">
+    <div className="provider-usage-summary">{summaryCards}</div>
+    <div className="provider-heatmap-head">
+      <span className="provider-heatmap-title">近 1 年使用热力图</span>
+      <div className="provider-heatmap-legend" aria-hidden="true">
+        <span>较少</span>{[0, 1, 2, 3, 4].map((level) => <i key={level} className={`provider-heatmap-cell level-${level}`} />)}<span>较多</span>
+      </div>
+    </div>
+    <div className="provider-heatmap-scroll" role="grid" tabIndex={0} aria-label="近 1 年每日用量热力图，方向键选择日期" ref={heatmapWrapRef} onKeyDown={handleHeatmapKey}>
+      <div className="provider-heatmap-board" ref={heatmapRef} style={{ '--hm-cell': `${cellPx}px`, '--hm-cell-h': `${cellH}px` }}>
+        <span className="provider-heatmap-corner" aria-hidden="true" />
+        <div className="provider-heatmap-months" aria-hidden="true" style={{ width: `${weekCount * cellPx}px` }}>{monthMarkers.map((item) => <span key={item.key} style={{ left: `${(item.column - 1) * cellPx}px` }}>{item.label}</span>)}</div>
+        <div className="provider-heatmap-weekdays" aria-hidden="true"><span>一</span><span /><span>三</span><span /><span>五</span><span /><span>日</span></div>
+        <div className="provider-heatmap-grid" role="rowgroup" aria-label={`${copy.display} 每日${metric === 'cost' ? '花费' : 'Token'}热力图`}>
+          {heatmapCells.map((day, index) => day
+            ? <button type="button" role="gridcell" key={day.date} data-usage-date={day.date} tabIndex={selectedDate === day.date ? 0 : -1} aria-selected={selectedDate === day.date} aria-label={dayAriaLabel(day)} className={`provider-heatmap-cell level-${levelOf(day)}${selectedDate === day.date ? ' selected' : ''}`} title={dayAriaLabel(day)} onFocus={() => setSelectedDate(day.date)} onClick={() => setSelectedDate(day.date)} />
+            : <span key={`blank-${index}`} className="provider-heatmap-cell blank" aria-hidden="true" />)}
+        </div>
+      </div>
+    </div>
+    <div className="provider-day-card">
+      {selectedDay ? <>
+        {hasCost && <div className="day-cell"><div><span>{dayLabel}花费</span><b>{providerUsageHasNumber(selectedDay.cost) ? valueLabel(selectedDay, 'cost') : '—'}</b></div></div>}
+        {hasTokens && <div className="day-cell"><div><span>{dayLabel}Token</span><b>{providerUsageHasNumber(selectedDay.tokens) ? formatProviderUsageSummaryTokens(selectedDay.tokens) : '—'}</b></div></div>}
+        {hasRequests && <div className="day-cell"><div><span>{dayLabel}请求</span><b>{providerUsageHasNumber(selectedDay.requests) ? formatProviderUsageCount(selectedDay.requests, false) : '—'}</b></div></div>}
+      </> : <span className="chart-detail-hint">点击热力图方格查看当日用量</span>}
+    </div>
+  </div>;
+}
+
+function HistoryView({ account, provider, onBack, onProviderUsageState }) {
   const [points, setPoints] = useState(null);
   const [hiddenKeys, setHiddenKeys] = useState([]);
   const [view, setView] = useState('trend');
@@ -783,7 +1201,13 @@ function HistoryView({ account, provider, onBack }) {
       : (account.windows?.length ? account.windows.map((item) => item.key) : null);
     return tracked ? base.filter((key) => tracked.includes(key)) : base;
   }, [provider, account]);
+  // 用量统计入口常驻：未连接时页内直接引导登录，登录过期也能在原位置重新连接。
+  const showProviderUsageEntry = providerUsageSupported(account, provider);
   const showWaste = view === 'waste' && wasteWindows.length > 0;
+  const showProviderUsage = view === 'provider-usage' && showProviderUsageEntry;
+  useEffect(() => {
+    if (view === 'provider-usage' && !showProviderUsageEntry) setView('trend');
+  }, [view, showProviderUsageEntry]);
   useEffect(() => {
     let active = true;
     if (!window.quotaDesk?.getHistory) { setPoints([]); return undefined; }
@@ -805,17 +1229,39 @@ function HistoryView({ account, provider, onBack }) {
     if (old.includes(key)) return old.filter((item) => item !== key);
     return legendKeys.length - old.length <= 1 ? old : [...old, key];
   });
+  const historyTabs = [
+    { key: 'trend', label: '趋势' },
+    ...(showProviderUsageEntry ? [{ key: 'provider-usage', label: '用量' }] : []),
+    ...(wasteWindows.length > 0 ? [{ key: 'waste', label: '浪费' }] : []),
+  ];
+  const historyDomId = `history-${String(account.id).replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+  const historyPanelId = `${historyDomId}-panel`;
+  const moveHistoryTab = (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const tablist = event.currentTarget;
+    const currentIndex = Math.max(0, historyTabs.findIndex((tab) => tab.key === view));
+    const targetIndex = event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? historyTabs.length - 1
+        : (currentIndex + (event.key === 'ArrowRight' ? 1 : -1) + historyTabs.length) % historyTabs.length;
+    const target = historyTabs[targetIndex];
+    if (!target) return;
+    setView(target.key);
+    requestAnimationFrame(() => tablist.querySelector(`[data-history-tab="${target.key}"]`)?.focus());
+  };
+  const hasHistoryTabs = historyTabs.length > 1;
   return <div className="view-stack history-view">
     <section className="surface-section">
       <div className="history-head">
         <AccountIdentity account={account} provider={provider} />
         {account.disabled && <span className="history-disabled-tag"><CircleStop size={12} /> 已停用 · {formatDisabledDate(account.disabledAt)}</span>}
-        {wasteWindows.length > 0 && <div className="seg-control">
-          <button type="button" className={view === 'trend' ? 'active' : ''} onClick={() => setView('trend')}>趋势</button>
-          <button type="button" className={view === 'waste' ? 'active' : ''} onClick={() => setView('waste')}>浪费</button>
+        {hasHistoryTabs && <div className="seg-control history-view-switch" role="tablist" aria-label="账号历史视图" onKeyDown={moveHistoryTab}>
+          {historyTabs.map((tab) => <button type="button" role="tab" id={`${historyDomId}-tab-${tab.key}`} data-history-tab={tab.key} key={tab.key} tabIndex={view === tab.key ? 0 : -1} aria-controls={historyPanelId} aria-selected={view === tab.key} className={view === tab.key ? 'active' : ''} onClick={() => setView(tab.key)}>{tab.label}</button>)}
         </div>}
       </div>
-      {showWaste ? <WasteView account={account} wasteWindows={wasteWindows} /> : <div className="trend-view">
+      <div className="history-tabpanel" {...(hasHistoryTabs ? { role: 'tabpanel', id: historyPanelId, 'aria-labelledby': `${historyDomId}-tab-${view}` } : {})}>{showProviderUsage ? <ProviderUsageView account={account} provider={provider} onState={onProviderUsageState} /> : showWaste ? <WasteView account={account} wasteWindows={wasteWindows} /> : <div className="trend-view">
         {points === null ? <div className="settings-empty chart-empty">正在读取历史记录…</div>
           : points.length === 0 ? <div className="settings-empty chart-empty">暂无历史数据，每次成功刷新额度后都会记录一条</div>
             : <UsageChart points={points} hiddenKeys={hiddenKeys} rangeKey={rangeKey} onRangeKeyChange={setRangeKey} />}
@@ -824,7 +1270,7 @@ function HistoryView({ account, provider, onBack }) {
           const hidden = hiddenKeys.includes(key);
           return <button type="button" key={key} className={hidden ? 'off' : ''} title={hidden ? '点击显示该折线' : '点击隐藏该折线'} onClick={() => toggleKey(key)}><i style={{ background: chartColor(key, index) }} />{windowCatalog[key]?.label || key}{sample && <em>{formatChartValue(sample, chartValue(sample))}</em>}</button>;
         })}<span className="legend-right">{points.length} 条记录</span></div>}
-      </div>}
+      </div>}</div>
     </section>
     <div className="history-foot"><button type="button" className="outline-button" onClick={onBack}><ArrowLeft size={14} /> 返回</button></div>
   </div>;
@@ -1192,11 +1638,13 @@ function AccountModalV2({ providers, onClose, onSave, onTestDraft, embedded = fa
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
+  const [connectUsageAfterSave, setConnectUsageAfterSave] = useState(false);
   const provider = selectableProviders.find((item) => item.id === providerId);
   const availableWindows = providerWindowKeys(provider);
   const variableDefinitions = providerVariableDefinitions(provider);
   const credentialRequired = provider?.requestConfig?.adapterMode === 'script' ? false : provider?.requestConfig?.auth !== 'none';
-  const missingRequiredVariables = variableDefinitions.some((item) => item.required && !String(variableValues[item.key] ?? '').trim());
+  const missingRequiredVariables = variableDefinitions.some((item) => providerVariableRequired(provider, item) && !String(variableValues[item.key] ?? '').trim());
+  useEffect(() => { if (!PROVIDER_USAGE_COPY[providerId]) setConnectUsageAfterSave(false); }, [providerId]);
   const toggle = (key) => setSelected((old) => old.includes(key) ? old.filter((item) => item !== key) : [...old, key]);
   const accountEndpoint = provider?.requestConfig?.adapterMode === 'script' ? String(variableValues.endpoint || provider.requestConfig.endpoint || '') : endpoint.trim();
   // 草稿连通性测试：不保存账号与凭据，直接用当前表单值查一次
@@ -1214,23 +1662,119 @@ function AccountModalV2({ providers, onClose, onSave, onTestDraft, embedded = fa
     if ((credentialRequired && !credential.trim()) || missingRequiredVariables || !selected.length || !accountEndpoint) return;
     setSaving(true);
     const { publicVariables, secretVariables } = splitVariableValues(provider, variableValues);
-    try { await onSave({ providerId, name: name.trim() || provider?.name || '新账号', identity: identity.trim(), tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean), windowKeys: selected, credential: credential.trim(), endpoint: accountEndpoint, timeoutSeconds: clampAccountTimeout(timeoutSeconds), variables: publicVariables, secretVariables }); }
+    try { await onSave({ providerId, name: name.trim() || provider?.name || '新账号', identity: identity.trim(), tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean), windowKeys: selected, credential: credential.trim(), endpoint: accountEndpoint, timeoutSeconds: clampAccountTimeout(timeoutSeconds), variables: publicVariables, secretVariables, connectUsageAfterSave: Boolean(providerUsageCopy(provider)) && connectUsageAfterSave }); }
     finally { setSaving(false); }
   };
   const formFields = <><label className="field"><span>厂商</span><select value={providerId} onChange={(event) => { const next = selectableProviders.find((item) => item.id === event.target.value); setProviderId(event.target.value); setEndpoint(defaultEndpoint(next)); setSelected(providerWindowKeys(next)); setVariableValues(defaultVariableValues(next)); }}>{selectableProviders.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><div className="form-grid"><label className="field"><span>账号名</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder={provider?.name || '账号名称'} /></label><label className="field"><span>标识</span><input value={identity} onChange={(event) => setIdentity(event.target.value)} placeholder="邮箱、用户名或币种" /></label></div><label className="field"><span>标签 <small>用逗号分隔，可留空</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="日常, 主力" /></label>{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && <label className="field"><span>详细额度接口路径</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder="https://api.example.com/v1/usage" /></label>}<div className="form-grid"><label className="field"><span>请求超时（秒）<small>5–120，默认 15；跨境或代理网络可调大</small></span><input type="number" min="5" max="120" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.target.value)} /></label></div><div className="field"><span>额度窗口</span><div className="window-choice">{availableWindows.map((key) => <button type="button" key={key} className={`window-choice-item ${selected.includes(key) ? 'selected' : ''}`} onClick={() => toggle(key)}><span>{selected.includes(key) ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>)}</div></div>{variableDefinitions.length > 0 && <div className="adapter-config account-variables"><span className="eyebrow">厂商变量</span><div className="form-grid">{variableDefinitions.map((item) => <label className="field" key={item.key}><span>{item.label || item.key}{item.required && <small> 必填</small>}</span><input type={item.secret ? 'password' : 'text'} required={item.required} value={variableValues[item.key] ?? ''} onChange={(event) => setVariableValues((old) => ({ ...old, [item.key]: event.target.value }))} placeholder={item.defaultValue || item.key} /></label>)}</div></div>}{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && <label className="field"><span>{credentialRequired ? 'API Token' : '凭据（可选）'}</span><input type="password" required={credentialRequired} value={credential} onChange={(event) => setCredential(event.target.value)} placeholder={credentialRequired ? '凭据只会加密保存在本机' : '此接口无需凭据'} /></label>}{testResult && <div className={`draft-test-result ${testResult.ok ? 'ok' : 'fail'}`}><span>{testResult.ok ? '测试通过' : '测试失败'} · {testResult.message}</span></div>}</>;
   const canRun = !((credentialRequired && !credential.trim()) || missingRequiredVariables || !selected.length || !accountEndpoint);
-  const canSave = !(saving || (credentialRequired && !credential.trim()) || missingRequiredVariables || !selected.length);
-  const actions = (onCancel) => <div className="modal-actions"><button type="button" className="outline-button" onClick={onCancel}>{embedded ? '返回' : '取消'}</button><button type="button" className="outline-button" disabled={testing || !canRun} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" type="submit" form={embedded ? 'custom-account-form' : undefined} disabled={!canSave}>{saving ? '正在保存' : '保存'}</button></div>;
+  const canSave = !(saving || (credentialRequired && !credential.trim()) || missingRequiredVariables || !selected.length || !accountEndpoint);
+  const usageCopy = providerUsageCopy(provider);
+  const usageConnectOption = usageCopy && window.quotaDesk?.connectProviderUsage
+    ? <label className="setting-toggle provider-login-option"><span><b>官方账号用量 <small>可选</small></b><small>{usageCopy.editHint}</small></span><input type="checkbox" checked={connectUsageAfterSave} onChange={(event) => setConnectUsageAfterSave(event.target.checked)} /><i /></label>
+    : null;
+  const actions = (onCancel) => <div className="modal-actions"><button type="button" className="outline-button" onClick={onCancel}>{embedded ? '返回' : '取消'}</button><button type="button" className="outline-button" disabled={testing || !canRun} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" type="submit" form={embedded ? 'custom-account-form' : undefined} disabled={!canSave}>{saving ? '正在保存' : (connectUsageAfterSave ? (usageCopy?.saveAction || '保存并登录') : '保存')}</button></div>;
   // 嵌入模式（「添加账号」弹窗内的自定义视图）：表单区域滚动，标题与操作条固定，窗口尺寸与磁贴页一致
   if (embedded) return <>
     <div className="modal-head"><div><h2>自定义账号<TitleHelp>API / 中转接口：手动填写额度地址与凭据，凭据只加密保存在本机。</TitleHelp></h2></div></div>
-    <form id="custom-account-form" className="custom-account-scroll" onSubmit={submit}>{formFields}</form>
+    <form id="custom-account-form" className="custom-account-scroll" onSubmit={submit}>{formFields}{usageConnectOption}</form>
     {actions(onBack || onClose)}
   </>;
-  return <div className="modal-backdrop" onClick={onClose}><form className="modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><h2>连接一个账号</h2></div></div>{formFields}{actions(onClose)}</form></div>;
+  return <div className="modal-backdrop" onClick={onClose}><form className="modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><h2>连接一个账号</h2></div></div>{formFields}{usageConnectOption}{actions(onClose)}</form></div>;
 }
 
-function AccountEditModalV2({ account, provider, onClose, onSave, onTestDraft }) {
+// DeepSeek 的 API Key 余额巡检与官方账号历史是可独立启停的两条连接。
+// 官方登录令牌只在主进程中处理；renderer 只接收连接状态和聚合后的用量。
+function ProviderUsageConnectionCard({ account, provider, onState }) {
+  const bridge = window.quotaDesk;
+  const [connection, setConnection] = useState(account.usageConnection || null);
+  const [busy, setBusy] = useState('');
+  const [feedback, setFeedback] = useState(null);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  useEffect(() => setConnection(account.usageConnection || null), [account.id, account.usageConnection]);
+  useEffect(() => {
+    if (!confirmDisconnect) return undefined;
+    const timer = setTimeout(() => setConfirmDisconnect(false), 4000);
+    return () => clearTimeout(timer);
+  }, [confirmDisconnect]);
+  const copy = providerUsageCopy(provider);
+  if (!copy) return null;
+  const supported = providerUsageSupported({ ...account, usageConnection: connection }, provider);
+  const status = providerUsageStatus({ usageConnection: connection });
+  const applyResultState = (state) => {
+    if (!state) return;
+    const updated = (state.accounts || []).find((item) => item.id === account.id);
+    if (updated) setConnection(updated.usageConnection || null);
+    onState?.(state);
+  };
+  const connect = async () => {
+    setBusy('connect');
+    setFeedback(null);
+    try {
+      const result = await bridge.connectProviderUsage(account.id);
+      if (result?.cancelled) { setFeedback({ ok: false, message: '未完成登录，连接状态没有变化' }); return; }
+      setConnection(result?.connection || { provider: provider.id, status: 'connected' });
+      applyResultState(result?.state);
+      setFeedback({ ok: true, message: copy.connectedToast });
+    } catch (connectError) { setFeedback({ ok: false, message: connectError?.message || '连接失败' }); }
+    finally { setBusy(''); }
+  };
+  const refresh = async () => {
+    setBusy('refresh');
+    setFeedback(null);
+    try {
+      const result = await bridge.getProviderUsage(account.id, { days: 180, force: true });
+      const hasHistory = providerUsageHasMetric(result, 'cost') || providerUsageHasMetric(result, 'tokens');
+      const rangeCost = result?.summary?.rangeCost ?? result?.summary?.knownRangeCost;
+      const rangeTokens = result?.summary?.rangeTokens ?? result?.summary?.knownRangeTokens;
+      const metricText = providerUsageHasNumber(rangeCost) ? ` · ${formatProviderUsageCost(rangeCost, result.currency)}` : (providerUsageHasNumber(rangeTokens) ? ` · ${formatProviderUsageSummaryTokens(rangeTokens)} Token` : '');
+      setFeedback({ ok: true, message: hasHistory ? `已读取最近 ${result.days.length} 天${metricText}` : '已连接，厂商暂未返回历史用量' });
+      setConnection((old) => ({ ...(old || {}), provider: provider.id, status: 'connected', checkedAt: new Date().toISOString() }));
+    } catch (refreshError) {
+      const message = refreshError?.message || '刷新失败';
+      if (/AUTH_|登录已失效|尚未连接|重新连接|已过期/.test(message)) setConnection((old) => ({ ...(old || {}), provider: provider.id, status: 'reauth_required', lastError: message }));
+      setFeedback({ ok: false, message });
+    } finally { setBusy(''); }
+  };
+  const disconnect = async () => {
+    setConfirmDisconnect(false);
+    setBusy('disconnect');
+    setFeedback(null);
+    try {
+      const result = await bridge.disconnectProviderUsage(account.id);
+      setConnection(null);
+      applyResultState(result?.state);
+      setFeedback({ ok: true, message: '已断开官方账号；API Key 余额巡检不受影响' });
+    } catch (disconnectError) { setFeedback({ ok: false, message: disconnectError?.message || '断开失败' }); }
+    finally { setBusy(''); }
+  };
+  const requestDisconnect = () => {
+    if (confirmDisconnect) disconnect();
+    else setConfirmDisconnect(true);
+  };
+  const statusCopy = !supported
+    ? { label: '当前版本不可用', detail: '桌面后端未提供官方账号用量能力', tone: 'muted' }
+    : status === 'connected'
+      ? { label: '已连接', detail: connection?.checkedAt ? formatChecked(connection.checkedAt) : copy.connectedDetail, tone: 'connected' }
+      : status === 'reauth_required'
+        ? { label: copy.reauthLabel, detail: connection?.lastError || copy.reauthDetail, tone: 'reauth' }
+        : { label: '未连接', detail: '可选增强，不影响现有 API Key 余额巡检', tone: 'muted' };
+  return <div className="provider-connection-card">
+    <div className="provider-connection-copy"><span className="provider-connection-icon"><Globe size={15} /></span><div><b>服务端用量 <em>可选</em></b><small>{copy.connectHint}</small></div></div>
+    <div className={`provider-connection-status ${statusCopy.tone}`}><i /><span><b>{statusCopy.label}</b><small>{statusCopy.detail}</small></span></div>
+    {supported && <div className="provider-connection-actions">
+      {status === 'connected' ? <>
+        <button type="button" className="outline-button" disabled={Boolean(busy)} onClick={refresh}><RefreshCw size={12} className={busy === 'refresh' ? 'spinning' : ''} />{busy === 'refresh' ? '刷新中…' : '刷新'}</button>
+        <button type="button" className={`text-button disconnect ${confirmDisconnect ? 'confirming' : ''}`} disabled={Boolean(busy)} title={confirmDisconnect ? '再次点击确认清除官方登录会话' : copy.disconnectTitle} onClick={requestDisconnect}><Power size={12} />{busy === 'disconnect' ? '断开中…' : (confirmDisconnect ? '确认断开' : '断开')}</button>
+      </> : <>
+        <button type="button" className="primary-button" disabled={Boolean(busy)} onClick={connect}><Globe size={12} />{busy === 'connect' ? copy.connecting : (status === 'reauth_required' ? '重新连接' : copy.connectAction)}</button>
+        {status === 'reauth_required' && <button type="button" className={`text-button disconnect ${confirmDisconnect ? 'confirming' : ''}`} disabled={Boolean(busy)} title={confirmDisconnect ? '再次点击确认清除官方登录会话' : copy.disconnectTitle} onClick={requestDisconnect}><Power size={12} />{confirmDisconnect ? '确认断开' : '断开'}</button>}
+      </>}
+    </div>}
+    {feedback && <div className={`provider-connection-feedback ${feedback.ok ? 'ok' : 'fail'}`}>{feedback.ok ? <Check size={12} /> : <AlertCircle size={12} />}<span>{feedback.message}</span></div>}
+  </div>;
+}
+
+function AccountEditModalV2({ account, provider, onClose, onSave, onTestDraft, onProviderUsageState }) {
   const [name, setName] = useState(account.name || '');
   const [identity, setIdentity] = useState(account.identity || '');
   const [tags, setTags] = useState((account.tags || []).join(', '));
@@ -1258,7 +1802,7 @@ function AccountEditModalV2({ account, provider, onClose, onSave, onTestDraft })
     } finally { setTesting(false); }
   };
   const submit = async (event) => { event.preventDefault(); if (!name.trim() || (!cliProvider && !accountEndpoint) || !selected.length) return; const { publicVariables, secretVariables } = splitVariableValues(provider, variableValues); setSaving(true); try { await onSave({ account, name: name.trim(), identity: identity.trim(), tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean), endpoint: accountEndpoint, windowKeys: selected, timeoutSeconds: clampAccountTimeout(timeoutSeconds), variables: publicVariables, secretVariables }); } finally { setSaving(false); } };
-  return <div className="modal-backdrop" onClick={onClose}><form className="modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><h2>编辑 {account.name}</h2></div></div><div className="form-grid"><label className="field"><span>账号名</span><input required value={name} onChange={(event) => setName(event.target.value)} /></label><label className="field"><span>标识</span><input value={identity} onChange={(event) => setIdentity(event.target.value)} /></label></div><label className="field"><span>标签 <small>用逗号分隔，可留空</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} /></label>{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <label className="field"><span>详细额度接口路径</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} /></label>}<div className="form-grid"><label className="field"><span>请求超时（秒）<small>5–120，默认 15；跨境或代理网络可调大</small></span><input type="number" min="5" max="120" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.target.value)} placeholder="15" /></label></div><div className="field"><span>额度窗口</span><div className="window-choice">{availableWindows.map((key) => <button type="button" key={key} className={`window-choice-item ${selected.includes(key) ? 'selected' : ''}`} onClick={() => toggle(key)}><span>{selected.includes(key) ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>)}</div></div>{account.cliAuthSource === 'snapshot' && <div className="adapter-note"><ShieldCheck size={15} /><span>{cliProvider && (provider?.requestConfig?.adapterMode === 'kimi' || provider?.adapter === 'kimi') ? '该账号使用扫码导入的 Kimi 订阅登录快照：令牌由本应用自动续期；若登录在官方侧失效，请重新扫码「导入订阅登录」。' : '该账号使用独立的登录快照：令牌由本应用自动续期，不依赖本机 CLI 当前激活的 profile；若登录在官方侧失效，请重新登录后再次「导入订阅登录」。'}</span></div>}{variableDefinitions.length > 0 && <div className="adapter-config account-variables"><span className="eyebrow">厂商变量</span><div className="form-grid">{variableDefinitions.map((item) => { const lockedKey = item.system && item.key === 'apiKey'; return <label className="field" key={item.key}><span>{item.label || item.key}{lockedKey ? <small> 创建后不可修改</small> : item.secret && <small> 留空保留原值</small>}</span><input type={item.secret ? 'password' : 'text'} required={item.required && !item.secret} disabled={lockedKey} value={lockedKey ? '' : (variableValues[item.key] ?? '')} onChange={(event) => setVariableValues((old) => ({ ...old, [item.key]: event.target.value }))} placeholder={lockedKey ? '如需更换请删除账号后重新添加' : item.secret ? '未修改' : (item.defaultValue || item.key)} /></label>; })}</div></div>}{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <div className="adapter-note"><KeyRound size={15} /><span>凭据创建后不可修改；如需更换 API Token，请删除该账号后重新添加。</span></div>}{testResult && <div className={`draft-test-result ${testResult.ok ? 'ok' : 'fail'}`}><span>{testResult.ok ? '测试通过' : '测试失败'} · {testResult.message}</span></div>}<div className="modal-actions"><button type="button" className="outline-button" onClick={onClose}>取消</button><button type="button" className="outline-button" disabled={testing || !name.trim() || (!cliProvider && !accountEndpoint) || !selected.length} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" disabled={saving || !selected.length}>{saving ? '正在保存' : '保存'}</button></div></form></div>;
+  return <div className="modal-backdrop" onClick={onClose}><form className="modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><h2>编辑 {account.name}</h2></div></div><div className="form-grid"><label className="field"><span>账号名</span><input required value={name} onChange={(event) => setName(event.target.value)} /></label><label className="field"><span>标识</span><input value={identity} onChange={(event) => setIdentity(event.target.value)} /></label></div><label className="field"><span>标签 <small>用逗号分隔，可留空</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} /></label>{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <label className="field"><span>详细额度接口路径</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} /></label>}<div className="form-grid"><label className="field"><span>请求超时（秒）<small>5–120，默认 15；跨境或代理网络可调大</small></span><input type="number" min="5" max="120" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.target.value)} placeholder="15" /></label></div><div className="field"><span>额度窗口</span><div className="window-choice">{availableWindows.map((key) => <button type="button" key={key} className={`window-choice-item ${selected.includes(key) ? 'selected' : ''}`} onClick={() => toggle(key)}><span>{selected.includes(key) ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>)}</div></div>{account.cliAuthSource === 'snapshot' && <div className="adapter-note"><ShieldCheck size={15} /><span>{cliProvider && (provider?.requestConfig?.adapterMode === 'kimi' || provider?.adapter === 'kimi') ? '该账号使用扫码导入的 Kimi 订阅登录快照：令牌由本应用自动续期；若登录在官方侧失效，请重新扫码「导入订阅登录」。' : '该账号使用独立的登录快照：令牌由本应用自动续期，不依赖本机 CLI 当前激活的 profile；若登录在官方侧失效，请重新登录后再次「导入订阅登录」。'}</span></div>}{variableDefinitions.length > 0 && <div className="adapter-config account-variables"><span className="eyebrow">厂商变量</span><div className="form-grid">{variableDefinitions.map((item) => { const lockedKey = item.system && item.key === 'apiKey'; return <label className="field" key={item.key}><span>{item.label || item.key}{lockedKey ? <small> 创建后不可修改</small> : item.secret && <small> 留空保留原值</small>}</span><input type={item.secret ? 'password' : 'text'} required={item.required && !item.secret} disabled={lockedKey} value={lockedKey ? '' : (variableValues[item.key] ?? '')} onChange={(event) => setVariableValues((old) => ({ ...old, [item.key]: event.target.value }))} placeholder={lockedKey ? '如需更换请删除账号后重新添加' : item.secret ? '未修改' : (item.defaultValue || item.key)} /></label>; })}</div></div>}{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <div className="adapter-note"><KeyRound size={15} /><span>凭据创建后不可修改；如需更换 API Token，请删除该账号后重新添加。</span></div>}<ProviderUsageConnectionCard account={account} provider={provider} onState={onProviderUsageState} />{testResult && <div className={`draft-test-result ${testResult.ok ? 'ok' : 'fail'}`}><span>{testResult.ok ? '测试通过' : '测试失败'} · {testResult.message}</span></div>}<div className="modal-actions"><button type="button" className="outline-button" onClick={onClose}>取消</button><button type="button" className="outline-button" disabled={testing || !name.trim() || (!cliProvider && !accountEndpoint) || !selected.length} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" disabled={saving || !selected.length}>{saving ? '正在保存' : '保存'}</button></div></form></div>;
 }
 
 function ProviderModalV2({ provider, onClose, onSave }) {
@@ -1932,6 +2476,20 @@ function App() {
     }
     setAccounts(nextAccounts);
     setModal(null);
+    if (!draft.connectUsageAfterSave || !bridge?.connectProviderUsage) return;
+    try {
+      const result = await bridge.connectProviderUsage(id);
+      if (result?.state) applyProviderUsageState(result.state);
+      setToast({
+        id: Date.now(),
+        ok: !result?.cancelled,
+        message: result?.cancelled
+          ? '账号已保存；官方账号登录未完成，可稍后在账号编辑中连接'
+          : `账号已保存，并已连接 ${PROVIDER_USAGE_COPY[draft.providerId]?.display || ''}官方用量`,
+      });
+    } catch (error) {
+      setToast({ id: Date.now(), ok: false, message: `账号已保存；官方用量连接失败：${error?.message || '请稍后重试'}` });
+    }
   };
   const updateAccount = async ({ account, name, identity, tags, endpoint, windowKeys, timeoutSeconds, variables, secretVariables }) => {
     const nextAccounts = accounts.map((item) => item.id === account.id ? { ...item, name, identity, tags, endpoint, variables: variables || {}, windowKeys, timeoutSeconds: clampAccountTimeout(timeoutSeconds) } : item);
@@ -2012,13 +2570,22 @@ function App() {
     setModal(null);
   };
   const editProvider = (provider) => setModal({ type: 'provider-edit', provider });
+  // usage:connect/disconnect 会返回完整公开 state；立即采纳以避免等待 IPC 广播时
+  // 弹窗和历史页短暂显示旧连接状态。敏感登录凭据从不在该 state 中。
+  const applyProviderUsageState = (state) => {
+    if (!state) return;
+    if (Array.isArray(state.accounts)) setAccounts(state.accounts);
+    if (Array.isArray(state.providers)) setProviders(state.providers);
+    if (state.lastSync) setLastSync(state.lastSync);
+    if (state.runtime) setRuntime(state.runtime);
+  };
   const historyAccount = historyAccountId ? accounts.find((item) => item.id === historyAccountId) : null;
 
   return <div className="app-shell">
     <header className="titlebar"><span className="titlebar-drag"><img src="./quota-desk.svg" alt="" /><b>Quota Desk</b></span><div className="titlebar-controls"><span className="last-checked" title="最后一次额度检查时间"><Clock3 size={11} />{formatChecked(lastSync)}</span>{update && ['available', 'downloading', 'downloaded', 'error'].includes(update.status) && <button className={`update-badge ${update.status}`} onClick={() => setUpdateOpen(true)} title="查看版本更新"><Download size={11} />{update.status === 'available' && `v${update.version} 可更新`}{update.status === 'downloading' && `下载中 ${update.percent || 0}%`}{update.status === 'downloaded' && '重启升级'}{update.status === 'error' && '更新失败'}</button>}<button className="control-solo" onClick={refreshAll} disabled={refreshing} title="立即刷新全部账号" aria-label="立即刷新全部账号"><RefreshCw size={13} className={refreshing ? 'spinning' : ''} /></button><div className="overview-controls" aria-label="账号总览展示方式"><button className={overviewMode === 'rings' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rings'); }} title="账号总览" aria-label="账号总览"><CircleGauge size={13} /></button><button className={overviewMode === 'rows' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rows'); }} title="行式明细" aria-label="行式明细"><Rows3 size={13} /></button><button className={overviewMode === 'periods' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('periods'); }} title="周期明细" aria-label="周期明细"><Clock3 size={13} /></button></div></div><div className="titlebar-actions"><button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={13} /></button>{bridge && <><button className={pinned ? 'active' : ''} title={pinned ? '取消固定' : '固定在桌面最前面'} aria-label="固定在桌面最前面" onClick={async () => setPinned(await bridge.togglePin())}><Pin size={13} /></button><button title="关闭到托盘" aria-label="关闭到托盘" onClick={() => bridge.closeMainWindow()}><X size={14} /></button></>}</div></header>
     {toast && <div className={`toast ${toast.ok ? 'ok' : 'fail'}`} role="status">{toast.ok ? <Check size={13} /> : <AlertCircle size={13} />}<span>{toast.message}</span></div>}
     <main className="main-shell">
-      <div className="content-area">{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{accounts.length === 0 ? <section className="empty-workspace"><div className="empty-mark"><CircleGauge size={22} /></div><div><h2>把第一份 Coding Plan 接进来</h2><p>凭据将由 Windows 加密保存，额度请求只在本机发出。</p></div><button className="primary-button" onClick={() => setModal('account')}><Plus size={15} /> 添加账号</button><button className="outline-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> 设置</button>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button" onClick={() => setModal('import-ccswitch')}><Download size={15} /> 从 cc-switch 导入</button>}</section> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} onReorderAccounts={reorderAccounts} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const adapterMode = provider?.requestConfig?.adapterMode || provider?.adapter; setModal({ type: adapterMode === 'grok' ? 'grok-relogin' : 'kimi-relogin', account }); }} />}</div>
+      <div className="content-area">{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{accounts.length === 0 ? <section className="empty-workspace"><div className="empty-mark"><CircleGauge size={22} /></div><div><h2>把第一份 Coding Plan 接进来</h2><p>凭据将由 Windows 加密保存，额度请求只在本机发出。</p></div><button className="primary-button" onClick={() => setModal('account')}><Plus size={15} /> 添加账号</button><button className="outline-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> 设置</button>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button" onClick={() => setModal('import-ccswitch')}><Download size={15} /> 从 cc-switch 导入</button>}</section> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} onProviderUsageState={applyProviderUsageState} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} onReorderAccounts={reorderAccounts} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const adapterMode = provider?.requestConfig?.adapterMode || provider?.adapter; setModal({ type: adapterMode === 'grok' ? 'grok-relogin' : 'kimi-relogin', account }); }} />}</div>
     </main>
     {settingsOpen && <SettingsDrawer accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)} openModal={setModal} onDeleteAccount={deleteAccount} onToggleAccountDisabled={toggleAccountDisabled} onTestAccount={testAccount} testingAccountId={testingAccountId} onEditProvider={editProvider} autoLaunch={autoLaunch} onToggleAutoLaunch={toggleAutoLaunch} appVersion={appVersion} update={update} onOpenUpdate={() => setUpdateOpen(true)} onCheckUpdate={onCheckUpdate} onClearHistory={clearHistory} runtime={runtime} />}
     {confirmState && <ConfirmModal confirm={confirmState} onClose={() => setConfirmState(null)} />}
@@ -2029,7 +2596,7 @@ function App() {
       lastSaved.current = '';
       setToast({ id: Date.now(), ok: !result?.duplicate, message: result?.duplicate ? `该登录已收录在账号「${result.name}」中` : `已导入「${result.name}」，正在刷新额度` });
     }} />}
-    {modal?.type === 'account-edit' && <AccountEditModalV2 account={modal.account} provider={providers.find((item) => item.id === modal.account.providerId)} onClose={() => setModal(null)} onSave={updateAccount} onTestDraft={testDraft} />}
+    {modal?.type === 'account-edit' && <AccountEditModalV2 account={accounts.find((item) => item.id === modal.account.id) || modal.account} provider={providers.find((item) => item.id === modal.account.providerId)} onClose={() => setModal(null)} onSave={updateAccount} onTestDraft={testDraft} onProviderUsageState={applyProviderUsageState} />}
     {modal === 'provider' && <ProviderModalV2 onClose={() => setModal(null)} onSave={saveProvider} />}
     {modal?.type === 'provider-edit' && <ProviderModalV2 provider={modal.provider} onClose={() => setModal(null)} onSave={saveProvider} />}
     {modal === 'import-ccswitch' && <ImportCcswitchModal onClose={() => setModal(null)} onApplied={(result) => {
@@ -2055,6 +2622,7 @@ function App() {
 }
 
 export default App;
+export { ProviderUsageView };
 
 const widgetMode = new URLSearchParams(window.location.search).get('widget') === '1';
 createRoot(document.getElementById('root')).render(widgetMode ? <WidgetApp /> : <App />);

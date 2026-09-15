@@ -109,6 +109,19 @@ class DesktopStore {
     return true;
   }
 
+  deleteSecretVariable(accountId, key) {
+    if (!safeStorage.isEncryptionAvailable()) throw new Error('Windows credential encryption is unavailable');
+    const credentials = this.loadCredentials();
+    if (!credentials[accountId]) return true;
+    const existing = this.getSecrets(accountId);
+    const nextVariables = { ...(existing.variables || {}) };
+    delete nextVariables[key];
+    const payload = JSON.stringify({ version: 2, credential: existing.credential || '', variables: nextVariables });
+    credentials[accountId] = safeStorage.encryptString(payload).toString('base64');
+    writeJson(this.credentialsPath, credentials);
+    return true;
+  }
+
   getCredential(accountId) { return this.getSecrets(accountId).credential; }
 
   deleteCredential(accountId) {

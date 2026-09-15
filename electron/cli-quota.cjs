@@ -8,6 +8,7 @@
 const { resolveCliAuth, refreshTokenOf, accessTokenExpiryMs, fetchWithCliAuth } = require('./cli-auth.cjs');
 
 const DEFAULT_TIMEOUT_MS = 15_000;
+const reauthRequiredError = (message) => Object.assign(new Error(message), { authStatus: 'reauth_required' });
 
 // Claude 凭据形态（live 文件或快照同构）：{ claudeOauth: { accessToken, refreshToken, expiresAt } }；
 // 防御式：找第一个带 accessToken 的对象
@@ -27,10 +28,10 @@ const CLAUDE_WINDOW_KEYS = { five_hour: 'five_hour', seven_day: 'weekly', seven_
 async function queryClaudeQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS, ctx = {}) {
   const resolved = resolveCliAuth('claude', ctx.variables);
   const credential = resolved && claudeTokenOf(resolved.auth);
-  if (!credential) throw new Error('未检测到 Claude CLI 登录信息。请先安装 Claude Code 并登录，或在「设置 → 账号与凭据」导入本机登录保存为独立账号快照');
+  if (!credential) throw reauthRequiredError('未检测到 Claude CLI 登录信息。请先安装 Claude Code 并登录，或在「设置 → 账号与凭据」导入本机登录保存为独立账号快照');
   // 令牌过期且没有 refresh_token 时提前给出可行动提示（能续期的交给 fetchWithCliAuth）
   if (credential.expiresAt && new Date(credential.expiresAt).getTime() < Date.now() && !refreshTokenOf('claude', resolved.auth)) {
-    throw new Error('Claude 访问令牌已过期且无法自动续期，请运行一次 Claude CLI 或重新登录');
+    throw reauthRequiredError('Claude 访问令牌已过期且无法自动续期，请运行一次 Claude CLI 或重新登录');
   }
   const response = await fetchWithCliAuth('claude', {
     auth: resolved.auth,
@@ -40,7 +41,7 @@ async function queryClaudeQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS, 
     buildRequest: (auth) => ({ url: 'https://api.anthropic.com/api/oauth/usage', init: { headers: { Authorization: `Bearer ${claudeTokenOf(auth)?.token}`, 'anthropic-beta': 'oauth-2025-04-20', Accept: 'application/json' } } }),
     onAuthUpdate: ctx.onAuthUpdate,
   });
-  if (response.status === 401 || response.status === 403) throw new Error('Claude 凭据被拒绝（自动续期后仍无效），请重新登录该账号并更新快照');
+  if (response.status === 401 || response.status === 403) throw reauthRequiredError('Claude 凭据被拒绝（自动续期后仍无效），请重新登录该账号并更新快照');
   if (!response.ok) throw new Error(`Claude 用量接口返回 HTTP ${response.status}`);
   const payload = await response.json();
   const windows = [];
@@ -58,7 +59,7 @@ async function queryClaudeQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS, 
 // Codex 凭据形态：{ tokens: { access_token, refresh_token, account_id, id_token }, OPENAI_API_KEY }；订阅额度只走 ChatGPT OAuth
 async function queryCodexQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS, ctx = {}) {
   const resolved = resolveCliAuth('codex', ctx.variables);
-  if (!resolved) throw new Error('未检测到 Codex 的 ChatGPT 登录（~/.codex/auth.json 无 OAuth tokens），API Key / 中转模式没有订阅额度。可把官方登录「导入本机 CLI 登录」保存为独立账号快照');
+  if (!resolved) throw reauthRequiredError('未检测到 Codex 的 ChatGPT 登录（~/.codex/auth.json 无 OAuth tokens），API Key / 中转模式没有订阅额度。可把官方登录「导入本机 CLI 登录」保存为独立账号快照');
   const response = await fetchWithCliAuth('codex', {
     auth: resolved.auth,
     source: resolved.source,
@@ -71,7 +72,7 @@ async function queryCodexQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS, c
     },
     onAuthUpdate: ctx.onAuthUpdate,
   });
-  if (response.status === 401 || response.status === 403) throw new Error('Codex 凭据被拒绝（自动续期后仍无效），请重新登录该账号并更新快照');
+  if (response.status === 401 || response.status === 403) throw reauthRequiredError('Codex 凭据被拒绝（自动续期后仍无效），请重新登录该账号并更新快照');
   if (!response.ok) throw new Error(`Codex 用量接口返回 HTTP ${response.status}`);
   const payload = await response.json();
   const secondsToKey = { 18000: 'five_hour', 604800: 'weekly', 2592000: 'monthly' };
@@ -90,10 +91,10 @@ async function queryCodexQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS, c
 // Gemini 凭据形态（live 文件或快照同构）：{ access_token, refresh_token, expiry_date(毫秒), id_token }
 async function queryGeminiQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS, ctx = {}) {
   const resolved = resolveCliAuth('gemini', ctx.variables);
-  if (!resolved) throw new Error('未检测到 Gemini CLI 登录信息。请先安装 Gemini CLI 并登录，或在「设置 → 账号与凭据」导入本机登录保存为独立账号快照');
+  if (!resolved) throw reauthRequiredError('未检测到 Gemini CLI 登录信息。请先安装 Gemini CLI 并登录，或在「设置 → 账号与凭据」导入本机登录保存为独立账号快照');
   const expiry = accessTokenExpiryMs('gemini', resolved.auth);
   if (expiry && expiry < Date.now() && !refreshTokenOf('gemini', resolved.auth)) {
-    throw new Error('Gemini 访问令牌已过期且无法自动续期，请运行一次 Gemini CLI 或重新登录');
+    throw reauthRequiredError('Gemini 访问令牌已过期且无法自动续期，请运行一次 Gemini CLI 或重新登录');
   }
   // 两步查询共用同一份会随续期更新的凭据；只有第一步带 401 续期重试，避免一次轮询刷新两次
   let effective = resolved.auth;
@@ -113,7 +114,7 @@ async function queryGeminiQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS, 
     }),
     onAuthUpdate: trackAuth,
   });
-  if (loadResponse.status === 401 || loadResponse.status === 403) throw new Error('Gemini 凭据被拒绝（自动续期后仍无效），请重新登录该账号并更新快照');
+  if (loadResponse.status === 401 || loadResponse.status === 403) throw reauthRequiredError('Gemini 凭据被拒绝（自动续期后仍无效），请重新登录该账号并更新快照');
   if (!loadResponse.ok) throw new Error(`Gemini loadCodeAssist 返回 HTTP ${loadResponse.status}`);
   const loadPayload = await loadResponse.json();
   const project = loadPayload?.cloudaicompanionProject;
@@ -124,6 +125,7 @@ async function queryGeminiQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS, 
     body: JSON.stringify(projectId ? { project: projectId } : {}),
     signal: AbortSignal.timeout(timeoutMs),
   });
+  if (quotaResponse.status === 401 || quotaResponse.status === 403) throw reauthRequiredError('Gemini 凭据被拒绝（retrieveUserQuota 鉴权失败），请重新登录该账号并更新快照');
   if (!quotaResponse.ok) throw new Error(`Gemini retrieveUserQuota 返回 HTTP ${quotaResponse.status}`);
   const quotaPayload = await quotaResponse.json();
   // buckets 按模型分桶：remainingFraction 0-1 → 剩余百分比
@@ -162,7 +164,7 @@ const kimiRatioRow = (key, item) => {
 
 async function queryKimiWebQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS, ctx = {}) {
   const resolved = resolveCliAuth('kimi', ctx.variables);
-  if (!resolved) throw new Error('未检测到 Kimi 订阅登录。请在「导入订阅登录」中用手机扫码登录');
+  if (!resolved) throw reauthRequiredError('未检测到 Kimi 订阅登录。请在「导入订阅登录」中用手机扫码登录');
   const response = await fetchWithCliAuth('kimi', {
     auth: resolved.auth,
     source: resolved.source,
@@ -174,7 +176,7 @@ async function queryKimiWebQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS,
     }),
     onAuthUpdate: ctx.onAuthUpdate,
   });
-  if (response.status === 401 || response.status === 403) throw new Error('Kimi 订阅凭据被拒绝（自动续期后仍无效），请重新扫码「导入订阅登录」');
+  if (response.status === 401 || response.status === 403) throw reauthRequiredError('Kimi 订阅凭据被拒绝（自动续期后仍无效），请重新扫码「导入订阅登录」');
   if (!response.ok) throw new Error(`Kimi 订阅用量接口返回 HTTP ${response.status}`);
   const payload = await response.json();
   const rows = [

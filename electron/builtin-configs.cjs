@@ -29,7 +29,7 @@ const scripts = {
 
 const scriptVariables = (endpoint) => [
   { key: 'endpoint', label: '额度接口路径', defaultValue: endpoint, required: true, secret: false, system: true },
-  { key: 'apiKey', label: 'API Key', defaultValue: '', required: false, secret: true, system: true },
+  { key: 'apiKey', label: 'API Key', defaultValue: '', required: true, secret: true, system: true },
 ];
 
 const builtinConfigs = {
