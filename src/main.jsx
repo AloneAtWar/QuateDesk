@@ -9,7 +9,7 @@ import {
 import { initialAccounts, providerCatalog, windowCatalog } from './data';
 import { adapterDefinitions } from './adapters';
 import { newApiTemplateScript } from './newapi-template';
-import { formatProviderUsageCost, formatProviderUsageSummaryTokens } from './provider-usage-format';
+import { computeUsageStreaks, formatProviderUsageCost, formatProviderUsageSummaryTokens } from './provider-usage-format';
 import qrcode from 'qrcode-generator';
 import './styles.css';
 
@@ -1037,9 +1037,14 @@ function ProviderUsageView({ account, provider, onState }) {
 
   // 统计卡片按厂商实际返回的指标组装：花费/Token/套餐/连续使用按需出现，活跃日固定收尾
   const planName = typeof data.summary?.planName === 'string' && data.summary.planName.trim() ? data.summary.planName.trim() : null;
-  const streakDays = providerUsageHasNumber(data.summary?.currentStreakDays) ? Number(data.summary.currentStreakDays) : null;
-  const longestStreak = providerUsageHasNumber(data.summary?.longestStreakDays) ? Number(data.summary.longestStreakDays) : null;
+  // 连续天数：优先用厂商接口的账号级口径（如 Z.ai）；接口不提供时按逐日数据本地计算
+  const computedStreaks = computeUsageStreaks(sortedDays);
+  const streakDays = providerUsageHasNumber(data.summary?.currentStreakDays) ? Number(data.summary.currentStreakDays) : computedStreaks.current;
+  const longestStreak = providerUsageHasNumber(data.summary?.longestStreakDays) ? Number(data.summary.longestStreakDays) : computedStreaks.longest;
   const peakTokens = providerUsageHasNumber(data.summary?.peakDailyTokens) ? Number(data.summary.peakDailyTokens) : null;
+  const peakCost = providerUsageHasNumber(data.summary?.peakDailyCost) ? Number(data.summary.peakDailyCost) : null;
+  const peakIsCost = metric === 'cost' && peakCost !== null;
+  const peakReady = peakIsCost || peakTokens !== null;
   const peakDate = typeof data.summary?.peakDailyTokensDate === 'string' && data.summary.peakDailyTokensDate ? data.summary.peakDailyTokensDate : null;
   const hasRequests = providerUsageHasMetric(data, 'requests');
   const summaryCards = [
@@ -1054,14 +1059,14 @@ function ProviderUsageView({ account, provider, onState }) {
       <span className="stat-icon"><Bot size={13} /></span>
       <div className="stat-copy">
         <span>{tokensLabel}</span>
-        <strong>{providerUsageHasNumber(tokensTotal) ? `${formatProviderUsageSummaryTokens(tokensTotal)} Token` : '—'}</strong>
+        <strong>{providerUsageHasNumber(tokensTotal) ? formatProviderUsageSummaryTokens(tokensTotal) : '—'}</strong>
       </div>
     </div>,
-    peakTokens !== null && <div key="peak" className="provider-stat peak" title={peakDate ? `峰值日期 ${peakDate}` : '区间内单日最高消耗'}>
+    peakReady && <div key="peak" className="provider-stat peak" title={peakDate && !peakIsCost ? `峰值日期 ${peakDate}` : '区间内单日最高消耗'}>
       <span className="stat-icon"><TrendingUp size={13} /></span>
       <div className="stat-copy">
-        <span>峰值 Token</span>
-        <strong>{`${formatProviderUsageSummaryTokens(peakTokens)} Token`}</strong>
+        <span>{peakIsCost ? '峰值花费' : '峰值 Token'}</span>
+        <strong>{peakIsCost ? formatProviderUsageCost(peakCost, data.currency) : formatProviderUsageSummaryTokens(peakTokens)}</strong>
       </div>
     </div>,
     streakDays !== null && <div key="streak" className="provider-stat streak" title="当前连续使用天数">
@@ -1103,7 +1108,7 @@ function ProviderUsageView({ account, provider, onState }) {
     <div className="provider-day-card">
       {selectedDay ? <>
         {hasCost && <div className="day-cell"><div><span>{dayLabel}花费</span><b>{providerUsageHasNumber(selectedDay.cost) ? valueLabel(selectedDay, 'cost') : '—'}</b></div></div>}
-        {hasTokens && <div className="day-cell"><div><span>{dayLabel}Token</span><b>{providerUsageHasNumber(selectedDay.tokens) ? `${formatProviderUsageSummaryTokens(selectedDay.tokens)} Token` : '—'}</b></div></div>}
+        {hasTokens && <div className="day-cell"><div><span>{dayLabel}Token</span><b>{providerUsageHasNumber(selectedDay.tokens) ? formatProviderUsageSummaryTokens(selectedDay.tokens) : '—'}</b></div></div>}
         {hasRequests && <div className="day-cell"><div><span>{dayLabel}请求</span><b>{providerUsageHasNumber(selectedDay.requests) ? formatProviderUsageCount(selectedDay.requests, false) : '—'}</b></div></div>}
       </> : <span className="chart-detail-hint">点击热力图方格查看当日用量</span>}
     </div>
