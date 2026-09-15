@@ -4,12 +4,12 @@ import { createPortal } from 'react-dom';
 import {
   AlertCircle, ArrowLeft, Bell, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, CircleGauge, CircleStop, Clock3, Download, Eye, ExternalLink, Globe, HelpCircle, History, LayoutGrid,
   Ellipsis, Flame, KeyRound, Monitor, Play, Plus, Power, RefreshCw, Rows3, Settings2, ShieldCheck, SlidersHorizontal, Square, Bot,
-  Pencil, Pin, Sparkles, SunMoon, Tag, Trash2, UploadCloud, X, Zap,
+  Pencil, Pin, Sparkles, SunMoon, Tag, Trash2, TrendingUp, UploadCloud, X, Zap,
 } from 'lucide-react';
 import { initialAccounts, providerCatalog, windowCatalog } from './data';
 import { adapterDefinitions } from './adapters';
 import { newApiTemplateScript } from './newapi-template';
-import { formatProviderUsageCost, formatProviderUsageSummaryTokens } from './provider-usage-format';
+import { formatProviderUsageCost, formatProviderUsageDuration, formatProviderUsageSummaryTokens } from './provider-usage-format';
 import qrcode from 'qrcode-generator';
 import './styles.css';
 
@@ -1038,6 +1038,10 @@ function ProviderUsageView({ account, provider, onState }) {
   // 统计卡片按厂商实际返回的指标组装：花费/Token/套餐/连续使用按需出现，活跃日固定收尾
   const planName = typeof data.summary?.planName === 'string' && data.summary.planName.trim() ? data.summary.planName.trim() : null;
   const streakDays = providerUsageHasNumber(data.summary?.currentStreakDays) ? Number(data.summary.currentStreakDays) : null;
+  const peakTokens = providerUsageHasNumber(data.summary?.peakDailyTokens) ? Number(data.summary.peakDailyTokens) : null;
+  const peakDate = typeof data.summary?.peakDailyTokensDate === 'string' && data.summary.peakDailyTokensDate ? data.summary.peakDailyTokensDate : null;
+  const durationMs = providerUsageHasNumber(data.summary?.totalUsageDurationMs) ? Number(data.summary.totalUsageDurationMs) : null;
+  const quotaCards = Array.isArray(data.summary?.quotaCards) ? data.summary.quotaCards : [];
   const hasRequests = providerUsageHasMetric(data, 'requests');
   const summaryCards = [
     hasCost && <div key="cost" className="provider-stat cost" title={formatProviderUsageCost(costTotal, data.currency)}>
@@ -1052,6 +1056,20 @@ function ProviderUsageView({ account, provider, onState }) {
       <div className="stat-copy">
         <span>{tokensLabel}</span>
         <strong>{providerUsageHasNumber(tokensTotal) ? `${formatProviderUsageSummaryTokens(tokensTotal)} Token` : '—'}</strong>
+      </div>
+    </div>,
+    peakTokens !== null && <div key="peak" className="provider-stat peak" title={peakDate ? `峰值日期 ${peakDate}` : '区间内单日最高消耗'}>
+      <span className="stat-icon"><TrendingUp size={13} /></span>
+      <div className="stat-copy">
+        <span>峰值 Token</span>
+        <strong>{`${formatProviderUsageSummaryTokens(peakTokens)} Token`}</strong>
+      </div>
+    </div>,
+    durationMs !== null && <div key="duration" className="provider-stat duration" title="账号累计使用时长">
+      <span className="stat-icon"><Clock3 size={13} /></span>
+      <div className="stat-copy">
+        <span>累计时长</span>
+        <strong>{formatProviderUsageDuration(durationMs)}</strong>
       </div>
     </div>,
     planName && <div key="plan" className="provider-stat plan" title={planName}>
@@ -1079,6 +1097,20 @@ function ProviderUsageView({ account, provider, onState }) {
 
   return <div className="provider-usage-view">
     <div className="provider-usage-summary">{summaryCards}</div>
+    {quotaCards.length > 0 && <div className="provider-quota-cards">
+      {quotaCards.map((card, index) => {
+        const usedPct = Math.max(0, Math.min(100, Number(card.percentage) || 0));
+        const remainPct = Math.round(100 - usedPct);
+        const resetTitle = card.nextResetTime ? `重置时间 ${new Date(card.nextResetTime).toLocaleString('zh-CN')}` : '';
+        return <div key={`${card.windowLabel}-${card.type}-${index}`} className="provider-quota-card" title={resetTitle}>
+          <div className="quota-card-head">
+            <span>{card.windowLabel}{card.type === 'calls' ? '工具调用' : ' Token 额度'}</span>
+            <b>剩余 {remainPct}%</b>
+          </div>
+          <div className="quota-card-bar"><i style={{ width: `${usedPct}%` }} /></div>
+        </div>;
+      })}
+    </div>}
     <div className="provider-heatmap-head">
       <span className="provider-heatmap-title">近 1 年使用热力图</span>
       <div className="provider-heatmap-legend" aria-hidden="true">

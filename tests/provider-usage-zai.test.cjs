@@ -156,3 +156,99 @@ test('zaiModelUsageData treats missing data as empty and rejects bad shapes', ()
   assert.equal(__test.zaiModelUsageData({ code: 200, success: true, data: { x_time: 'nope' } }), null);
   assert.equal(__test.zaiModelUsageData({ code: 200, success: true, data: { x_time: [], modelDataList: [{ tokensUsage: 'bad' }] } }), null);
 });
+
+const activityPayload = () => ({
+  code: 200,
+  success: true,
+  data: {
+    summary: {
+      totalTokens: 4166725838,
+      peakDailyTokens: 148809007,
+      peakDailyTokensDate: '2026-08-20',
+      totalUsageDurationMs: 264753209,
+      currentStreakDays: 3,
+      longestStreakDays: 30,
+    },
+    series: [
+      { date: '2026-08-30', totalTokens: 111, modelCallCount: 5, mcpCalls: 1 },
+      { date: '2026-08-31', totalTokens: 222, modelCallCount: 6, mcpCalls: 0 },
+      { date: '2026-09-01', totalTokens: 333, modelCallCount: 7, mcpCalls: 2 },
+    ],
+  },
+});
+
+test('fetchZaiUsage merges credit-usage/activity account totals and summary', async () => {
+  const fetcher = async (url) => {
+    if (url.includes('/api/monitor/credit-usage/activity')) return jsonResponse(activityPayload());
+    if (url.includes('quota/limit')) return jsonResponse(quotaPayload());
+    if (url.includes('startTime=')) return jsonResponse(usagePayload(['2026-09-01'], [
+      { modelName: 'glm-4.6', tokensUsage: [300] },
+    ]));
+    throw new Error(`unexpected url ${url}`);
+  };
+  const result = await fetchZaiUsage('k', fetcher, { startDate: '2026-08-30', endDate: '2026-09-01' });
+  // 逐日总量以 activity 为准（与 ZCode 统计页同口径），不再用逐模型加总
+  assert.deepEqual(result.days.map((day) => day.tokens), [111, 222, 333]);
+  assert.equal(result.summary.totalTokens, 4166725838);
+  assert.equal(result.summary.peakDailyTokens, 148809007);
+  assert.equal(result.summary.peakDailyTokensDate, '2026-08-20');
+  assert.equal(result.summary.currentStreakDays, 3);
+  assert.equal(result.summary.longestStreakDays, 30);
+  assert.equal(result.summary.totalUsageDurationMs, 264753209);
+  assert.equal(result.summary.activeDays, 3);
+  assert.equal(result.coverage.source, 'credit-usage/activity + model-usage');
+  assert.equal(result.coverage.tokens.complete, true);
+});
+
+test('fetchZaiUsage skips model-usage chunks beyond the retention window', async () => {
+  const calls = [];
+  const fetcher = async (url) => {
+    calls.push(url);
+    if (url.includes('/api/monitor/credit-usage/activity')) return jsonResponse(activityPayload());
+    if (url.includes('quota/limit')) return jsonResponse(quotaPayload());
+    return jsonResponse(usagePayload([], []));
+  };
+  // 区间为 3 个月，但 model-usage 只应查询末尾 60 天内的块
+  const result = await fetchZaiUsage('k', fetcher, { startDate: '2026-06-15', endDate: '2026-09-01' });
+  const modelUsageCalls = calls.filter((url) => url.includes('model-usage'));
+  assert.ok(modelUsageCalls.length >= 1);
+  assert.ok(modelUsageCalls.every((url) => !url.includes('startTime=2026-06')));
+  // activity 覆盖不到的日期保持未覆盖（null），不打全零
+  assert.equal(result.days[0].tokens, null);
+  assert.equal(result.coverage.tokens.complete, false);
+  assert.equal(result.summary.totalTokens, 4166725838);
+});
+
+test('fetchZaiUsage falls back to model-usage totals when activity is unavailable', async () => {
+  const fetcher = async (url) => {
+    if (url.includes('/api/monitor/credit-usage/activity')) throw new Error('404');
+    if (url.includes('quota/limit')) return jsonResponse(quotaPayload());
+    if (url.includes('startTime=2026-09-01')) return jsonResponse(usagePayload(['2026-09-01'], [
+      { modelName: 'glm-4.6', tokensUsage: [42] },
+    ]));
+    throw new Error(`unexpected url ${url}`);
+  };
+  const result = await fetchZaiUsage('k', fetcher, { startDate: '2026-09-01', endDate: '2026-09-01' });
+  assert.equal(result.days[0].tokens, 42);
+  assert.equal(result.summary.totalTokens, null);
+  assert.equal(result.summary.currentStreakDays, null);
+  assert.equal(result.summary.peakDailyTokens, 42);
+});
+
+test('zaiActivityData parses summary defensively and filters bad series entries', () => {
+  const parsed = __test.zaiActivityData(activityPayload());
+  assert.equal(parsed.summary.totalTokens, 4166725838);
+  assert.equal(parsed.series.length, 3);
+  const messy = __test.zaiActivityData({
+    code: 200,
+    data: {
+      summary: { totalTokens: 'oops', currentStreakDays: -2 },
+      series: [{ date: 'not-a-date', totalTokens: 5 }, { date: '2026-09-01', totalTokens: 7 }],
+    },
+  });
+  assert.equal(messy.summary.totalTokens, null);
+  assert.equal(messy.summary.currentStreakDays, null);
+  assert.deepEqual(messy.series, [{ date: '2026-09-01', tokens: 7, modelCallCount: 0, mcpCalls: 0 }]);
+  assert.deepEqual(__test.zaiActivityData({ code: 200, success: true }), { summary: null, series: [] });
+});
+

@@ -640,7 +640,8 @@ const deleteAccountLocalData = async (accountId) => {
 };
 
 const providerUsageDateRange = (config, days) => {
-  const count = Math.min(365, Math.max(7, Math.round(Number(days) || 180)));
+  const maxDays = Number.isInteger(config?.maxDays) ? config.maxDays : 365;
+  const count = Math.min(maxDays, Math.max(7, Math.round(Number(days) || 180)));
   const offset = Number.isInteger(config.timezoneOffsetSec) ? config.timezoneOffsetSec : 8 * 60 * 60;
   const shiftedNow = new Date(Date.now() + offset * 1000);
   const endOrdinal = Date.UTC(shiftedNow.getUTCFullYear(), shiftedNow.getUTCMonth(), shiftedNow.getUTCDate());
@@ -690,6 +691,7 @@ const PROVIDER_USAGE_CONFIGS = {
   zai: {
     id: 'zai',
     mode: 'api-key',
+    maxDays: 365, // 逐日总量走 credit-usage/activity（近一年），逐模型拆分由 model-usage 补充近 60 天
     timezoneOffsetSec: ZAI_USAGE_TIMEZONE_OFFSET_SEC,
     missingAuthMessage: '尚未连接 Z.ai 官方用量',
     expiredMessage: 'Z.ai API Key 无效或已过期，请更新凭据后重新连接',

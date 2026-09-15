@@ -1008,6 +1008,10 @@ const usageTimeoutMs = (value) => Number.isFinite(Number(value))
 const ZAI_DEFAULT_ORIGIN = 'https://open.bigmodel.cn';
 const ZAI_MODEL_USAGE_PATH = '/api/monitor/usage/model-usage';
 const ZAI_QUOTA_LIMIT_PATH = '/api/monitor/usage/quota/limit';
+const ZAI_CREDIT_ACTIVITY_PATH = '/api/monitor/credit-usage/activity';
+// model-usage 接口只保留近两个月明细，更早的月份只会返回全零序列；
+// 逐模型拆分只查近 60 天，更早的每日总量改由 credit-usage/activity 提供。
+const ZAI_MODEL_USAGE_RETENTION_DAYS = 60;
 const ZAI_TIMEZONE_OFFSET_SEC = 8 * 60 * 60;
 const ZAI_LABEL = 'Z.ai 平台';
 const ZAI_AUTH_EXPIRED_MESSAGE = 'Z.ai API Key 无效或已过期，请在账号设置更新凭据后重新连接';
@@ -1120,6 +1124,35 @@ const attemptZaiModelUsage = async (fetcher, origin, apiKey, chunk, timeoutMs, s
 };
 
 // 套餐名只是摘要卡片的可选增强，结构宽容、失败不阻塞逐日用量
+// 套餐额度信息：解析 quota/limit 接口的 limits 数组，返回可展示的额度卡片数据
+const zaiQuotaCards = (limits) => {
+  if (!Array.isArray(limits)) return [];
+  return limits.map((item) => {
+    const type = String(item?.type || '').toUpperCase();
+    const unit = Number(item?.unit);
+    // unit: 3 = 5小时窗口, 5 = 每月, 6 = 每周（根据实际数据推断）
+    const windowLabel = unit === 3 ? '5 小时' : unit === 5 ? '每月' : unit === 6 ? '每周' : '周期';
+    const isToken = type === 'TOKENS_LIMIT';
+    const isTime = type === 'TIME_LIMIT';
+    const total = Number(item?.number) || 0;
+    const used = Number(item?.usage) || 0;
+    const remaining = Number(item?.remaining) || (total > 0 ? total - used : 0);
+    const percentage = Number(item?.percentage) || 0;
+    const nextResetTime = Number(item?.nextResetTime) || null;
+    const usageDetails = Array.isArray(item?.usageDetails) ? item.usageDetails : [];
+    return {
+      type: isToken ? 'tokens' : isTime ? 'calls' : 'other',
+      windowLabel,
+      total,
+      used,
+      remaining,
+      percentage,
+      nextResetTime,
+      usageDetails: usageDetails.map((d) => ({ model: d?.modelCode || '', usage: Number(d?.usage) || 0 })),
+    };
+  });
+};
+
 const fetchZaiPlanSummary = async (apiKeyRaw, fetcher, options = {}) => {
   const apiKey = normalizeZaiApiKey(apiKeyRaw);
   if (!apiKey) throw new ProviderUsageError('缺少 Z.ai API Key', 'AUTH_MISSING');
@@ -1133,7 +1166,53 @@ const fetchZaiPlanSummary = async (apiKeyRaw, fetcher, options = {}) => {
   const planName = ['planName', 'plan', 'plan_type', 'packageName', 'level']
     .map((key) => data[key])
     .find((value) => typeof value === 'string' && value.trim())?.trim().slice(0, 60) || null;
-  return { planName, limits: Array.isArray(data.limits) ? data.limits.length : 0 };
+  const quotaCards = zaiQuotaCards(data.limits);
+  return { planName, quotaCards, limits: Array.isArray(data.limits) ? data.limits.length : 0 };
+};
+
+// 账号累计活跃统计（credit-usage/activity）：与 ZCode「个人套餐」统计页同一份
+// 云端数据。一次请求覆盖近一年每日 Token 总量，摘要直接给出累计 Token、峰值日、
+// 累计使用时长与连续天数；按个人套餐固定 type=1。
+const zaiActivityQuery = (startDate, endDate) => `type=1&startTime=${encodeURIComponent(`${startDate} 00:00:00`)}&endTime=${encodeURIComponent(`${endDate} 23:59:59`)}`;
+
+const zaiCountOrNull = (value) => {
+  const number = finiteNumber(value);
+  return number === null || number < 0 ? null : Math.floor(number);
+};
+
+// 响应结构宽容：summary 字段逐个校验，series 只保留日期合法的条目
+const zaiActivityData = (payload) => {
+  const data = objectOf(payload?.data);
+  if (!data) return { summary: null, series: [] };
+  const rawSummary = objectOf(data.summary);
+  const summary = rawSummary ? {
+    totalTokens: zaiCountOrNull(rawSummary.totalTokens),
+    peakDailyTokens: zaiCountOrNull(rawSummary.peakDailyTokens),
+    peakDailyTokensDate: strictResponseDate(rawSummary.peakDailyTokensDate),
+    totalUsageDurationMs: zaiCountOrNull(rawSummary.totalUsageDurationMs),
+    currentStreakDays: zaiCountOrNull(rawSummary.currentStreakDays),
+    longestStreakDays: zaiCountOrNull(rawSummary.longestStreakDays),
+  } : null;
+  const series = (Array.isArray(data.series) ? data.series : [])
+    .map((entry) => {
+      const item = objectOf(entry);
+      const date = strictResponseDate(item?.date);
+      if (!date) return null;
+      return {
+        date,
+        tokens: countOf(item.totalTokens),
+        modelCallCount: countOf(item.modelCallCount),
+        mcpCalls: countOf(item.mcpCalls),
+      };
+    })
+    .filter(Boolean);
+  return { summary, series };
+};
+
+const fetchZaiActivity = async (apiKey, fetcher, options = {}) => {
+  const { origin, timeoutMs, signal, startDate, endDate } = options;
+  const payload = await zaiGetJson(fetcher, origin, ZAI_CREDIT_ACTIVITY_PATH, zaiActivityQuery(startDate, endDate), apiKey, timeoutMs, signal);
+  return zaiActivityData(payload);
 };
 
 /**
@@ -1159,7 +1238,10 @@ const fetchZaiUsage = async (apiKeyRaw, fetcher, options = {}) => {
   throwIfAborted(signal);
   const origin = normalizeZaiOrigin(options.origin);
 
-  const chunks = buildMonthChunks(start, end, timezoneOffsetSec);
+  // model-usage 只保留近两个月，逐模型拆分只查保留期内的块；
+  // 更早的日期由 credit-usage/activity 的全年逐日总量覆盖
+  const modelCutoff = dateStringOfOrdinal(end.ordinal - ZAI_MODEL_USAGE_RETENTION_DAYS * DAY_MS);
+  const chunks = buildMonthChunks(start, end, timezoneOffsetSec).filter((chunk) => chunk.endDate >= modelCutoff);
   const days = new Map();
   const chunkCoverage = [];
   const issues = [];
@@ -1175,19 +1257,42 @@ const fetchZaiUsage = async (apiKeyRaw, fetcher, options = {}) => {
     mergeZaiModelUsage(result.data, days, chunk, timezoneOffsetSec);
   }
 
-  let planName = null;
+  // 累计活跃统计（近一年）：失败不阻塞逐日用量，鉴权类错误照常抛出
+  let activity = null;
   try {
-    planName = (await fetchZaiPlanSummary(apiKey, fetcher, { origin, timeoutMs, signal })).planName;
+    activity = await fetchZaiActivity(apiKey, fetcher, {
+      origin,
+      timeoutMs,
+      signal,
+      startDate: dateStringOfOrdinal(end.ordinal - 365 * DAY_MS),
+      endDate: end.value,
+    });
+  } catch (error) {
+    if (error?.code === 'ABORTED' || error?.code === 'AUTH_EXPIRED') throw error;
+  }
+  const activityByDate = new Map();
+  if (activity) for (const entry of activity.series) activityByDate.set(entry.date, entry.tokens);
+
+  let planName = null;
+  let quotaCards = [];
+  try {
+    const plan = await fetchZaiPlanSummary(apiKey, fetcher, { origin, timeoutMs, signal });
+    planName = plan.planName;
+    quotaCards = plan.quotaCards;
   } catch (error) {
     if (error?.code === 'ABORTED' || error?.code === 'AUTH_EXPIRED') throw error;
   }
 
   const coveredPeriods = chunkCoverage.filter((chunk) => chunk.ok).length;
+  const tokensSources = [
+    ...(activityByDate.size ? ['credit-usage/activity'] : []),
+    ...(coveredPeriods ? ['model-usage'] : []),
+  ];
   const tokensCoverage = {
-    complete: coveredPeriods === chunkCoverage.length,
+    complete: false, // 逐日循环后按实际覆盖回填
     coveredPeriods,
     totalPeriods: chunkCoverage.length,
-    sources: coveredPeriods ? ['model-usage'] : [],
+    sources: tokensSources,
     legacyFallback: false,
   };
   const costCoverage = { complete: false, coveredPeriods: 0, totalPeriods: 0, sources: [], legacyFallback: false };
@@ -1202,13 +1307,15 @@ const fetchZaiUsage = async (apiKeyRaw, fetcher, options = {}) => {
   for (let ordinal = start.ordinal; ordinal <= end.ordinal; ordinal += DAY_MS) {
     const date = dateStringOfOrdinal(ordinal);
     const accumulated = days.get(date) || createDayAccumulator(date);
-    const covered = coverageByDate.get(date) === true;
+    // activity 是账号级全年逐日总量（与 ZCode 统计页同口径），优先于逐模型加总
+    const hasActivity = activityByDate.has(date);
+    const covered = hasActivity || coverageByDate.get(date) === true;
     daily.push({
       date,
       cost: null,
       currency: null,
       costs: [],
-      tokens: covered ? accumulated.tokens : null,
+      tokens: covered ? (hasActivity ? activityByDate.get(date) : accumulated.tokens) : null,
       inputTokens: null,
       outputTokens: null,
       promptTokens: null,
@@ -1231,11 +1338,13 @@ const fetchZaiUsage = async (apiKeyRaw, fetcher, options = {}) => {
     });
   }
 
+  tokensCoverage.complete = daily.every((day) => day.coverage.tokens);
   const knownTokens = daily.reduce((sum, day) => sum + (day.tokens || 0), 0);
   const activeDays = daily.filter((day) => (day.tokens || 0) > 0).length;
-  const peakDailyTokens = coveredPeriods > 0
+  const activitySummary = activity?.summary || null;
+  const peakDailyTokens = activitySummary?.peakDailyTokens ?? (coveredPeriods > 0 || activityByDate.size > 0
     ? daily.reduce((peak, day) => day.tokens === null ? peak : Math.max(peak, day.tokens), 0)
-    : null;
+    : null);
 
   return {
     provider: 'zai',
@@ -1250,19 +1359,27 @@ const fetchZaiUsage = async (apiKeyRaw, fetcher, options = {}) => {
       peakDailyCost: null,
       rangeTokens: tokensCoverage.complete ? knownTokens : null,
       knownRangeTokens: knownTokens,
+      // 账号累计口径（credit-usage/activity 摘要，与 ZCode 统计页一致）；
+      // 拿不到时渲染层自动退回区间口径
+      totalTokens: activitySummary?.totalTokens ?? null,
       peakDailyTokens,
+      peakDailyTokensDate: activitySummary?.peakDailyTokensDate ?? null,
+      currentStreakDays: activitySummary?.currentStreakDays ?? null,
+      longestStreakDays: activitySummary?.longestStreakDays ?? null,
+      totalUsageDurationMs: activitySummary?.totalUsageDurationMs ?? null,
       activeDays,
       inputTokens: null,
       outputTokens: null,
       requests: null,
       planName,
+      quotaCards,
     },
     coverage: {
       start: start.value,
       end: end.value,
       timeZone: timezoneOffsetSec,
       timezoneOffsetSec,
-      source: coveredPeriods ? 'model-usage' : 'unavailable',
+      source: tokensSources.length ? tokensSources.join(' + ') : 'unavailable',
       partial: !tokensCoverage.complete,
       tokens: tokensCoverage,
       cost: costCoverage,
@@ -1695,6 +1812,7 @@ module.exports = {
   normalizeDeepSeekUserToken,
   fetchZaiUsage,
   fetchZaiPlanSummary,
+  fetchZaiActivity,
   normalizeZaiApiKey,
   normalizeZaiOrigin,
   buildCodexUsageRequest,
@@ -1709,6 +1827,8 @@ module.exports = {
     ZAI_DEFAULT_ORIGIN,
     ZAI_MODEL_USAGE_PATH,
     ZAI_QUOTA_LIMIT_PATH,
+    ZAI_CREDIT_ACTIVITY_PATH,
+    ZAI_MODEL_USAGE_RETENTION_DAYS,
     ZAI_TIMEZONE_OFFSET_SEC,
     CODEX_USAGE_PROFILE_URL,
     CODEX_TIMEZONE_OFFSET_SEC,
@@ -1721,6 +1841,7 @@ module.exports = {
     minimaxRecordTokens,
     zaiLabelDate,
     zaiModelUsageData,
+    zaiActivityData,
     DEEPSEEK_PLATFORM_ORIGIN,
     DEEPSEEK_ROUTES,
     DEEPSEEK_LOGIN_HOSTS,
