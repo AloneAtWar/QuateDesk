@@ -934,7 +934,9 @@ function ProviderUsageView({ account, provider, onState }) {
   if (status === 'reauth_required') return <div className="provider-usage-state auth-required">
     <span className="provider-usage-state-icon"><AlertCircle size={18} /></span>
     <div><b>官方用量连接已失效</b><small>{account.usageConnection?.lastError || copy.reauthHint}</small>{error && <em>{error}</em>}</div>
-    <button type="button" className="primary-button" disabled={connecting} onClick={connect}><Globe size={13} />{connecting ? copy.connecting : '重新连接'}</button>
+    {copy.hideConnect
+      ? <span className="provider-usage-hint">官方用量统计已停用（需登录窗口）</span>
+      : <button type="button" className="primary-button" disabled={connecting} onClick={connect}><Globe size={13} />{connecting ? copy.connecting : '重新连接'}</button>}
   </div>;
   if (loading && !data) return <div className="provider-usage-state"><RefreshCw size={17} className="spinning" /><div><b>正在读取 {copy.display} 服务端用量</b><small>{copy.loading}</small></div></div>;
   if ((error || empty) && !data) return <div className="provider-usage-state">
@@ -990,11 +992,24 @@ function ProviderUsageView({ account, provider, onState }) {
   const valueLabel = (day, selectedMetric = metric) => selectedMetric === 'cost'
     ? formatProviderUsageCost(day?.cost, day?.currency || data.currency)
     : `${formatProviderUsageCount(day?.tokens, false)} Token`;
+  // 热力图深度分级：基于重度 Coding Agent 用户的真实量级（日均 2000万-6000万 Token）
+  // 固定阈值让颜色深度反映绝对使用量，不同天之间能看出明显波动
   const levelOf = (day) => {
     if (!providerUsageHasNumber(day?.[metric])) return 'missing';
     const value = Number(day[metric]);
-    if (value <= 0 || maxValue <= 0) return '0';
-    return String(Math.max(1, Math.min(4, Math.ceil((Math.log1p(value) / Math.log1p(maxValue)) * 4))));
+    if (value <= 0) return '0';
+    if (metric === 'tokens') {
+      // Token 口径（日均）：< 1000万 轻度 | 1000-3000万 中度 | 3000-8000万 重度 | > 8000万 极重度
+      if (value < 10_000_000) return '1';
+      if (value < 30_000_000) return '2';
+      if (value < 80_000_000) return '3';
+      return '4';
+    }
+    // 金额口径（¥/天）：< ¥30 轻度 | ¥30-100 中度 | ¥100-250 重度 | > ¥250 极重度
+    if (value < 30) return '1';
+    if (value < 100) return '2';
+    if (value < 250) return '3';
+    return '4';
   };
   const dayAriaLabel = (day) => [
     day.date,
@@ -1475,7 +1490,7 @@ function AccountModalV2({ providers, onClose, onSave, onTestDraft, embedded = fa
   const canRun = !((credentialRequired && !credential.trim()) || missingRequiredVariables || !selected.length || !accountEndpoint);
   const canSave = !(saving || (credentialRequired && !credential.trim()) || missingRequiredVariables || !selected.length || !accountEndpoint);
   const usageCopy = providerUsageCopy(provider);
-  const usageConnectOption = usageCopy && window.quotaDesk?.connectProviderUsage
+  const usageConnectOption = usageCopy && !usageCopy.hideConnect && window.quotaDesk?.connectProviderUsage
     ? <label className="setting-toggle provider-login-option"><span><b>官方账号用量 <small>可选</small></b><small>{usageCopy.editHint}</small></span><input type="checkbox" checked={connectUsageAfterSave} onChange={(event) => setConnectUsageAfterSave(event.target.checked)} /><i /></label>
     : null;
   const actions = (onCancel) => <div className="modal-actions"><button type="button" className="outline-button" onClick={onCancel}>{embedded ? '返回' : '取消'}</button><button type="button" className="outline-button" disabled={testing || !canRun} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" type="submit" form={embedded ? 'custom-account-form' : undefined} disabled={!canSave}>{saving ? '正在保存' : (connectUsageAfterSave ? (usageCopy?.saveAction || '保存并登录') : '保存')}</button></div>;
@@ -1572,7 +1587,9 @@ function ProviderUsageConnectionCard({ account, provider, onState }) {
         <button type="button" className="outline-button" disabled={Boolean(busy)} onClick={refresh}><RefreshCw size={12} className={busy === 'refresh' ? 'spinning' : ''} />{busy === 'refresh' ? '刷新中…' : '刷新'}</button>
         <button type="button" className={`text-button disconnect ${confirmDisconnect ? 'confirming' : ''}`} disabled={Boolean(busy)} title={confirmDisconnect ? '再次点击确认清除官方登录会话' : copy.disconnectTitle} onClick={requestDisconnect}><Power size={12} />{busy === 'disconnect' ? '断开中…' : (confirmDisconnect ? '确认断开' : '断开')}</button>
       </> : <>
-        <button type="button" className="primary-button" disabled={Boolean(busy)} onClick={connect}><Globe size={12} />{busy === 'connect' ? copy.connecting : (status === 'reauth_required' ? '重新连接' : copy.connectAction)}</button>
+        {copy.hideConnect
+          ? <span className="provider-connection-hint">官方用量统计已停用（需登录窗口）</span>
+          : <button type="button" className="primary-button" disabled={Boolean(busy)} onClick={connect}><Globe size={12} />{busy === 'connect' ? copy.connecting : (status === 'reauth_required' ? '重新连接' : copy.connectAction)}</button>}
         {status === 'reauth_required' && <button type="button" className={`text-button disconnect ${confirmDisconnect ? 'confirming' : ''}`} disabled={Boolean(busy)} title={confirmDisconnect ? '再次点击确认清除官方登录会话' : copy.disconnectTitle} onClick={requestDisconnect}><Power size={12} />{confirmDisconnect ? '确认断开' : '断开'}</button>}
       </>}
     </div>}
