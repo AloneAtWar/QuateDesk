@@ -1274,11 +1274,8 @@ const fetchZaiUsage = async (apiKeyRaw, fetcher, options = {}) => {
   if (activity) for (const entry of activity.series) activityByDate.set(entry.date, entry.tokens);
 
   let planName = null;
-  let quotaCards = [];
   try {
-    const plan = await fetchZaiPlanSummary(apiKey, fetcher, { origin, timeoutMs, signal });
-    planName = plan.planName;
-    quotaCards = plan.quotaCards;
+    planName = (await fetchZaiPlanSummary(apiKey, fetcher, { origin, timeoutMs, signal })).planName;
   } catch (error) {
     if (error?.code === 'ABORTED' || error?.code === 'AUTH_EXPIRED') throw error;
   }
@@ -1372,7 +1369,6 @@ const fetchZaiUsage = async (apiKeyRaw, fetcher, options = {}) => {
       outputTokens: null,
       requests: null,
       planName,
-      quotaCards,
     },
     coverage: {
       start: start.value,

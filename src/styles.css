@@ -730,15 +730,7 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .provider-stat.plan .stat-icon { color: var(--violet, #7c5cfc); background: color-mix(in srgb, var(--violet, #7c5cfc) 15%, transparent); }
 .provider-stat.streak .stat-icon { color: var(--coral); background: var(--coral-bg); }
 .provider-stat.peak .stat-icon { color: var(--cyan); background: color-mix(in srgb, var(--cyan) 15%, transparent); }
-.provider-stat.duration .stat-icon { color: var(--violet, #7c5cfc); background: color-mix(in srgb, var(--violet, #7c5cfc) 15%, transparent); }
-/* 套餐额度条：Z.ai 等厂商在统计页同时展示各周期限额余量（紧凑单行，进度条为已用占比） */
-.provider-quota-cards { flex: 0 0 auto; display: flex; gap: 7px; margin-top: 6px; }
-.provider-quota-card { flex: 1 1 0; min-width: 0; padding: 4px 9px 6px; border: 1px solid var(--line-inner); border-radius: 10px; background: var(--surface-2); }
-.quota-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
-.quota-card-head span { color: var(--faint); font-size: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.quota-card-head b { color: var(--ink); font-size: 10px; font-weight: 700; white-space: nowrap; }
-.quota-card-bar { margin-top: 4px; height: 3px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
-.quota-card-bar i { display: block; height: 100%; border-radius: 2px; background: var(--cyan); }
+.provider-stat.longest .stat-icon { color: var(--violet, #7c5cfc); background: color-mix(in srgb, var(--violet, #7c5cfc) 15%, transparent); }
 /* 热力图标题行：标题在左，「较少→较多」图例在右 */
 .provider-heatmap-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 5px 1px 0; }
 .provider-heatmap-title { color: var(--ink-soft); font-size: 10px; font-weight: 700; }
