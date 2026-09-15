@@ -77,7 +77,6 @@
       {
         "provider": "github"
       }
-    ],
-    "electronDist": "build-cache/electron-dist"
+    ]
   }
 }
