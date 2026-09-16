@@ -1,11 +1,4 @@
 export const adapterRegistry = {
-  kimi: {
-    id: 'kimi',
-    label: 'Kimi for Coding',
-    endpoint: 'https://api.kimi.com/coding/v1/usages',
-    auth: 'bearer',
-    windows: ['five_hour', 'weekly'],
-  },
   zai: {
     id: 'zai',
     label: 'Z.ai / 智谱',
@@ -75,7 +68,7 @@ const minutesFromNow = (minutes) => new Date(Date.now() + minutes * 60_000).toIS
 const daysFromNow = (days) => minutesFromNow(days * 24 * 60);
 
 export const providerCatalog = [
-  { id: 'kimi', name: 'Kimi', legalName: 'Kimi for Coding', monogram: 'K', tone: 'sky', adapter: 'kimi', logo: './logos/kimi.png', website: 'https://www.kimi.com/' },
+  // Kimi 只保留订阅渠道（kimi-subscription 扫码登录），独立 API Key 渠道已下线
   { id: 'zai', name: 'Z.ai', legalName: 'Z.ai / 智谱', monogram: 'Z', tone: 'violet', adapter: 'zai', logo: './logos/zai.svg', website: 'https://bigmodel.cn/' },
   { id: 'deepseek', name: 'DeepSeek', legalName: 'DeepSeek API', monogram: 'D', tone: 'blue', adapter: 'deepseek', logo: './logos/deepseek.png', website: 'https://www.deepseek.com/' },
   { id: 'wlb', name: 'wlbclub', legalName: 'wlbclub', monogram: 'W', tone: 'coral', adapter: 'wlb', website: 'https://www.wlbclub.com/' },
@@ -101,7 +94,7 @@ export const windowCatalog = {
 
 export const initialAccounts = [
   {
-    id: 'kimi-main', providerId: 'kimi', name: '主力账号', identity: 'hello@northstar.dev', tags: ['日常', '主力'], status: 'active', lastChecked: minutesFromNow(-3),
+    id: 'kimi-main', providerId: 'kimi-subscription', name: '主力账号', identity: 'hello@northstar.dev', tags: ['日常', '主力'], status: 'active', lastChecked: minutesFromNow(-3),
     windows: [
       { key: 'five_hour', remaining: 68, used: 32, total: 100, unit: '%', resetAt: minutesFromNow(102), available: true },
       { key: 'weekly', remaining: 42, used: 58, total: 100, unit: '%', resetAt: daysFromNow(2.18), available: true },

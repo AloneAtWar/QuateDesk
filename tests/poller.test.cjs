@@ -185,14 +185,17 @@ test('从 cc-switch 各形态 settings_config 提取 baseUrl 与 apiKey', () => 
 
 test('按域名后缀匹配厂商（内置别名 + 自定义厂商 endpoint）', () => {
   const providers = [
-    { id: 'kimi', requestConfig: { endpoint: 'https://api.kimi.com/coding/v1/usages' } },
+    { id: 'zai', requestConfig: { endpoint: 'https://open.bigmodel.cn/api/monitor/usage/quota/limit' } },
     { id: 'wlb', requestConfig: { endpoint: 'https://codex.wlbclub.com/v1/usage' } },
     { id: 'custom', requestConfig: { adapterMode: 'script', variables: [{ key: 'endpoint', defaultValue: 'https://api.example.io/v1/usage' }] } },
   ];
-  assert.equal(matchProviderId('https://api.kimi.com/coding/', providers), 'kimi');
+  assert.equal(matchProviderId('https://open.bigmodel.cn/api/', providers), 'zai');
+  assert.equal(matchProviderId('https://api.z.ai/v1', providers), 'zai');
   assert.equal(matchProviderId('http://codex.wlbclub.com', providers), 'wlb');
   assert.equal(matchProviderId('https://api.example.io/v1', providers), 'custom');
   assert.equal(matchProviderId('https://api.unknown.com', providers), null);
+  // kimi 的独立 API Key 渠道已下线，域名别名移除后不再命中
+  assert.equal(matchProviderId('https://api.kimi.com/coding/', providers), null);
 });
 
 // ── MiniMax Coding Plan 内置适配 ────────────────────────────────

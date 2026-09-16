@@ -68,7 +68,6 @@ const hostOf = (url) => {
 
 // 内置厂商域名别名：cc-switch 里配的 baseUrl 域名与额度接口域名不一定相同
 const BUILTIN_HOST_ALIASES = {
-  kimi: ['api.kimi.com', 'kimi.com'],
   zai: ['bigmodel.cn', 'api.z.ai', 'z.ai'],
   deepseek: ['deepseek.com'],
   wlb: ['wlbclub.com'],

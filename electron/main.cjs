@@ -321,7 +321,6 @@ const sendState = (state) => {
 };
 
 const builtinLogos = {
-  kimi: './logos/kimi.png',
   'kimi-subscription': './logos/kimi.png',
   zai: './logos/zai.svg',
   deepseek: './logos/deepseek.png',
@@ -334,7 +333,6 @@ const builtinLogos = {
 };
 // 内置厂商的默认官网；仅在厂商从未设置过官网时补齐，用户清空后不再强制回填
 const builtinWebsites = {
-  kimi: 'https://www.kimi.com/',
   'kimi-subscription': 'https://www.kimi.com/',
   zai: 'https://bigmodel.cn/',
   deepseek: 'https://www.deepseek.com/',
@@ -410,16 +408,18 @@ const migrateAccount = (account) => {
   return normalized;
 };
 
-// XiaoMi MiMo 从未推出适配接口，已从系统厂商中移除；历史 state 里残留的 mimo 厂商与账号在迁移时一并丢弃
+// 下线的渠道在迁移时一并丢弃：mimo 从未推出适配接口；kimi 的独立 API Key 渠道已下线
+// （订阅统一走 kimi-subscription 扫码登录，避免同一厂商出现两个入口）
+const dropProviderIds = new Set(['mimo', 'kimi']);
 const migrateState = (state) => state ? {
   ...state,
-  accounts: (state.accounts || []).map(migrateAccount).filter((account) => account.providerId !== 'mimo'),
-  providers: ensureCliProviders((state.providers || []).map(migrateProvider).filter((provider) => provider.id !== 'mimo')),
+  accounts: (state.accounts || []).map(migrateAccount).filter((account) => !dropProviderIds.has(account.providerId)),
+  providers: ensureCliProviders((state.providers || []).map(migrateProvider).filter((provider) => !dropProviderIds.has(provider.id))),
 } : state;
 
 const cleanState = (state) => ({
-  accounts: (state?.accounts || []).map(({ credential, baseUrl, ...account }) => account).filter((account) => account.providerId !== 'mimo'),
-  providers: ensureCliProviders((state?.providers || []).map(({ baseUrl, domain, ...provider }) => migrateProvider(provider)).filter((provider) => provider.id !== 'mimo')),
+  accounts: (state?.accounts || []).map(({ credential, baseUrl, ...account }) => account).filter((account) => !dropProviderIds.has(account.providerId)),
+  providers: ensureCliProviders((state?.providers || []).map(({ baseUrl, domain, ...provider }) => migrateProvider(provider)).filter((provider) => !dropProviderIds.has(provider.id))),
   settings: state?.settings || {},
   lastSync: state?.lastSync || new Date().toISOString(),
 });

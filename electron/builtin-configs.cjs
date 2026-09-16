@@ -1,15 +1,4 @@
 const scripts = {
-  kimi: `({
-    request: { url: "{{endpoint}}", method: "GET", headers: { Authorization: "Bearer {{apiKey}}" } },
-    extractor(response) {
-      const rows = (response?.limits || []).map((row) => {
-        const item = row?.detail || row || {}; const total = Number(item.limit || 0); const amount = Number(item.remaining || 0);
-        return { key: "five_hour", remaining: total > 0 ? amount / total * 100 : 0, total: 100, unit: "%", amount, limitAmount: total, resetAt: item.resetTime };
-      });
-      if (response?.usage) { const item = response.usage; const total = Number(item.limit || 0); const amount = Number(item.remaining || 0); rows.push({ key: "weekly", remaining: total > 0 ? amount / total * 100 : 0, total: 100, unit: "%", amount, limitAmount: total, resetAt: item.resetTime }); }
-      return rows;
-    }
-  })`,
   zai: `({
     request: { url: "{{endpoint}}", method: "GET", headers: { Authorization: "{{apiKey}}" } },
     extractor(response) {
@@ -33,7 +22,8 @@ const scriptVariables = (endpoint) => [
 ];
 
 const builtinConfigs = {
-  kimi: { endpoint: 'https://api.kimi.com/coding/v1/usages', windows: ['five_hour', 'weekly'], wasteWindows: ['weekly'], adapterMode: 'script', script: scripts.kimi, variables: scriptVariables('https://api.kimi.com/coding/v1/usages') },
+  // Kimi 已下线独立的 API Key 渠道（api.kimi.com/coding/v1/usages）：订阅额度统一走
+  // 「kimi-subscription」扫码登录，避免同一厂商出现两个入口
   zai: { endpoint: 'https://open.bigmodel.cn/api/monitor/usage/quota/limit', windows: ['five_hour', 'weekly', 'monthly'], wasteWindows: ['weekly'], adapterMode: 'script', script: scripts.zai, variables: scriptVariables('https://open.bigmodel.cn/api/monitor/usage/quota/limit') },
   deepseek: { endpoint: 'https://api.deepseek.com/user/balance', windows: ['balance'], wasteWindows: [], adapterMode: 'script', script: scripts.deepseek, variables: scriptVariables('https://api.deepseek.com/user/balance') },
   wlb: {

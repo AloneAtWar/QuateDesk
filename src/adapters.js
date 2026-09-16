@@ -14,18 +14,6 @@ const windowResult = (key, remaining, total, unit = '%', resetAt = null, extra =
 });
 
 export const adapterDefinitions = {
-  kimi: {
-    ...adapterRegistry.kimi,
-    normalize(payload) {
-      const windows = (payload?.limits || []).map((item) => {
-        const detail = item.detail || item;
-        return windowResult('five_hour', numeric(detail.remaining), numeric(detail.limit), '%', detail.resetTime);
-      });
-      const weekly = payload?.usage;
-      if (weekly) windows.push(windowResult('weekly', numeric(weekly.remaining), numeric(weekly.limit), '%', weekly.resetTime));
-      return windows;
-    },
-  },
   zai: {
     ...adapterRegistry.zai,
     normalize(payload) {

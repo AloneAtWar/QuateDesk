@@ -222,23 +222,6 @@ const definitions = {
       });
     },
   },
-  kimi: {
-    request: (account, provider) => ({ url: account.endpoint || provider.requestConfig?.endpoint || 'https://api.kimi.com/coding/v1/usages', auth: provider.requestConfig?.auth || 'bearer' }),
-    normalize(payload) {
-      const windows = (payload?.limits || []).map((item) => {
-        const detail = item.detail || item;
-        const total = numeric(detail.limit);
-        const remaining = numeric(detail.remaining);
-        return meter('five_hour', percent(remaining, total), 100, '%', detail.resetTime, { amount: remaining, limitAmount: total });
-      });
-      if (payload?.usage) {
-        const total = numeric(payload.usage.limit);
-        const remaining = numeric(payload.usage.remaining);
-        windows.push(meter('weekly', percent(remaining, total), 100, '%', payload.usage.resetTime, { amount: remaining, limitAmount: total }));
-      }
-      return windows;
-    },
-  },
   zai: {
     request: (account, provider) => {
       if (account.endpoint || provider.requestConfig?.endpoint) return { url: account.endpoint || provider.requestConfig.endpoint, auth: provider.requestConfig?.auth || 'token' };
