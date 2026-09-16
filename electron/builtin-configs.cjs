@@ -76,6 +76,9 @@ const builtinConfigs = {
   gemini: { windows: ['gemini_pro', 'gemini_flash', 'gemini_flash_lite'], wasteWindows: [], adapterMode: 'gemini', auth: 'none', credentialRequired: false },
   // Kimi 官方订阅：专属适配（cli-quota.cjs），凭据来自「导入订阅登录」的扫码快照，含月订阅额度
   'kimi-subscription': { windows: ['five_hour', 'weekly', 'monthly'], wasteWindows: ['weekly', 'monthly'], adapterMode: 'kimi', auth: 'none', credentialRequired: false },
+  // GitHub Copilot 订阅：专属适配（cli-quota.cjs），凭据来自「导入订阅登录」的 GitHub 设备码授权快照。
+  // 额度是 premium requests（补充请求）月度池，每月 1 号重置
+  copilot: { windows: ['monthly'], wasteWindows: ['monthly'], adapterMode: 'copilot', auth: 'none', credentialRequired: false },
 };
 
 module.exports = { builtinConfigs };

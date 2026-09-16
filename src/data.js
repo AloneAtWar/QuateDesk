@@ -62,6 +62,13 @@ export const adapterRegistry = {
     auth: 'none',
     windows: ['gemini_pro', 'gemini_flash', 'gemini_flash_lite'],
   },
+  copilot: {
+    id: 'copilot',
+    label: 'GitHub Copilot',
+    endpoint: '',
+    auth: 'none',
+    windows: ['monthly'],
+  },
 };
 
 const minutesFromNow = (minutes) => new Date(Date.now() + minutes * 60_000).toISOString();
@@ -78,6 +85,7 @@ export const providerCatalog = [
   { id: 'codex', name: 'Codex', legalName: 'OpenAI Codex', monogram: 'O', tone: 'mint', adapter: 'codex', logo: './logos/codex.svg', website: 'https://developers.openai.com/codex/' },
   { id: 'gemini', name: 'Gemini', legalName: 'Gemini CLI', monogram: 'G', tone: 'sky', adapter: 'gemini', logo: './logos/gemini.svg', website: 'https://gemini.google.com/' },
   { id: 'kimi-subscription', name: 'Kimi 订阅', legalName: 'Kimi for Coding 订阅', monogram: 'K', tone: 'sky', adapter: 'kimi', logo: './logos/kimi.png', website: 'https://www.kimi.com/' },
+  { id: 'copilot', name: 'GitHub Copilot', legalName: 'GitHub Copilot 订阅', monogram: 'G', tone: 'slate', adapter: 'copilot', logo: './logos/copilot.svg', website: 'https://github.com/features/copilot' },
 ];
 
 export const windowCatalog = {

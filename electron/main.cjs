@@ -9,7 +9,7 @@ const { resolveWasteWindows } = require('./waste.cjs');
 const { builtinConfigs } = require('./builtin-configs.cjs');
 const { scanCcswitch } = require('./ccswitch.cjs');
 const { mergeMainOwnedUsageConnections } = require('./provider-usage-state.cjs');
-const { CLI_KINDS, SNAPSHOT_KEY, readLiveAuth, cliIdentity, resolveCliAuth, authVersionMatches, writeLiveIfCurrent, fetchWithCliAuth } = require('./cli-auth.cjs');
+const { CLI_KINDS, SNAPSHOT_KEY, readLiveAuth, cliIdentity, resolveCliAuth, authVersionMatches, writeLiveIfCurrent, fetchWithCliAuth, COPILOT_CLIENT_ID, COPILOT_DEVICE_CODE_URL, COPILOT_TOKEN_URL, COPILOT_SCOPE } = require('./cli-auth.cjs');
 const {
   fetchDeepSeekUsage,
   fetchDeepSeekSummary,
@@ -330,6 +330,7 @@ const builtinLogos = {
   claude: './logos/claude.jpg',
   codex: './logos/codex.svg',
   gemini: './logos/gemini.svg',
+  copilot: './logos/copilot.svg',
 };
 // 内置厂商的默认官网；仅在厂商从未设置过官网时补齐，用户清空后不再强制回填
 const builtinWebsites = {
@@ -343,6 +344,7 @@ const builtinWebsites = {
   claude: 'https://claude.com/claude-code',
   codex: 'https://developers.openai.com/codex/',
   gemini: 'https://gemini.google.com/',
+  copilot: 'https://github.com/features/copilot',
 };
 // 专属适配类内置厂商（凭据来自本机 CLI / 官方接口），历史 state 里没有的加载/保存时补齐
 const ensureCliProviders = (providers) => {
@@ -353,6 +355,7 @@ const ensureCliProviders = (providers) => {
     { id: 'codex', name: 'Codex', legalName: 'OpenAI Codex', monogram: 'O', tone: 'mint', adapter: 'codex', logo: './logos/codex.svg' },
     { id: 'gemini', name: 'Gemini', legalName: 'Gemini CLI', monogram: 'G', tone: 'sky', adapter: 'gemini', logo: './logos/gemini.svg' },
     { id: 'kimi-subscription', name: 'Kimi 订阅', legalName: 'Kimi for Coding 订阅', monogram: 'K', tone: 'sky', adapter: 'kimi', logo: './logos/kimi.png' },
+    { id: 'copilot', name: 'GitHub Copilot', legalName: 'GitHub Copilot 订阅', monogram: 'G', tone: 'slate', adapter: 'copilot', logo: './logos/copilot.svg' },
   ];
   const existing = new Set(providers.map((item) => item.id));
   const additions = cliProviders
@@ -1553,6 +1556,138 @@ function registerIpc() {
       cliAuthSource: 'snapshot',
       cliFingerprint: identity.fingerprint,
       windowKeys,
+      windows: [],
+      status: 'active',
+      lastError: null,
+      lastChecked: null,
+      lastTestAt: null,
+    };
+    const saved = store.saveState(cleanState({ ...state, accounts: [...(state.accounts || []), account] }));
+    sendState(saved);
+    await pollState([id]).catch(() => {});
+    return { imported: 1, duplicate: false, name: account.name, display: identity.display || '', state: migrateState(store.loadState()) };
+  });
+  // ── GitHub Copilot 设备码登录（github.com OAuth Device Flow）──
+  // VS Code Copilot 同款 client：用户在浏览器打开 github.com/login/device 输入设备码授权。
+  // 换取的 OAuth user token（ghu_）长期有效、无 refresh_token，快照为独立账号；令牌全程
+  // 只留在主进程，渲染层只拿设备码与登录名。设备码有效期约 15 分钟，过期作废重发。
+  const copilotPendingDevices = new Map(); // device_code → { userCode, verificationUri, interval, auth?, createdAt }
+  const copilotDeviceCleaner = setInterval(() => {
+    for (const [code, entry] of copilotPendingDevices) {
+      if (Date.now() - entry.createdAt > 15 * 60_000) copilotPendingDevices.delete(code);
+    }
+  }, 60_000);
+  copilotDeviceCleaner.unref?.();
+
+  const postGithubDeviceAuth = async (url, form) => {
+    const response = await net.fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', 'User-Agent': 'quota-desk-copilot-login' },
+      body: new URLSearchParams(form).toString(),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(`GitHub 授权接口返回 HTTP ${response.status}`);
+    return payload;
+  };
+
+  ipcMain.handle('copilot:device-start', async () => {
+    let payload;
+    try {
+      payload = await postGithubDeviceAuth(COPILOT_DEVICE_CODE_URL, { client_id: COPILOT_CLIENT_ID, scope: COPILOT_SCOPE });
+    } catch (error) { throw new Error(`创建 GitHub 设备码失败：${error.message}`); }
+    const key = typeof payload?.device_code === 'string' ? payload.device_code : '';
+    const userCode = typeof payload?.user_code === 'string' ? payload.user_code : '';
+    if (!key || !userCode) throw new Error('GitHub 设备码响应不完整');
+    const verificationUri = /^https:\/\/github\.com\//.test(String(payload?.verification_uri || '')) ? payload.verification_uri : 'https://github.com/login/device';
+    const interval = Math.min(30, Math.max(1, Math.round(Number(payload?.interval) || 5)));
+    copilotPendingDevices.set(key, { userCode, verificationUri, interval, createdAt: Date.now() });
+    return { key, userCode, verificationUri, interval };
+  });
+  ipcMain.handle('copilot:device-poll', async (_event, key) => {
+    const entry = copilotPendingDevices.get(String(key || ''));
+    if (!entry) return { status: 'expired' };
+    let payload;
+    try {
+      payload = await postGithubDeviceAuth(COPILOT_TOKEN_URL, { client_id: COPILOT_CLIENT_ID, device_code: String(key || ''), grant_type: 'urn:ietf:params:oauth:grant-type:device_code' });
+    } catch (error) {
+      // 轮询请求本身失败（超时/连接被重置等）：按 pending 返回并带上可读错误，
+      // 由面板显示在状态行——授权码仍有效，网络恢复后自动继续轮询
+      const raw = String(error?.message || error || '');
+      const text = /abort|timeout/i.test(raw) ? '请求 github.com 超时' : /failed|fetch|reset|ERR_/i.test(raw) ? '连接 github.com 失败' : raw.slice(0, 80);
+      return { status: 'pending', error: text };
+    }
+    const token = typeof payload?.access_token === 'string' ? payload.access_token : '';
+    if (token) {
+      // 授权成功：顺手读一次 GitHub 用户信息作为账号标识（read:user 已授权），失败不阻塞
+      const auth = { oauth_token: token };
+      try {
+        const userResponse = await net.fetch('https://api.github.com/user', {
+          headers: { Authorization: `token ${token}`, Accept: 'application/json', 'User-Agent': 'quota-desk-copilot-login' },
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (userResponse.ok) {
+          const user = await userResponse.json();
+          if (typeof user?.login === 'string' && user.login) auth.login = user.login;
+          if (user?.id !== undefined && user?.id !== null) auth.userId = String(user.id);
+        }
+      } catch {}
+      entry.auth = auth;
+      const identity = cliIdentity('copilot', auth);
+      return { status: 'success', display: identity?.display || '' };
+    }
+    if (payload?.error === 'slow_down') return { status: 'pending', error: 'slow_down' };
+    if (payload?.error === 'authorization_pending') return { status: 'pending' };
+    if (payload?.error === 'access_denied') return { status: 'denied' };
+    if (payload?.error === 'expired_token') { copilotPendingDevices.delete(String(key || '')); return { status: 'expired' }; }
+    return { status: 'pending', error: payload?.error || '' };
+  });
+  ipcMain.handle('copilot:device-import', async (_event, key, options = {}) => {
+    const entry = copilotPendingDevices.get(String(key || ''));
+    copilotPendingDevices.delete(String(key || ''));
+    if (!entry?.auth) throw new Error('授权会话已失效，请重新获取设备码');
+    const state = migrateState(store.loadState());
+    if (!state) throw new Error('桌面状态尚未初始化');
+    const provider = (state.providers || []).find((item) => item.id === 'copilot');
+    if (!provider) throw new Error('找不到厂商配置：copilot');
+    const identity = cliIdentity('copilot', entry.auth);
+    if (!identity) throw new Error('GitHub 授权信息不完整，请重新登录');
+    // 重新授权已有账号（令牌吊销后的「重新授权」）：新快照写回原账号，配置全部保留；
+    // 授权的 GitHub 账号属于另一个已收录账号时拒绝覆盖，避免两个账号共用同一份登录
+    const reloginId = String(options?.accountId || '');
+    if (reloginId) {
+      const target = (state.accounts || []).find((account) => account.id === reloginId && account.providerId === 'copilot');
+      if (!target) throw new Error('找不到要重新授权的 GitHub Copilot 账号');
+      const conflict = (state.accounts || []).find((account) => account.id !== reloginId && account.providerId === 'copilot' && account.cliAuthSource === 'snapshot' && account.cliFingerprint === identity.fingerprint);
+      if (conflict) return { imported: 0, duplicate: true, name: conflict.name, state: migrateState(store.loadState()) };
+      store.saveCredential(reloginId, '', { [SNAPSHOT_KEY]: JSON.stringify(entry.auth) });
+      const customName = String(options?.name || '').trim();
+      const customTags = Array.isArray(options?.tags) ? options.tags.map((tag) => String(tag).trim()).filter(Boolean) : null;
+      const nextIdentity = (!target.identity || target.identity.startsWith('…')) ? (identity.display || target.identity) : target.identity;
+      const updatedAccounts = (state.accounts || []).map((account) => account.id === reloginId
+        ? { ...account, identity: nextIdentity, ...(customName ? { name: customName } : {}), ...(customTags ? { tags: customTags } : {}), cliAuthSource: 'snapshot', cliFingerprint: identity.fingerprint, status: 'active', lastError: null }
+        : account);
+      const saved = store.saveState(cleanState({ ...state, accounts: updatedAccounts }));
+      sendState(saved);
+      await pollState([reloginId]).catch(() => {});
+      return { imported: 1, duplicate: false, relogin: true, name: customName || target.name, display: identity.display || '', state: migrateState(store.loadState()) };
+    }
+    // 指纹去重：同一 GitHub 账号已收录时不重复导入
+    const existing = (state.accounts || []).find((account) => account.providerId === 'copilot' && account.cliAuthSource === 'snapshot' && account.cliFingerprint === identity.fingerprint);
+    if (existing) return { imported: 0, duplicate: true, name: existing.name, state: migrateState(store.loadState()) };
+    const id = `copilot-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    store.saveCredential(id, '', { [SNAPSHOT_KEY]: JSON.stringify(entry.auth) });
+    const customName = String(options?.name || '').trim();
+    const customTags = (Array.isArray(options?.tags) ? options.tags : []).map((tag) => String(tag).trim()).filter(Boolean);
+    const account = {
+      id,
+      providerId: 'copilot',
+      name: customName || provider.name,
+      identity: identity.display || '',
+      tags: customTags,
+      cliAuthSource: 'snapshot',
+      cliFingerprint: identity.fingerprint,
+      windowKeys: provider.requestConfig?.windows?.length ? provider.requestConfig.windows : ['monthly'],
       windows: [],
       status: 'active',
       lastError: null,

@@ -11,12 +11,15 @@
 //           网页会员服务里，因此订阅凭据通过扫码登录获得，没有本机 live 文件可回落。
 // - Grok:   ~/.grok/auth.json 的 scope → OIDC 条目；按 auth.x.ai discovery 得到 token endpoint，
 //           用 refresh_token 续期并只合并回原 scope，避免 profile/账号之间互相覆盖。
+// - Copilot: github.com 设备码授权（VS Code Copilot 同款 client）拿到的 OAuth user token。
+//           该令牌长期有效且没有 refresh_token，失效（吊销/改密）时只能重新设备码登录，
+//           因此没有续期链路；本机 live 文件是 copilot 插件系的 hosts.json。
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const CLI_KINDS = ['claude', 'codex', 'gemini', 'kimi', 'grok'];
+const CLI_KINDS = ['claude', 'codex', 'gemini', 'kimi', 'grok', 'copilot'];
 // 快照在加密凭据 variables 里的键名；只在主进程读写，不进渲染进程
 const SNAPSHOT_KEY = 'cliAuthTokenBundle';
 // access token 剩余寿命低于该值时先刷新再用（cc-switch 为 60s，这里留足一次轮询的余量）
@@ -48,6 +51,14 @@ const GROK_OIDC_SCOPE_PREFIX = `${GROK_ISSUER}::`;
 const GROK_LEGACY_SESSION_SCOPE = 'https://accounts.x.ai/sign-in';
 const GROK_USER_AGENT = 'quota-desk-xai-oauth';
 
+// GitHub Copilot 的设备码授权常量。client_id 是 VS Code Copilot GitHub App 的公开
+// 标识（copilot.vim / copilot-api 等开源实现共用）；scope 只要 read:user，足够调
+// copilot_internal/user 读额度。OAuth user token（ghu_）不过期、无 refresh_token。
+const COPILOT_CLIENT_ID = 'Iv1.b507a08c87ecfe98';
+const COPILOT_DEVICE_CODE_URL = 'https://github.com/login/device/code';
+const COPILOT_TOKEN_URL = 'https://github.com/login/oauth/access_token';
+const COPILOT_SCOPE = 'read:user';
+
 const readJsonFile = (filePath) => {
   try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); }
   catch { return null; }
@@ -66,6 +77,7 @@ const liveAuthPath = (kind) => {
   if (kind === 'claude') return path.join(os.homedir(), '.claude', '.credentials.json');
   if (kind === 'gemini') return path.join(os.homedir(), '.gemini', 'oauth_creds.json');
   if (kind === 'grok') return path.join(process.env.GROK_HOME || path.join(os.homedir(), '.grok'), 'auth.json');
+  if (kind === 'copilot') return path.join(os.homedir(), '.config', 'github-copilot', 'hosts.json');
   return null;
 };
 const grokAuthPath = () => liveAuthPath('grok');
@@ -144,7 +156,19 @@ const hasTokens = (kind, auth) => {
   if (kind === 'claude') return Boolean(auth.claudeOauth?.accessToken || auth.claudeOauth?.refreshToken);
   if (kind === 'kimi') return Boolean(auth.accessToken || auth.refreshToken);
   if (kind === 'grok') return isGrokEntry(grokEntryOf(auth));
+  if (kind === 'copilot') return Boolean(copilotEntryOf(auth));
   return Boolean(auth.access_token || auth.refresh_token);
+};
+
+// Copilot 凭据两种形态：快照 { oauth_token, login?, userId? }（设备码登录）与
+// 插件 live 文件 hosts.json 的 { "github.com": { oauth_token, user } }（host → entry map）
+const copilotEntryOf = (auth) => {
+  if (!auth || typeof auth !== 'object' || Array.isArray(auth)) return null;
+  if (typeof auth.oauth_token === 'string' && auth.oauth_token) return auth;
+  const entry = [auth['github.com'], ...Object.values(auth)]
+    .find((value) => value && typeof value === 'object' && !Array.isArray(value)
+      && typeof value.oauth_token === 'string' && value.oauth_token);
+  return entry || null;
 };
 
 // 账号身份指纹：用于「同一登录只收录一次」与「本机激活」徽标比对。
@@ -171,6 +195,12 @@ const cliIdentity = (kind, auth) => {
     email = String(entry?.email || claims?.email || claims?.preferred_username || '').toLowerCase();
     fingerprint = String(entry?.user_id || entry?.principal_id || claims?.sub || '')
       || shaTag(grokEntryRefreshToken(entry) || token);
+  } else if (kind === 'copilot') {
+    // ghu_ 令牌不是 JWT：快照里带设备码登录时顺带拉取的 login/userId；hosts.json 只有 user 字段。
+    // 指纹优先 userId（重新设备码登录会换 token，指纹不变才能正确去重），展示直接用 GitHub 登录名
+    const entry = copilotEntryOf(auth);
+    email = String(entry?.login || entry?.user || '').trim();
+    fingerprint = String(entry?.userId || '') || shaTag(entry?.oauth_token);
   } else {
     const claims = parseJwtClaims(auth.id_token || auth.access_token);
     email = String(claims?.email || '').toLowerCase();
@@ -204,6 +234,11 @@ const resolveCliAuth = (kind, secretVariables = {}) => {
   if (kind === 'grok') {
     const record = selectGrokAuthRecord(live);
     if (record) return { source: 'live', auth: { ...record.entry, ...(record.scope ? { scopeKey: record.scope } : {}) }, scope: record.scope };
+    return null;
+  }
+  if (kind === 'copilot') {
+    const entry = copilotEntryOf(live);
+    if (entry) return { source: 'live', auth: { ...entry } };
     return null;
   }
   if (hasTokens(kind, live)) return { source: 'live', auth: live };
@@ -539,6 +574,7 @@ const refreshCliAuth = async (kind, auth, fetcher, timeoutMs = 15_000) => {
   if (kind === 'gemini') return refreshGeminiAuth(auth, fetcher, timeoutMs);
   if (kind === 'kimi') return refreshKimiWebAuth(auth, fetcher, timeoutMs);
   if (kind === 'grok') return refreshGrokAuth(auth, fetcher, timeoutMs);
+  if (kind === 'copilot') throw new CliRefreshError('GitHub Copilot 令牌不支持自动续期，请重新设备码登录', { permanent: true, authStatus: 'reauth_required' });
   throw new Error(`未知的 CLI 类型：${kind}`);
 };
 
@@ -686,6 +722,10 @@ module.exports = {
   SNAPSHOT_KEY,
   REFRESH_AHEAD_MS,
   CliRefreshError,
+  COPILOT_CLIENT_ID,
+  COPILOT_DEVICE_CODE_URL,
+  COPILOT_TOKEN_URL,
+  COPILOT_SCOPE,
   liveAuthPath,
   grokAuthPath,
   readLiveAuth,
@@ -700,9 +740,11 @@ module.exports = {
   writeLiveIfCurrent,
   fetchWithCliAuth,
   __grok: { selectGrokAuthEntry, selectGrokAuthRecord, grokEntryOf, grokScopeOf, grokEndpointIsAllowed, discoverGrokTokenEndpoint },
+  __copilot: { copilotEntryOf },
   __constants: {
     CODEX_CLIENT_ID, CODEX_TOKEN_URL, CLAUDE_CLIENT_ID, CLAUDE_TOKEN_URL,
     GEMINI_CLIENT_ID, GEMINI_CLIENT_SECRET, GEMINI_TOKEN_URL, KIMI_AUTH_HOST, KIMI_REFRESH_PATH,
     GROK_ISSUER, GROK_DISCOVERY_URL, GROK_CLIENT_ID, GROK_TOKEN_URL, GROK_SCOPE,
+    COPILOT_CLIENT_ID, COPILOT_DEVICE_CODE_URL, COPILOT_TOKEN_URL, COPILOT_SCOPE,
   },
 };

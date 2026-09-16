@@ -527,7 +527,7 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 /* 订阅登录导入弹窗：列表 / 扫码 / 账号设置共用同一个固定尺寸的窗口，切换视图时尺寸不变 */
 .import-window { display: flex; flex-direction: column; height: min(420px, calc(100vh - 62px)); min-height: 376px; }
 .import-window > .modal-head, .import-window > .modal-actions { flex: 0 0 auto; }
-.import-window > .import-grid, .import-window > .kimi-qr-stage, .import-window > .kimi-qr-configure, .import-window > .cli-import-stage, .import-window > .custom-account-scroll { flex: 1 1 auto; min-height: 0; }
+.import-window > .import-grid, .import-window > .kimi-qr-stage, .import-window > .kimi-qr-configure, .import-window > .cli-import-stage, .import-window > .copilot-device-stage, .import-window > .custom-account-scroll { flex: 1 1 auto; min-height: 0; }
 .import-window > .modal-actions { margin-top: auto; padding-top: 13px; }
 .import-window > .import-grid { overflow-y: auto; }
 /* 订阅登录导入：每个渠道一个方形 Logo 按钮；不可用（未登录 / 已收录）置灰，原因写在悬停提示里 */
@@ -567,6 +567,16 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .kimi-qr-ok small { color: var(--muted); font-size: 11px; }
 .kimi-qr-done-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; color: var(--green); background: var(--green-bg); flex: 0 0 auto; }
 .kimi-qr-done-icon.duplicate { color: var(--coral-deep); background: var(--coral-bg); }
+/* GitHub Copilot 设备码登录：大号等宽设备码卡片（点击复制）+ 打开授权页按钮，与扫码页同高 */
+.copilot-device-stage { min-height: 236px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 6px 0; }
+.copilot-code-frame { display: grid; gap: 7px; justify-items: center; padding: 20px 30px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2); cursor: pointer; transition: border-color .12s ease-out, transform .12s ease-out; }
+.copilot-code-frame:hover { border-color: var(--focus-border); transform: translateY(-1px); }
+.copilot-code-frame small { color: var(--faint); font-size: 10px; }
+.copilot-code-frame b { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 24px; letter-spacing: 2px; color: var(--ink); }
+.copilot-code-frame.stale { opacity: .55; }
+.copilot-code-frame.stale b { text-decoration: line-through; }
+.copilot-stage-actions { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
+.copilot-open-button { flex: 0 0 auto; }
 /* 令牌失效后的重新扫码入口：总览卡片的异常图标变成可点按钮，行式视图在「需处理」旁给文字入口 */
 .card-status-icon.relogin { border: none; padding: 0; cursor: pointer; transition: transform .12s ease-out; }
 .card-status-icon.relogin:hover { transform: scale(1.15); }

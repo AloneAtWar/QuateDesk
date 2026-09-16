@@ -192,4 +192,83 @@ async function queryKimiWebQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS,
   return windows;
 }
 
-module.exports = { queryClaudeQuota, queryCodexQuota, queryGeminiQuota, queryKimiWebQuota };
+// GitHub Copilot 凭据形态（设备码登录快照）：{ oauth_token, login?, userId? }。OAuth user
+// token 长期有效且没有 refresh_token，无需续期；失效时 copilot:device-* 重新设备码授权。
+// 额度查询参考 CodexBar / copilot-api：用 GitHub OAuth 令牌直读 VS Code 同款内部接口
+// copilot_internal/user。premium_interactions 是付费计划的「补充请求」月度池；部分账户
+// 缺 entitlement/remaining/quota_reset_date（CodexBar 只依赖 percent_remaining），
+// 解析按 percent → remaining/entitlement 两层降级；旧版计划的 chat/completions 池兜底。
+// 字段 snake_case 为主，个别网关回 camelCase，两种都认。
+const COPILOT_USER_ENDPOINT = 'https://api.github.com/copilot_internal/user';
+const plainObject = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+
+const copilotSnapshotOf = (payload) => {
+  const snapshots = plainObject(payload?.quota_snapshots) || plainObject(payload?.quotaSnapshots);
+  if (!snapshots) return null;
+  return plainObject(snapshots.premium_interactions) || plainObject(snapshots.premiumInteractions)
+    || plainObject(snapshots.chat) || plainObject(snapshots.completions) || null;
+};
+
+const copilotResetAt = (payload) => {
+  const raw = payload?.quota_reset_date ?? payload?.quotaResetDate ?? payload?.quota_reset_date_utc ?? null;
+  if (raw === null || raw === undefined) return null;
+  const ms = new Date(raw).getTime();
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+};
+
+const parseCopilotQuota = (payload) => {
+  const pool = copilotSnapshotOf(payload);
+  if (!pool) throw new Error('GitHub Copilot 响应中没有可识别的额度池');
+  if (pool.unlimited === true) {
+    return { remaining: 100, amount: null, limitAmount: null, resetAt: copilotResetAt(payload) };
+  }
+  const percentRemaining = Number(pool.percent_remaining ?? pool.percentRemaining);
+  const entitlement = Number(pool.entitlement);
+  const remaining = Number(pool.remaining);
+  const remainingPct = Number.isFinite(percentRemaining)
+    ? percentRemaining
+    : Number.isFinite(entitlement) && entitlement > 0 && Number.isFinite(remaining)
+      ? (remaining / entitlement) * 100
+      : NaN;
+  if (!Number.isFinite(remainingPct)) throw new Error('GitHub Copilot 额度响应缺少剩余百分比');
+  return {
+    remaining: Math.max(0, Math.min(100, remainingPct)),
+    amount: Number.isFinite(remaining) && remaining >= 0 ? remaining : null,
+    limitAmount: Number.isFinite(entitlement) && entitlement > 0 ? entitlement : null,
+    resetAt: copilotResetAt(payload),
+  };
+};
+
+async function queryCopilotQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS, ctx = {}) {
+  const resolved = resolveCliAuth('copilot', ctx.variables);
+  if (!resolved) throw reauthRequiredError('未检测到 GitHub Copilot 登录。请在「导入订阅登录」中完成 GitHub 设备码授权');
+  const response = await fetchWithCliAuth('copilot', {
+    auth: resolved.auth,
+    source: resolved.source,
+    fetcher,
+    timeoutMs,
+    // 该内部接口按 VS Code 客户端识别请求，缺编辑器伪装头会被拒绝；令牌用 GitHub OAuth
+    // 原始值（ghu_，PAT 会被 400 拒绝）
+    buildRequest: (auth) => ({
+      url: COPILOT_USER_ENDPOINT,
+      init: {
+        headers: {
+          Authorization: `token ${auth?.oauth_token || ''}`,
+          Accept: 'application/json',
+          'User-Agent': 'GitHubCopilotChat/0.26.7',
+          'Editor-Version': 'vscode/1.96.2',
+          'Editor-Plugin-Version': 'copilot-chat/0.26.7',
+          'X-GitHub-Api-Version': '2025-04-01',
+        },
+      },
+    }),
+    onAuthUpdate: ctx.onAuthUpdate,
+  });
+  if (response.status === 401 || response.status === 403) throw reauthRequiredError('GitHub 授权已失效，请重新进行 Copilot 设备码登录');
+  if (!response.ok) throw new Error(`GitHub Copilot 额度接口返回 HTTP ${response.status}`);
+  const payload = await response.json();
+  const quota = parseCopilotQuota(payload);
+  return [meter('monthly', quota.remaining, 100, '%', quota.resetAt, { amount: quota.amount, limitAmount: quota.limitAmount })];
+}
+
+module.exports = { queryClaudeQuota, queryCodexQuota, queryGeminiQuota, queryKimiWebQuota, queryCopilotQuota, __copilot: { parseCopilotQuota, COPILOT_USER_ENDPOINT } };

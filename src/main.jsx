@@ -107,10 +107,19 @@ const resolveWasteWindows = (requestConfig) => {
   if (Array.isArray(requestConfig?.wasteWindows)) return requestConfig.wasteWindows;
   return (requestConfig?.windows || []).filter((key) => ['weekly', 'monthly'].includes(key));
 };
-// CLI 官方订阅（Claude / Codex / Gemini / Kimi / Grok 订阅）：账号统一走「导入订阅登录」收录，不走普通添加表单
-const CLI_ADAPTER_MODES = ['claude', 'codex', 'gemini', 'kimi', 'grok'];
+// CLI 官方订阅（Claude / Codex / Gemini / Kimi / Grok 订阅 / GitHub Copilot）：账号统一走「导入订阅登录」收录，不走普通添加表单
+const CLI_ADAPTER_MODES = ['claude', 'codex', 'gemini', 'kimi', 'grok', 'copilot'];
 const isCliProvider = (provider) => CLI_ADAPTER_MODES.includes(provider?.requestConfig?.adapterMode || provider?.adapter);
 const BUILTIN_API_KEY_PROVIDERS = new Set(['kimi', 'zai', 'deepseek', 'minimax']);
+
+// 令牌失效后可一键重新登录的订阅渠道：返回重登弹窗类型与入口文案（Kimi 扫码 / Grok 导入 / Copilot 设备码）
+const reloginChannel = (provider) => {
+  const mode = provider?.requestConfig?.adapterMode || provider?.adapter;
+  if (provider?.id === 'kimi-subscription' || mode === 'kimi') return { kind: 'kimi', action: '重新扫码', title: 'Kimi 订阅令牌已失效，点击重新扫码登录' };
+  if (provider?.id === 'grok' || mode === 'grok') return { kind: 'grok', action: '重新导入', title: 'Grok 令牌已失效，点击重新导入本机 CLI 登录' };
+  if (provider?.id === 'copilot' || mode === 'copilot') return { kind: 'copilot', action: '重新授权', title: 'GitHub 授权已失效，点击重新设备码登录' };
+  return null;
+};
 const providerVariableRequired = (provider, variable) => Boolean(variable?.required
   || (variable?.key === 'apiKey' && BUILTIN_API_KEY_PROVIDERS.has(provider?.id)));
 const providerVariableDefinitions = (provider) => {
@@ -501,8 +510,9 @@ function WindowsView({ accounts, providers, reminderRules, embedded = false, onO
       <div className="windows-column-head"><span>账号</span><span>剩余进度</span><span>状态</span></div>
       <div className="windows-list">{sorted.map((account) => {
         const provider = providers.find((item) => item.id === account.providerId);
+        const relogin = account.authStatus === 'reauth_required' ? reloginChannel(provider) : null;
         return <div className="account-window-row clickable" key={account.id} role="button" tabIndex={0} title="点击查看额度趋势" onClick={() => onOpenHistory?.(account)} onKeyDown={(event) => { if (event.key === 'Enter') onOpenHistory?.(account); }}>
-          <div className="account-side"><AccountIdentity account={account} provider={provider} /><div className={`account-status ${account.status}`}><span className="status-dot" />{account.status === 'warning' ? '需处理' : '正常'}<small>{formatChecked(account.lastChecked)}</small></div>{account.authStatus === 'reauth_required' && (provider?.id === 'kimi-subscription' || provider?.requestConfig?.adapterMode === 'kimi' || provider?.id === 'grok' || provider?.requestConfig?.adapterMode === 'grok') && <button type="button" className="text-button relogin-link" title={(provider?.id === 'grok' || provider?.requestConfig?.adapterMode === 'grok') ? 'Grok 令牌已失效，点击重新导入本机 CLI 登录' : 'Kimi 订阅令牌已失效，点击重新扫码登录'} onClick={(event) => { event.stopPropagation(); onRelogin?.(account); }}><RefreshCw size={11} />{(provider?.id === 'grok' || provider?.requestConfig?.adapterMode === 'grok') ? '重新导入' : '重新扫码'}</button>}<AccountRuleMarks account={account} rules={reminderRules} /></div>
+          <div className="account-side"><AccountIdentity account={account} provider={provider} /><div className={`account-status ${account.status}`}><span className="status-dot" />{account.status === 'warning' ? '需处理' : '正常'}<small>{formatChecked(account.lastChecked)}</small></div>{relogin && <button type="button" className="text-button relogin-link" title={relogin.title} onClick={(event) => { event.stopPropagation(); onRelogin?.(account); }}><RefreshCw size={11} />{relogin.action}</button>}<AccountRuleMarks account={account} rules={reminderRules} /></div>
           <div className="account-meters">{account.windows.map((meter) => <MeterBar key={meter.key} meter={meter} />)}</div>
         </div>;
       })}</div>
@@ -1310,8 +1320,7 @@ function OverviewCard({ account, provider, feedback, onOpenHistory, onRelogin, o
   const cardRef = useRef(null);
   const pressRef = useRef(null);
   const liftingRef = useRef(false);
-  const relogin = account.status === 'warning' && (provider?.id === 'kimi-subscription' || provider?.requestConfig?.adapterMode === 'kimi' || provider?.id === 'grok' || provider?.requestConfig?.adapterMode === 'grok');
-  const grok = provider?.id === 'grok' || provider?.requestConfig?.adapterMode === 'grok';
+  const relogin = account.status === 'warning' ? reloginChannel(provider) : null;
   const lifting = dragId === account.id;
   const clearPress = () => { pressRef.current = null; };
   const beginDrag = (pointerId) => {
@@ -1379,7 +1388,7 @@ function OverviewCard({ account, provider, feedback, onOpenHistory, onRelogin, o
       <AccountIdentity account={account} provider={provider} />
       <div className="card-actions">
         {relogin
-          ? <button type="button" className={`card-status-icon ${account.status} relogin`} title={grok ? 'Grok 令牌已失效，点击重新导入本机 CLI 登录' : 'Kimi 订阅令牌已失效，点击重新扫码登录'} aria-label={`${grok ? '重新导入' : '重新扫码'}登录 ${account.name}`} onClick={(event) => { event.stopPropagation(); onRelogin?.(account); }}><AlertCircle size={14} /></button>
+          ? <button type="button" className={`card-status-icon ${account.status} relogin`} title={relogin.title} aria-label={`${relogin.action}登录 ${account.name}`} onClick={(event) => { event.stopPropagation(); onRelogin?.(account); }}><AlertCircle size={14} /></button>
           : <span className={`card-status-icon ${account.status}`} title={account.status === 'warning' ? (account.lastError || '连接检查失败') : (feedback?.message || `连接正常 · ${account.windows.length} 个额度窗口`)}>{account.status === 'warning' ? <AlertCircle size={14} /> : <ShieldCheck size={14} />}</span>}
       </div>
     </div>
@@ -1802,7 +1811,7 @@ function AccountEditModalV2({ account, provider, onClose, onSave, onTestDraft, o
     } finally { setTesting(false); }
   };
   const submit = async (event) => { event.preventDefault(); if (!name.trim() || (!cliProvider && !accountEndpoint) || !selected.length) return; const { publicVariables, secretVariables } = splitVariableValues(provider, variableValues); setSaving(true); try { await onSave({ account, name: name.trim(), identity: identity.trim(), tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean), endpoint: accountEndpoint, windowKeys: selected, timeoutSeconds: clampAccountTimeout(timeoutSeconds), variables: publicVariables, secretVariables }); } finally { setSaving(false); } };
-  return <div className="modal-backdrop" onClick={onClose}><form className="modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><h2>编辑 {account.name}</h2></div></div><div className="form-grid"><label className="field"><span>账号名</span><input required value={name} onChange={(event) => setName(event.target.value)} /></label><label className="field"><span>标识</span><input value={identity} onChange={(event) => setIdentity(event.target.value)} /></label></div><label className="field"><span>标签 <small>用逗号分隔，可留空</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} /></label>{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <label className="field"><span>详细额度接口路径</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} /></label>}<div className="form-grid"><label className="field"><span>请求超时（秒）<small>5–120，默认 15；跨境或代理网络可调大</small></span><input type="number" min="5" max="120" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.target.value)} placeholder="15" /></label></div><div className="field"><span>额度窗口</span><div className="window-choice">{availableWindows.map((key) => <button type="button" key={key} className={`window-choice-item ${selected.includes(key) ? 'selected' : ''}`} onClick={() => toggle(key)}><span>{selected.includes(key) ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>)}</div></div>{account.cliAuthSource === 'snapshot' && <div className="adapter-note"><ShieldCheck size={15} /><span>{cliProvider && (provider?.requestConfig?.adapterMode === 'kimi' || provider?.adapter === 'kimi') ? '该账号使用扫码导入的 Kimi 订阅登录快照：令牌由本应用自动续期；若登录在官方侧失效，请重新扫码「导入订阅登录」。' : '该账号使用独立的登录快照：令牌由本应用自动续期，不依赖本机 CLI 当前激活的 profile；若登录在官方侧失效，请重新登录后再次「导入订阅登录」。'}</span></div>}{variableDefinitions.length > 0 && <div className="adapter-config account-variables"><span className="eyebrow">厂商变量</span><div className="form-grid">{variableDefinitions.map((item) => { const lockedKey = item.system && item.key === 'apiKey'; return <label className="field" key={item.key}><span>{item.label || item.key}{lockedKey ? <small> 创建后不可修改</small> : item.secret && <small> 留空保留原值</small>}</span><input type={item.secret ? 'password' : 'text'} required={item.required && !item.secret} disabled={lockedKey} value={lockedKey ? '' : (variableValues[item.key] ?? '')} onChange={(event) => setVariableValues((old) => ({ ...old, [item.key]: event.target.value }))} placeholder={lockedKey ? '如需更换请删除账号后重新添加' : item.secret ? '未修改' : (item.defaultValue || item.key)} /></label>; })}</div></div>}{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <div className="adapter-note"><KeyRound size={15} /><span>凭据创建后不可修改；如需更换 API Token，请删除该账号后重新添加。</span></div>}<ProviderUsageConnectionCard account={account} provider={provider} onState={onProviderUsageState} />{testResult && <div className={`draft-test-result ${testResult.ok ? 'ok' : 'fail'}`}><span>{testResult.ok ? '测试通过' : '测试失败'} · {testResult.message}</span></div>}<div className="modal-actions"><button type="button" className="outline-button" onClick={onClose}>取消</button><button type="button" className="outline-button" disabled={testing || !name.trim() || (!cliProvider && !accountEndpoint) || !selected.length} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" disabled={saving || !selected.length}>{saving ? '正在保存' : '保存'}</button></div></form></div>;
+  return <div className="modal-backdrop" onClick={onClose}><form className="modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><h2>编辑 {account.name}</h2></div></div><div className="form-grid"><label className="field"><span>账号名</span><input required value={name} onChange={(event) => setName(event.target.value)} /></label><label className="field"><span>标识</span><input value={identity} onChange={(event) => setIdentity(event.target.value)} /></label></div><label className="field"><span>标签 <small>用逗号分隔，可留空</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} /></label>{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <label className="field"><span>详细额度接口路径</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} /></label>}<div className="form-grid"><label className="field"><span>请求超时（秒）<small>5–120，默认 15；跨境或代理网络可调大</small></span><input type="number" min="5" max="120" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.target.value)} placeholder="15" /></label></div><div className="field"><span>额度窗口</span><div className="window-choice">{availableWindows.map((key) => <button type="button" key={key} className={`window-choice-item ${selected.includes(key) ? 'selected' : ''}`} onClick={() => toggle(key)}><span>{selected.includes(key) ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>)}</div></div>{account.cliAuthSource === 'snapshot' && <div className="adapter-note"><ShieldCheck size={15} /><span>{cliProvider && (provider?.requestConfig?.adapterMode === 'kimi' || provider?.adapter === 'kimi') ? '该账号使用扫码导入的 Kimi 订阅登录快照：令牌由本应用自动续期；若登录在官方侧失效，请重新扫码「导入订阅登录」。' : cliProvider && (provider?.requestConfig?.adapterMode === 'copilot' || provider?.adapter === 'copilot') ? '该账号使用设备码授权的 GitHub 登录快照：令牌长期有效、无需续期；若授权被吊销或已改密，请重新「导入订阅登录」完成设备码授权。' : '该账号使用独立的登录快照：令牌由本应用自动续期，不依赖本机 CLI 当前激活的 profile；若登录在官方侧失效，请重新登录后再次「导入订阅登录」。'}</span></div>}{variableDefinitions.length > 0 && <div className="adapter-config account-variables"><span className="eyebrow">厂商变量</span><div className="form-grid">{variableDefinitions.map((item) => { const lockedKey = item.system && item.key === 'apiKey'; return <label className="field" key={item.key}><span>{item.label || item.key}{lockedKey ? <small> 创建后不可修改</small> : item.secret && <small> 留空保留原值</small>}</span><input type={item.secret ? 'password' : 'text'} required={item.required && !item.secret} disabled={lockedKey} value={lockedKey ? '' : (variableValues[item.key] ?? '')} onChange={(event) => setVariableValues((old) => ({ ...old, [item.key]: event.target.value }))} placeholder={lockedKey ? '如需更换请删除账号后重新添加' : item.secret ? '未修改' : (item.defaultValue || item.key)} /></label>; })}</div></div>}{!['script', 'grok'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <div className="adapter-note"><KeyRound size={15} /><span>凭据创建后不可修改；如需更换 API Token，请删除该账号后重新添加。</span></div>}<ProviderUsageConnectionCard account={account} provider={provider} onState={onProviderUsageState} />{testResult && <div className={`draft-test-result ${testResult.ok ? 'ok' : 'fail'}`}><span>{testResult.ok ? '测试通过' : '测试失败'} · {testResult.message}</span></div>}<div className="modal-actions"><button type="button" className="outline-button" onClick={onClose}>取消</button><button type="button" className="outline-button" disabled={testing || !name.trim() || (!cliProvider && !accountEndpoint) || !selected.length} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" disabled={saving || !selected.length}>{saving ? '正在保存' : '保存'}</button></div></form></div>;
 }
 
 function ProviderModalV2({ provider, onClose, onSave }) {
@@ -2140,7 +2149,218 @@ function KimiQrPanel({ mode = 'import', reloginAccount = null, onExit, onImporte
   </>;
 }
 
-function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClose, onImported, onSaveAccount, onTestDraft }) {
+// GitHub 设备码轮询的基础间隔：GitHub 给该客户端的 interval 是 5 秒，加 300ms 余量
+// 避免贴着边界发被限频（slow_down 后间隔自动 +5 秒，上限 30 秒）
+const COPILOT_POLL_GAP_MS = 5_300;
+
+// GitHub Copilot 设备码登录面板（无弹窗壳，两种宿主共用）：与 Kimi 扫码同一两步模式——
+// 第一步展示设备码并拉起浏览器完成 GitHub 授权，第二步确认账号名 / 标签后导入
+// （import 新建账号 / relogin 回写原账号）。轮询间隔用 GitHub 返回的 interval；
+// 令牌全程只留在主进程，渲染层只拿设备码与 GitHub 登录名。
+function CopilotDevicePanel({ mode = 'import', reloginAccount = null, onExit, onImported, onFinish, onToast = null, exitLabel = '退出' }) {
+  const bridge = window.quotaDesk;
+  const [session, setSession] = useState(null); // { key, userCode, verificationUri, interval, step, status, message, display }
+  const [draft, setDraft] = useState(() => mode === 'relogin'
+    ? { name: reloginAccount?.name || 'GitHub Copilot', tags: (reloginAccount?.tags || []).join(', ') }
+    : { name: 'GitHub Copilot', tags: '日常' });
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  // 一次性守卫：授权成功只认一次（轮询的相邻两拍都可能看到 success）；导入只允许点一次
+  const settledRef = useRef(false);
+  const importingRef = useRef(false);
+  const onImportedRef = useRef(onImported);
+  onImportedRef.current = onImported;
+  const onFinishRef = useRef(onFinish);
+  onFinishRef.current = onFinish;
+  const confirm = () => {
+    if (importingRef.current || !settledRef.current || !session?.key) return;
+    importingRef.current = true;
+    setSession((old) => ({ ...old, status: 'importing', message: '' }));
+    const options = {
+      ...(mode === 'relogin' ? { accountId: reloginAccount?.id } : {}),
+      name: String(draftRef.current?.name || '').trim(),
+      tags: String(draftRef.current?.tags || '').split(',').map((tag) => tag.trim()).filter(Boolean),
+    };
+    bridge?.importCopilotDeviceLogin?.(session.key, options).then((imported) => {
+      if (imported?.duplicate) {
+        // 授权的 GitHub 账号属于另一个已收录账号：device_code 已消费，只能换号重新授权
+        importingRef.current = false;
+        setSession((old) => ({ ...old, status: 'error', message: `该 GitHub 账号已是账号「${imported.name}」的登录，请换一个账号重新授权` }));
+        return;
+      }
+      onImportedRef.current?.('copilot', imported);
+      onFinishRef.current?.();
+    }).catch((importError) => {
+      importingRef.current = false;
+      setSession((old) => ({ ...old, status: 'error', message: importError.message }));
+    });
+  };
+  const start = async () => {
+    settledRef.current = false;
+    importingRef.current = false;
+    gapRef.current = COPILOT_POLL_GAP_MS;
+    lastPollAtRef.current = 0;
+    setSession({ key: null, userCode: '', verificationUri: '', step: 'authorize', status: 'pending', message: '', display: '' });
+    try {
+      const created = await bridge?.startCopilotDeviceLogin?.();
+      if (!created?.key || !created?.userCode) throw new Error('设备码创建失败');
+      setSession({ key: created.key, userCode: created.userCode, verificationUri: created.verificationUri || 'https://github.com/login/device', step: 'authorize', status: 'pending', message: '', display: '' });
+      // 设备码下发即拉起浏览器授权页；没自动打开时也可手动重开
+      bridge?.openExternal?.(created.verificationUri || 'https://github.com/login/device');
+    } catch (startError) {
+      setSession({ key: null, userCode: '', verificationUri: '', step: 'authorize', status: 'error', message: startError.message, display: '' });
+    }
+  };
+  useEffect(() => { start(); }, []);
+  // GitHub 设备码限频：两次查询必须间隔 ≥ interval 秒，发快了回 slow_down 且 interval +5s。
+  // 轮询节奏用「自调度 setTimeout 链」管理，间隔变化（slow_down 加长）不会重置链；
+  // 自动轮询全程静默，只有用户点「立即检测」才以轻提示给出这一次的结论。
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const [checking, setChecking] = useState(false);
+  const checkingRef = useRef(false);
+  const lastPollAtRef = useRef(0); // 上次查询发出的时刻（手动/自动共用，限频判定）
+  const gapRef = useRef(COPILOT_POLL_GAP_MS); // 当前查询间隔（slow_down 时静默加长，上限 30 秒）
+  // 轮询结果统一处理（自动与手动共用）：只推进界面状态，不产生提示
+  const handlePolled = (polled) => {
+    if (!polled) return;
+    if (polled.status === 'success') {
+      if (settledRef.current) return;
+      settledRef.current = true;
+      setSession((old) => ({ ...old, step: 'configure', status: 'confirmed', display: polled.display || '' }));
+    } else if (polled.status === 'expired') setSession((old) => ({ ...old, status: 'expired' }));
+    else if (polled.status === 'denied') setSession((old) => ({ ...old, status: 'denied' }));
+    else if (polled.status === 'pending') {
+      if (polled.error === 'slow_down') {
+        // GitHub 要求放慢：间隔 +5 秒（上限 30 秒）。只改 ref，不触碰轮询链，
+        // 下一次自动查询自然用新间隔——绝不能因间隔变化重建定时器（否则节奏清零又会超频）
+        gapRef.current = Math.min(30_000, gapRef.current + 5_000);
+      } else if (polled.error) {
+        // 其它轮询失败（网络/代理）不中断等待，错误写进状态行可见，恢复后自动继续
+        setSession((old) => ({ ...old, message: String(polled.error) }));
+      }
+    }
+  };
+  const handlePolledRef = useRef(handlePolled);
+  handlePolledRef.current = handlePolled;
+  const sendPoll = async () => {
+    const key = sessionRef.current?.key;
+    if (!key) return null;
+    lastPollAtRef.current = Date.now();
+    try {
+      const polled = await bridge?.pollCopilotDeviceLogin?.(key);
+      handlePolledRef.current?.(polled);
+      return polled;
+    } catch (pollError) {
+      const fallback = { status: 'pending', error: pollError?.message || '轮询请求失败' };
+      handlePolledRef.current?.(fallback);
+      return fallback;
+    }
+  };
+  // 「我已授权」：无倒计时——限频间隔内静默等到允许时刻再发，期间只显示「检测中…」；
+  // 结论以页面顶部的轻提示（toast）反馈，成功则直接进入第二步（界面切换即是反馈）
+  const checkNow = async () => {
+    if (checkingRef.current) return;
+    checkingRef.current = true;
+    setChecking(true);
+    try {
+      const waitMs = lastPollAtRef.current ? Math.max(0, gapRef.current - (Date.now() - lastPollAtRef.current)) : 0;
+      if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+      if (settledRef.current || (sessionRef.current?.step || 'authorize') !== 'authorize') return;
+      const polled = await sendPoll();
+      if (polled?.status === 'pending') {
+        onToast?.({
+          id: Date.now(),
+          ok: false,
+          message: polled.error === 'slow_down'
+            ? '查询太频繁（GitHub 限频），自动轮询稍后会继续'
+            : polled.error
+              ? `检测失败：${polled.error}`
+              : 'GitHub 显示该设备码尚未被授权：请确认浏览器里输入的码与面板当前一致',
+        });
+      }
+    } finally {
+      checkingRef.current = false;
+      setChecking(false);
+    }
+  };
+  // 自动轮询：自调度链式 setTimeout，间隔取 gapRef 的实时值；首拍就按完整间隔发，
+  // 不做提前查询（提前发会被 GitHub 判 slow_down，并连带加长间隔）
+  useEffect(() => {
+    if (!session?.key || session.step !== 'authorize' || session.status !== 'pending') return undefined;
+    let active = true;
+    let timer = null;
+    const schedule = () => {
+      if (!active) return;
+      timer = setTimeout(async () => {
+        if (!active) return;
+        await sendPoll();
+        schedule();
+      }, gapRef.current + 300); // +300ms 余量：贴着 interval 边界发也可能被判超频
+    };
+    schedule();
+    return () => { active = false; if (timer) clearTimeout(timer); };
+    // 刻意不含 gap：间隔变化不得重置轮询链（见 handlePolled 的 slow_down 分支）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.key, session?.step, session?.status, bridge]);
+  const status = session?.status || 'pending';
+  const step = session?.step || 'authorize';
+  const importing = status === 'importing';
+  const stale = ['expired', 'denied', 'error'].includes(status);
+  const statusCopy = {
+    pending: session?.message
+      ? `等待授权中…（轮询异常，正在重试：${session.message}；若持续失败请在「设置 → 网络代理」配置代理）`
+      : '在打开的 GitHub 页面输入设备码并确认授权',
+    denied: '已在 GitHub 拒绝授权，点击刷新重试',
+    expired: '设备码已过期，点击刷新',
+    error: session?.message || '出错了，请重试',
+  }[status] || '';
+  const copyUserCode = () => {
+    if (!session?.userCode) return;
+    navigator.clipboard?.writeText?.(session.userCode).catch(() => {});
+  };
+  return <>
+    <div className="modal-head"><div><h2>{mode === 'relogin' ? '重新授权登录' : '添加 GitHub Copilot'}<TitleHelp>{mode === 'relogin'
+      ? 'GitHub 授权已失效：重新走一次设备码授权即可恢复，账号名与标签在第二步可顺手修改。'
+      : '设备码授权 GitHub 账号：令牌加密保存在本机，读取 Copilot「补充请求」月度额度（premium requests，每月 1 号重置）。'}</TitleHelp></h2></div></div>
+    {step === 'authorize'
+      ? <div className="copilot-device-stage">
+        <div className={`copilot-code-frame ${stale ? 'stale' : ''}`} role="button" tabIndex={0} title="点击复制设备码" aria-label="复制设备码" onClick={copyUserCode} onKeyDown={(event) => { if (event.key === 'Enter') copyUserCode(); }}>
+          <small>设备码（点击复制）</small>
+          <b>{session?.userCode || '······-······'}</b>
+        </div>
+        {stale
+          ? <button type="button" className="primary-button copilot-open-button" onClick={start}><RefreshCw size={13} /> 刷新设备码</button>
+          : <div className="copilot-stage-actions">
+            <button type="button" className="outline-button copilot-open-button" onClick={() => { if (session?.verificationUri) bridge?.openExternal?.(session.verificationUri); }}><ExternalLink size={13} /> 打开 GitHub 授权页</button>
+            <button type="button" className="outline-button" disabled={checking} onClick={checkNow} title="已在浏览器完成授权？点击立即向 GitHub 查询该设备码的授权状态">{checking ? '检测中…' : '我已授权'}</button>
+          </div>}
+        <small className={`kimi-qr-status ${stale ? 'fail' : ''}`}>{statusCopy}</small>
+      </div>
+      : <div className="kimi-qr-configure">
+        <div className="kimi-qr-ok">
+          <span className="kimi-qr-done-icon"><Check size={18} /></span>
+          <div><b>授权成功</b>{session?.display && <small>标识：{session.display}</small>}</div>
+        </div>
+        {status === 'error' && <div className="adapter-note update-error"><AlertCircle size={15} /><span>{statusCopy}</span></div>}
+        {importing && <div className="adapter-note"><RefreshCw size={15} className="spinning" /><span>正在导入，请稍候…</span></div>}
+        <div className="form-grid">
+          <label className="field"><span>账号名 <small>留空则用渠道名</small></span><input value={draft.name} onChange={(event) => setDraft((old) => ({ ...old, name: event.target.value }))} placeholder="GitHub Copilot" disabled={importing} /></label>
+          <label className="field"><span>标签 <small>逗号分隔，可留空</small></span><input value={draft.tags} onChange={(event) => setDraft((old) => ({ ...old, tags: event.target.value }))} placeholder="日常, 主力" disabled={importing} /></label>
+        </div>
+      </div>}
+    <div className="modal-actions">
+      {step === 'authorize'
+        ? <button type="button" className="outline-button" onClick={onExit}>{exitLabel}</button>
+        : <>
+          <button type="button" className="outline-button" disabled={importing} onClick={start}><RefreshCw size={13} /> 重新授权</button>
+          <button type="button" className="primary-button" disabled={importing || status === 'error'} onClick={confirm}>{importing ? '正在导入…' : '完成'}</button>
+        </>}
+    </div>
+  </>;
+}
+
+function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClose, onImported, onSaveAccount, onTestDraft, onToast = null }) {
   const bridge = window.quotaDesk;
   const [logins, setLogins] = useState(null);
   const [error, setError] = useState('');
@@ -2148,6 +2368,8 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
   const [imported, setImported] = useState({});
   // Kimi 订阅扫码：同一个弹窗内切换视图（列表 ↔ 扫码），窗口尺寸恒定不变
   const [kimiQrOpen, setKimiQrOpen] = useState(false);
+  // GitHub Copilot 设备码：与 Kimi 同一模式，列表只是入口，点击进入授权视图（同窗口）
+  const [copilotOpen, setCopilotOpen] = useState(false);
   // CLI 渠道与 Kimi 同一模式：列表只是入口，点击进入渠道详情视图（同窗口）填写信息再导入
   const reloginKind = reloginAccount ? (CLI_LOGIN_KINDS.find((channel) => channel.providerId === reloginAccount.providerId)?.kind || null) : null;
   const [selectedKind, setSelectedKind] = useState(reloginKind);
@@ -2179,6 +2401,7 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
   const channels = [
     ...CLI_LOGIN_KINDS.map((channel) => ({ ...channel, kimi: false })),
     ...(bridge?.startKimiQrLogin ? [{ kind: 'kimi-subscription', name: 'Kimi 订阅', providerId: 'kimi-subscription', kimi: true }] : []),
+    ...(bridge?.startCopilotDeviceLogin ? [{ kind: 'copilot', name: 'GitHub Copilot', providerId: 'copilot', copilot: true }] : []),
     // 「⋯」自定义账号入口必须永远放在最后一个磁贴：以后新增渠道时请插到它前面，不要改动它的位置
     { kind: 'custom-account', name: '自定义账号', custom: true },
   ];
@@ -2189,7 +2412,12 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
         setImported((old) => ({ ...old, 'kimi-subscription': true }));
         onImported('kimi-subscription', result);
       }} />
-      : customOpen
+      : copilotOpen
+        ? <CopilotDevicePanel mode="import" exitLabel="返回" onExit={() => setCopilotOpen(false)} onFinish={onClose} onToast={onToast} onImported={(_kind, result) => {
+          setImported((old) => ({ ...old, copilot: true }));
+          onImported('copilot', result);
+        }} />
+        : customOpen
         ? <AccountModalV2 providers={providers} embedded onBack={() => setCustomOpen(false)} onClose={onClose} onSave={onSaveAccount} onTestDraft={onTestDraft} />
         : selected
         ? (() => {
@@ -2238,6 +2466,13 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
             const done = imported['kimi-subscription'];
             const title = done ? 'Kimi 订阅 · 本次已导入' : 'Kimi 订阅 · 手机扫码登录，含月订阅额度，点击导入';
             return <button type="button" key={channel.kind} className={`import-tile ${done ? 'is-disabled' : ''}`} title={title} aria-label={title} onClick={() => { if (!done) setKimiQrOpen(true); }}>
+              <Logo provider={provider} interactive={false} />
+            </button>;
+          }
+          if (channel.copilot) {
+            const done = imported.copilot;
+            const title = done ? 'GitHub Copilot · 本次已导入' : 'GitHub Copilot · 设备码授权 GitHub 账号，读取「补充请求」月度额度，点击导入';
+            return <button type="button" key={channel.kind} className={`import-tile ${done ? 'is-disabled' : ''}`} title={title} aria-label={title} onClick={() => { if (!done) setCopilotOpen(true); }}>
               <Logo provider={provider} interactive={false} />
             </button>;
           }
@@ -2585,13 +2820,13 @@ function App() {
     <header className="titlebar"><span className="titlebar-drag"><img src="./quota-desk.svg" alt="" /><b>Quota Desk</b></span><div className="titlebar-controls"><span className="last-checked" title="最后一次额度检查时间"><Clock3 size={11} />{formatChecked(lastSync)}</span>{update && ['available', 'downloading', 'downloaded', 'error'].includes(update.status) && <button className={`update-badge ${update.status}`} onClick={() => setUpdateOpen(true)} title="查看版本更新"><Download size={11} />{update.status === 'available' && `v${update.version} 可更新`}{update.status === 'downloading' && `下载中 ${update.percent || 0}%`}{update.status === 'downloaded' && '重启升级'}{update.status === 'error' && '更新失败'}</button>}<button className="control-solo" onClick={refreshAll} disabled={refreshing} title="立即刷新全部账号" aria-label="立即刷新全部账号"><RefreshCw size={13} className={refreshing ? 'spinning' : ''} /></button><div className="overview-controls" aria-label="账号总览展示方式"><button className={overviewMode === 'rings' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rings'); }} title="账号总览" aria-label="账号总览"><CircleGauge size={13} /></button><button className={overviewMode === 'rows' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rows'); }} title="行式明细" aria-label="行式明细"><Rows3 size={13} /></button><button className={overviewMode === 'periods' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('periods'); }} title="周期明细" aria-label="周期明细"><Clock3 size={13} /></button></div></div><div className="titlebar-actions"><button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={13} /></button>{bridge && <><button className={pinned ? 'active' : ''} title={pinned ? '取消固定' : '固定在桌面最前面'} aria-label="固定在桌面最前面" onClick={async () => setPinned(await bridge.togglePin())}><Pin size={13} /></button><button title="关闭到托盘" aria-label="关闭到托盘" onClick={() => bridge.closeMainWindow()}><X size={14} /></button></>}</div></header>
     {toast && <div className={`toast ${toast.ok ? 'ok' : 'fail'}`} role="status">{toast.ok ? <Check size={13} /> : <AlertCircle size={13} />}<span>{toast.message}</span></div>}
     <main className="main-shell">
-      <div className="content-area">{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{accounts.length === 0 ? <section className="empty-workspace"><div className="empty-mark"><CircleGauge size={22} /></div><div><h2>把第一份 Coding Plan 接进来</h2><p>凭据将由 Windows 加密保存，额度请求只在本机发出。</p></div><button className="primary-button" onClick={() => setModal('account')}><Plus size={15} /> 添加账号</button><button className="outline-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> 设置</button>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button" onClick={() => setModal('import-ccswitch')}><Download size={15} /> 从 cc-switch 导入</button>}</section> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} onProviderUsageState={applyProviderUsageState} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} onReorderAccounts={reorderAccounts} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const adapterMode = provider?.requestConfig?.adapterMode || provider?.adapter; setModal({ type: adapterMode === 'grok' ? 'grok-relogin' : 'kimi-relogin', account }); }} />}</div>
+      <div className="content-area">{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{accounts.length === 0 ? <section className="empty-workspace"><div className="empty-mark"><CircleGauge size={22} /></div><div><h2>把第一份 Coding Plan 接进来</h2><p>凭据将由 Windows 加密保存，额度请求只在本机发出。</p></div><button className="primary-button" onClick={() => setModal('account')}><Plus size={15} /> 添加账号</button><button className="outline-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> 设置</button>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button" onClick={() => setModal('import-ccswitch')}><Download size={15} /> 从 cc-switch 导入</button>}</section> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} onProviderUsageState={applyProviderUsageState} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} onReorderAccounts={reorderAccounts} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const kind = reloginChannel(provider)?.kind || 'kimi'; setModal({ type: `${kind}-relogin`, account }); }} />}</div>
     </main>
     {settingsOpen && <SettingsDrawer accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)} openModal={setModal} onDeleteAccount={deleteAccount} onToggleAccountDisabled={toggleAccountDisabled} onTestAccount={testAccount} testingAccountId={testingAccountId} onEditProvider={editProvider} autoLaunch={autoLaunch} onToggleAutoLaunch={toggleAutoLaunch} appVersion={appVersion} update={update} onOpenUpdate={() => setUpdateOpen(true)} onCheckUpdate={onCheckUpdate} onClearHistory={clearHistory} runtime={runtime} />}
     {confirmState && <ConfirmModal confirm={confirmState} onClose={() => setConfirmState(null)} />}
     {updateOpen && update && <UpdateModal update={update} version={appVersion} onClose={() => setUpdateOpen(false)} />}
     {settings.widgetPreview && <WidgetPreview account={currentWidgetAccount} provider={currentWidgetProvider} tagLimit={Number(settings.widgetTagLimit ?? 2)} scale={settings.widgetScale} length={settings.widgetLength} onClose={() => setSettings((old) => ({ ...old, widgetPreview: false }))} />}
-    {(modal === 'account' || modal === 'import-cli') && <ImportCliLoginModal accounts={accounts} providers={providers} onClose={() => setModal(null)} onSaveAccount={saveAccount} onTestDraft={testDraft} onImported={(_kind, result) => {
+    {(modal === 'account' || modal === 'import-cli') && <ImportCliLoginModal accounts={accounts} providers={providers} onClose={() => setModal(null)} onSaveAccount={saveAccount} onTestDraft={testDraft} onToast={setToast} onImported={(_kind, result) => {
       if (result?.state) { setAccounts(result.state.accounts || []); setProviders(result.state.providers || []); setLastSync(result.state.lastSync || new Date().toISOString()); if (result.state.runtime) setRuntime(result.state.runtime); }
       lastSaved.current = '';
       setToast({ id: Date.now(), ok: !result?.duplicate, message: result?.duplicate ? `该登录已收录在账号「${result.name}」中` : `已导入「${result.name}」，正在刷新额度` });
@@ -2605,7 +2840,7 @@ function App() {
       setModal(null);
       setToast({ id: Date.now(), ok: result?.imported > 0, message: result?.imported > 0 ? `已从 cc-switch 导入 ${result.imported} 个账号` : '没有导入新账号（Key 都已存在）' });
     }} />}
-    {modal?.type === 'grok-relogin' && <ImportCliLoginModal accounts={accounts} providers={providers} reloginAccount={modal.account} onSaveAccount={saveAccount} onTestDraft={testDraft} onClose={() => setModal(null)} onImported={(_kind, result) => {
+    {modal?.type === 'grok-relogin' && <ImportCliLoginModal accounts={accounts} providers={providers} reloginAccount={modal.account} onSaveAccount={saveAccount} onTestDraft={testDraft} onClose={() => setModal(null)} onToast={setToast} onImported={(_kind, result) => {
       if (result?.state) { setAccounts(result.state.accounts || []); setProviders(result.state.providers || []); setLastSync(result.state.lastSync || new Date().toISOString()); if (result.state.runtime) setRuntime(result.state.runtime); }
       lastSaved.current = '';
       setModal(null);
@@ -2616,6 +2851,13 @@ function App() {
         if (result?.state) { setAccounts(result.state.accounts || []); setProviders(result.state.providers || []); setLastSync(result.state.lastSync || new Date().toISOString()); if (result.state.runtime) setRuntime(result.state.runtime); }
         lastSaved.current = '';
         setToast({ id: Date.now(), ok: !result?.duplicate, message: result?.duplicate ? `该登录已收录在账号「${result.name}」中，请换一个账号扫码` : `已重新登录「${result.name}」，正在刷新额度` });
+      }} />
+    </div></div>}
+    {modal?.type === 'copilot-relogin' && <div className="modal-backdrop" onClick={() => setModal(null)}><div className="modal compact-modal import-modal kimi-qr-modal import-window" onClick={(event) => event.stopPropagation()}>
+      <CopilotDevicePanel mode="relogin" reloginAccount={modal.account} onExit={() => setModal(null)} onFinish={() => setModal(null)} onToast={setToast} onImported={(_kind, result) => {
+        if (result?.state) { setAccounts(result.state.accounts || []); setProviders(result.state.providers || []); setLastSync(result.state.lastSync || new Date().toISOString()); if (result.state.runtime) setRuntime(result.state.runtime); }
+        lastSaved.current = '';
+        setToast({ id: Date.now(), ok: !result?.duplicate, message: result?.duplicate ? `该 GitHub 账号已收录在账号「${result.name}」中，请换一个账号授权` : `已重新授权「${result.name}」，正在刷新额度` });
       }} />
     </div></div>}
   </div>;
