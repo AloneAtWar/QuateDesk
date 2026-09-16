@@ -487,7 +487,12 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .update-badge.downloading { background: var(--green-deep); }
 .update-badge.downloaded { background: var(--green-deep); }
 .update-badge.error { background: #b4552f; }
-.update-modal .release-notes { white-space: pre-wrap; max-height: 220px; overflow-y: auto; margin: 12px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); font-size: 12px; line-height: 1.65; }
+/* 主窗口固定 520×470，弹窗 max-height 约 374px：改为纵向 flex 布局，
+   更新说明是唯一弹性区域、在内部滚动，标题与操作按钮永远可见 */
+.update-modal { display: flex; flex-direction: column; }
+.update-modal .release-notes { white-space: pre-wrap; flex: 1 1 auto; min-height: 48px; overflow-y: auto; margin: 12px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); font-size: 12px; line-height: 1.65; }
+.update-modal .modal-actions { flex: 0 0 auto; margin-top: 12px; padding-top: 13px; }
+.update-modal .ignore-button { margin-right: auto; }
 .update-modal .update-error { color: var(--coral-deep); }
 .update-progress { height: 6px; margin: 12px 0; border-radius: 4px; background: var(--meter-track); overflow: hidden; }
 .update-progress i { display: block; height: 100%; border-radius: 4px; background: var(--coral); transition: width .2s ease; }
