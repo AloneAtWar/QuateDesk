@@ -139,7 +139,7 @@ button { cursor: pointer; }
 .ring-1 { --ring-index: 1; --ring-color: #8370df; }
 .ring-2 { --ring-index: 2; --ring-color: #e47b62; }
 .ring-3 { --ring-index: 3; --ring-color: #68aa7c; }
-.ring-core { position: absolute; inset: 25px; display: grid; place-items: center; align-content: center; border-radius: 50%; color: var(--green-deep); background: var(--surface-2); box-shadow: 0 0 0 1px var(--line); text-align: center; }
+.ring-core { position: absolute; inset: 25px; display: grid; place-items: center; align-content: start; border-radius: 50%; color: var(--green-deep); background: var(--surface-2); box-shadow: 0 0 0 1px var(--line); text-align: center; }
 .ring-core strong { max-width: 56px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; line-height: 1; }
 .ring-core small { color: var(--faint); font-size: 8px; }
 .ring-core em { max-width: 58px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font-size: 7px; font-style: normal; }
@@ -530,13 +530,20 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .import-window > .import-grid, .import-window > .kimi-qr-stage, .import-window > .kimi-qr-configure, .import-window > .cli-import-stage, .import-window > .copilot-device-stage, .import-window > .custom-account-scroll { flex: 1 1 auto; min-height: 0; }
 .import-window > .modal-actions { margin-top: auto; padding-top: 13px; }
 .import-window > .import-grid { overflow-y: auto; }
-/* 订阅登录导入：每个渠道一个方形 Logo 按钮；不可用（未登录 / 已收录）置灰，原因写在悬停提示里 */
-.import-grid { display: flex; flex-wrap: wrap; gap: 14px; align-content: center; justify-content: center; max-width: 214px; margin: 0 auto; padding: 12px 0; }
-.import-tile { width: 62px; height: 62px; display: grid; place-items: center; padding: 9px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface-2); cursor: pointer; transition: transform .12s ease-out, border-color .12s ease-out, box-shadow .12s ease-out, filter .12s ease-out, opacity .12s ease-out; }
-.import-tile .provider-logo { width: 100%; height: 100%; border-radius: 11px; font-size: 16px; }
-.import-tile:hover:not(.is-disabled) { border-color: var(--focus-border); box-shadow: 0 8px 18px rgba(30, 41, 42, .14); transform: translateY(-2px); }
+/* 订阅登录导入：每行三个厂商磁贴，网格占满弹窗高度；右侧留白 26px 让滚动条离磁贴远一些；
+   磁贴不超过 9 个时滚动条不显示，滚到底部留 10px 空白。不可用（未登录 / 已收录）置灰 */
+.import-grid { display: grid; grid-template-columns: repeat(3, 68px); gap: 15px 17px; align-content: start; justify-content: center; height: 100%; margin: 0 auto; padding: 8px 26px 12px 8px; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
+.import-tile { width: 68px; height: 68px; display: grid; place-items: center; padding: 10px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface-2); cursor: pointer; touch-action: none; user-select: none; transition: transform .12s ease-out, border-color .12s ease-out, box-shadow .12s ease-out, filter .12s ease-out, opacity .12s ease-out; }
+.import-tile .provider-logo { width: 100%; height: 100%; border-radius: 11px; font-size: 16px; pointer-events: none; }
+.import-tile .provider-logo img { -webkit-user-drag: none; user-select: none; }
+.import-tile:hover:not(.is-disabled):not(.is-dragging) { border-color: var(--focus-border); box-shadow: 0 8px 18px rgba(30, 41, 42, .14); transform: translateY(-2px); }
+.import-tile.is-dragging { opacity: .55; transform: scale(.94); cursor: grabbing; }
+.import-tile.is-over { border-color: var(--focus-border); border-style: dashed; box-shadow: 0 0 0 3px var(--focus-ring); }
 .import-tile.is-disabled { cursor: not-allowed; filter: grayscale(1); opacity: .42; }
 .import-tile > svg { color: var(--muted); }
+.import-grid::-webkit-scrollbar { width: 8px; }
+.import-grid::-webkit-scrollbar-thumb { border-radius: 4px; background: var(--scrollbar); border: 2px solid transparent; background-clip: content-box; }
+.import-grid::-webkit-scrollbar-track { background: transparent; }
 /* 「添加账号」弹窗内的自定义账号表单：内容区滚动，标题 / 操作条固定，窗口尺寸与其它视图一致 */
 .custom-account-scroll { display: block; overflow-y: auto; padding: 0 2px 6px; }
 .custom-account-scroll .field input, .custom-account-scroll .field select { height: 33px; }
