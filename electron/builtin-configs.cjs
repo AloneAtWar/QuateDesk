@@ -37,6 +37,9 @@ const builtinConfigs = {
   // Grok 订阅走专属适配（poller.cjs queryGrokSubscription）：读本机 grok CLI 凭据查 grok.com 计费端点，无需用户填任何凭据
   // Grok 订阅走专属适配（poller.cjs queryGrokSubscription）：读本机 grok CLI 凭据查 grok.com 计费端点，无需用户填任何凭据；Grok 只有周额度，没有月额度
   grok: { windows: ['weekly'], wasteWindows: ['weekly'], adapterMode: 'grok', auth: 'none', credentialRequired: false },
+  // Grok Bot（xAI 的 AI 队友）：专属适配（cli-quota.cjs queryGrokBotUsage），凭据来自「导入订阅登录」
+  // 收录的本机 Grok Bot 客户端登录快照；Bot 的周额度与 Grok 聊天额度独立（挂 Cursor 后端计量）
+  grokbot: { windows: ['weekly'], wasteWindows: ['weekly'], adapterMode: 'grokbot', auth: 'none', credentialRequired: false },
   // MiniMax Coding Plan（规则移植自 cc-switch coding_plan.rs）：model_remains 里 model_name=general 的 5 小时/周剩余百分比
   minimax: {
     endpoint: 'https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains',

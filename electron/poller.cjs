@@ -352,7 +352,7 @@ async function queryAccountOnce(account, provider, credential, fetcher = fetch, 
   // CLI 凭据类订阅是专属适配：凭据优先来自账号自己的登录快照（variables 里，DPAPI 加密），
   // 没有快照时回落本机 CLI 登录态；令牌临期/失效时用 refresh_token 自动续期。
   // 每次尝试（含网络重试）都重新取凭据：上一次尝试可能已续期并轮换 refresh_token
-  if (['claude', 'codex', 'gemini', 'kimi', 'grok', 'copilot'].includes(config.adapterMode)) {
+  if (['claude', 'codex', 'gemini', 'kimi', 'grok', 'copilot', 'grokbot'].includes(config.adapterMode)) {
     const variables = options.getSecretVariables ? options.getSecretVariables() : secretVariables;
     const cliContext = { variables, onAuthUpdate: options.onCliAuth ? (kind, next, previous, source) => options.onCliAuth({ account, kind, next, previous, source }) : undefined };
     if (config.adapterMode === 'claude') return queryClaudeQuota(fetcher, meter, timeoutMs, cliContext);
@@ -360,6 +360,7 @@ async function queryAccountOnce(account, provider, credential, fetcher = fetch, 
     if (config.adapterMode === 'kimi') return queryKimiWebQuota(fetcher, meter, timeoutMs, cliContext);
     if (config.adapterMode === 'grok') return queryGrokSubscription(fetcher, timeoutMs, cliContext);
     if (config.adapterMode === 'copilot') return queryCopilotQuota(fetcher, meter, timeoutMs, cliContext);
+    if (config.adapterMode === 'grokbot') return queryGrokBotUsage(fetcher, meter, timeoutMs, cliContext);
     return queryGeminiQuota(fetcher, meter, timeoutMs, cliContext);
   }
   const credentialRequired = config.adapterMode === 'script' ? config.credentialRequired === true : config.auth !== 'none';
@@ -396,7 +397,7 @@ async function queryAccountOnce(account, provider, credential, fetcher = fetch, 
 // gRPC-web 计费端点 GetGrokCreditsConfig（非公开接口、无 .proto），按字段路径
 // 启发式提取已用百分比与重置时间。令牌续期统一复用 cli-auth.cjs。
 
-const { queryClaudeQuota, queryCodexQuota, queryGeminiQuota, queryKimiWebQuota, queryCopilotQuota } = require('./cli-quota.cjs');
+const { queryClaudeQuota, queryCodexQuota, queryGeminiQuota, queryKimiWebQuota, queryCopilotQuota, queryGrokBotUsage } = require('./cli-quota.cjs');
 
 const GROK_BILLING_ENDPOINT = 'https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig';
 const selectGrokAuthEntry = cliGrok.selectGrokAuthEntry;

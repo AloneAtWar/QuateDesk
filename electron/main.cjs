@@ -325,6 +325,7 @@ const builtinLogos = {
   zai: './logos/zai.svg',
   deepseek: './logos/deepseek.png',
   grok: './logos/grok.png',
+  grokbot: './logos/grokbot.png',
   minimax: './logos/minimax.svg',
   claude: './logos/claude.jpg',
   codex: './logos/codex.svg',
@@ -338,6 +339,7 @@ const builtinWebsites = {
   deepseek: 'https://www.deepseek.com/',
   wlb: 'https://www.wlbclub.com/',
   grok: 'https://grok.com/',
+  grokbot: 'https://x.ai/bot',
   minimax: 'https://platform.minimaxi.com',
   claude: 'https://claude.com/claude-code',
   codex: 'https://developers.openai.com/codex/',
@@ -348,6 +350,7 @@ const builtinWebsites = {
 const ensureCliProviders = (providers) => {
   const cliProviders = [
     { id: 'grok', name: 'Grok', legalName: 'xAI Grok', monogram: 'G', tone: 'slate', adapter: 'grok', logo: './logos/grok.png' },
+    { id: 'grokbot', name: 'Grok Bot', legalName: 'xAI Grok Bot', monogram: 'G', tone: 'slate', adapter: 'grokbot', logo: './logos/grokbot.png' },
     { id: 'minimax', name: 'MiniMax', legalName: 'MiniMax Coding Plan', monogram: 'M', tone: 'mint', adapter: 'minimax', logo: './logos/minimax.svg' },
     { id: 'claude', name: 'Claude', legalName: 'Claude Code', monogram: 'C', tone: 'coral', adapter: 'claude', logo: './logos/claude.jpg' },
     { id: 'codex', name: 'Codex', legalName: 'OpenAI Codex', monogram: 'O', tone: 'mint', adapter: 'codex', logo: './logos/codex.svg' },

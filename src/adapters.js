@@ -53,6 +53,11 @@ export const adapterDefinitions = {
     ...adapterRegistry.grok,
     normalize() { return []; },
   },
+  // Grok Bot（AI 队友客户端）同样由主进程专属适配（读取导入的 Grok Bot 登录快照）提供
+  grokbot: {
+    ...adapterRegistry.grokbot,
+    normalize() { return []; },
+  },
   // 以下厂商同样由主进程专属适配（官方 CLI 登录态 / 官方 Coding Plan 接口），网页演示模式无数据
   minimax: { ...adapterRegistry.minimax, normalize() { return []; } },
   claude: { ...adapterRegistry.claude, normalize() { return []; } },

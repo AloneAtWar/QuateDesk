@@ -14,12 +14,17 @@
 // - Copilot: github.com 设备码授权（VS Code Copilot 同款 client）拿到的 OAuth user token。
 //           该令牌长期有效且没有 refresh_token，失效（吊销/改密）时只能重新设备码登录，
 //           因此没有续期链路；本机 live 文件是 copilot 插件系的 hosts.json。
+// - Grok Bot（xAI 的 AI 队友客户端，Cursor 技术栈 fork）：%APPDATA%/Grok Bot/sand-secrets.json
+//           的当前账号令牌（Chromium os_crypt v10 加密，密钥为 DPAPI 保护的 Local State
+//           os_crypt.encrypted_key）→ api2.cursor.sh/oauth/token（JSON：client_id + refresh_token，
+//           refresh_token 不轮换）；额度查询见 cli-quota.cjs queryGrokBotUsage。
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { execFileSync } = require('node:child_process');
 
-const CLI_KINDS = ['claude', 'codex', 'gemini', 'kimi', 'grok', 'copilot'];
+const CLI_KINDS = ['claude', 'codex', 'gemini', 'kimi', 'grok', 'copilot', 'grokbot'];
 // 快照在加密凭据 variables 里的键名；只在主进程读写，不进渲染进程
 const SNAPSHOT_KEY = 'cliAuthTokenBundle';
 // access token 剩余寿命低于该值时先刷新再用（cc-switch 为 60s，这里留足一次轮询的余量）
@@ -59,6 +64,13 @@ const COPILOT_DEVICE_CODE_URL = 'https://github.com/login/device/code';
 const COPILOT_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 const COPILOT_SCOPE = 'read:user';
 
+// Grok Bot 客户端（Cursor 生产后端）的续期参数；client_id 即 Grok Bot 客户端内置的 WorkOS 生产 ID
+const GROKBOT_TOKEN_URL = 'https://api2.cursor.sh/oauth/token';
+const GROKBOT_CLIENT_ID = 'KbZUR41cY7W6zRSdpSUJOCmB';
+const grokBotDataDir = () => path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'Grok Bot');
+const grokBotSecretsPath = () => path.join(grokBotDataDir(), 'sand-secrets.json');
+const grokBotLocalStatePath = () => path.join(grokBotDataDir(), 'Local State');
+
 const readJsonFile = (filePath) => {
   try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); }
   catch { return null; }
@@ -82,7 +94,80 @@ const liveAuthPath = (kind) => {
 };
 const grokAuthPath = () => liveAuthPath('grok');
 
-const readLiveAuth = (kind) => readJsonFile(liveAuthPath(kind));
+// Windows DPAPI（CurrentUser）：Chromium os_crypt 密钥的解封入口，通过 PowerShell 子进程调用
+const dpapiUnprotect = (bytes) => {
+  const script = [
+    '$b64 = [Console]::In.ReadToEnd().Trim()',
+    'Add-Type -AssemblyName System.Security',
+    '$bytes = [Convert]::FromBase64String($b64)',
+    '$plain = [Security.Cryptography.ProtectedData]::Unprotect($bytes, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)',
+    '[Convert]::ToBase64String($plain)',
+  ].join('; ');
+  const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    input: Buffer.from(bytes).toString('base64'),
+    timeout: 10_000,
+  });
+  return Buffer.from(String(output).trim(), 'base64');
+};
+
+let grokBotOsCryptKey = null;
+// Local State 的 os_crypt.encrypted_key："DPAPI" 前缀 + DPAPI blob → 32 字节 AES key（进程内缓存）
+const readGrokBotOsCryptKey = () => {
+  if (grokBotOsCryptKey) return grokBotOsCryptKey;
+  const localState = readJsonFile(grokBotLocalStatePath());
+  const encoded = localState?.os_crypt?.encrypted_key;
+  if (!encoded) return null;
+  const raw = Buffer.from(String(encoded), 'base64');
+  if (raw.length < 6 || raw.subarray(0, 5).toString('utf8') !== 'DPAPI') return null;
+  const key = dpapiUnprotect(raw.subarray(5));
+  if (key.length !== 32) return null;
+  grokBotOsCryptKey = key;
+  return key;
+};
+
+// Chromium os_crypt v10：3 字节前缀 + 12 字节 nonce + 密文 + 16 字节 GCM tag
+const oscryptDecrypt = (key, cipherB64) => {
+  const data = Buffer.from(String(cipherB64 || ''), 'base64');
+  if (data.length < 3 + 12 + 16 || data.subarray(0, 3).toString('utf8') !== 'v10') return '';
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, data.subarray(3, 15));
+  decipher.setAuthTag(data.subarray(data.length - 16));
+  const plain = Buffer.concat([decipher.update(data.subarray(15, data.length - 16)), decipher.final()]);
+  return plain.toString('utf8');
+};
+
+// Grok Bot 客户端的 live 登录（当前激活账号）：{ machine_id, access_token, refresh_token, sub?, email? }。
+// 客户端未安装/未登录返回 null；文件在但解密失败也按未登录处理并打日志，导入入口会给出可行动提示。
+const readGrokBotLiveAuth = () => {
+  if (process.platform !== 'win32') return null;
+  const secrets = readJsonFile(grokBotSecretsPath());
+  const raw = secrets?.['cursor-accounts'];
+  if (!raw) return null;
+  try {
+    const accounts = JSON.parse(raw);
+    const entry = accounts?.accounts?.[accounts.active];
+    if (!entry?.['cursor-access-token'] && !entry?.['cursor-refresh-token']) return null;
+    const key = readGrokBotOsCryptKey();
+    if (!key) return null;
+    const auth = {
+      machine_id: oscryptDecrypt(key, secrets['cursor-machine-id']),
+      access_token: oscryptDecrypt(key, entry['cursor-access-token']),
+      refresh_token: oscryptDecrypt(key, entry['cursor-refresh-token']),
+    };
+    if (!auth.access_token && !auth.refresh_token) return null;
+    const claims = parseJwtClaims(auth.access_token) || {};
+    if (claims.sub) auth.sub = String(claims.sub);
+    if (claims.email) auth.email = String(claims.email).toLowerCase();
+    return auth;
+  } catch (error) {
+    console.error('[Quota Desk] Grok Bot 登录读取失败', error.message);
+    return null;
+  }
+};
+
+const readLiveAuth = (kind) => {
+  if (kind === 'grokbot') return readGrokBotLiveAuth();
+  return readJsonFile(liveAuthPath(kind));
+};
 
 // 解析 JWT payload（不校验签名，只用于读取 exp/email 等展示性声明）
 const parseJwtClaims = (token) => {
@@ -201,6 +286,10 @@ const cliIdentity = (kind, auth) => {
     const entry = copilotEntryOf(auth);
     email = String(entry?.login || entry?.user || '').trim();
     fingerprint = String(entry?.userId || '') || shaTag(entry?.oauth_token);
+  } else if (kind === 'grokbot') {
+    const claims = parseJwtClaims(auth.access_token);
+    email = String(auth.email || claims?.email || '').toLowerCase();
+    fingerprint = String(auth.sub || claims?.sub || '') || shaTag(auth.refresh_token || auth.access_token);
   } else {
     const claims = parseJwtClaims(auth.id_token || auth.access_token);
     email = String(claims?.email || '').toLowerCase();
@@ -277,6 +366,11 @@ const accessTokenExpiryMs = (kind, auth) => {
     const dateMs = new Date(raw).getTime();
     if (Number.isFinite(dateMs)) return dateMs;
     const claims = parseJwtClaims(grokEntryToken(entry));
+    return claims?.exp ? Number(claims.exp) * 1000 : null;
+  }
+  if (kind === 'grokbot') {
+    // Grok Bot 的 access_token 是 JWT（实测约 60 天有效期）
+    const claims = parseJwtClaims(auth?.access_token);
     return claims?.exp ? Number(claims.exp) * 1000 : null;
   }
   const ms = Number(auth?.expiry_date);
@@ -568,6 +662,36 @@ async function refreshGrokAuth(auth, fetcher, timeoutMs) {
   return { ...next, ...(scope ? { scopeKey: scope } : {}) };
 }
 
+// Grok Bot：access_token 为 JWT（约 60 天）；api2.cursor.sh 的 refresh_token 实测不轮换，
+// 响应若带回新 refresh_token（shouldLogout=true 表示官方侧已登出）也一并采纳
+async function refreshGrokBotAuth(auth, fetcher, timeoutMs) {
+  const previousRefresh = String(auth?.refresh_token || '').trim();
+  if (!previousRefresh) throw new CliRefreshError('Grok Bot 登录快照缺少 refresh_token，无法续期，请在 Grok Bot 客户端重新登录后再次「导入订阅登录」', { permanent: true, authStatus: 'reauth_required' });
+  let response;
+  let payload;
+  try {
+    response = await postTokenRequest(fetcher, GROKBOT_TOKEN_URL, {
+      json: { client_id: GROKBOT_CLIENT_ID, grant_type: 'refresh_token', refresh_token: previousRefresh },
+      timeoutMs,
+    });
+    payload = await response.json();
+  } catch (error) { throw asRefreshError('Grok Bot', error); }
+  if (!response.ok) {
+    const code = String(payload?.error || '').trim();
+    const permanent = response.status === 401 || response.status === 400 || /invalid_grant|refresh_token/i.test(code);
+    throw new CliRefreshError(`Grok Bot 登录续期被拒绝（HTTP ${response.status}${code ? ` · ${code}` : ''}），${permanent ? '请在 Grok Bot 客户端重新登录该账号后再次「导入订阅登录」' : '请稍后重试'}`, { permanent, transient: !permanent, authStatus: permanent ? 'reauth_required' : null });
+  }
+  if (payload?.shouldLogout === true) throw new CliRefreshError('Grok Bot 登录已在官方侧登出，请重新登录该账号并再次「导入订阅登录」', { permanent: true, authStatus: 'reauth_required' });
+  const accessToken = String(payload?.access_token || '').trim();
+  if (!accessToken) throw new CliRefreshError('Grok Bot 续期响应缺少 access_token，请稍后重试', { transient: true });
+  const next = { ...auth, access_token: accessToken };
+  if (payload.refresh_token) next.refresh_token = payload.refresh_token;
+  const claims = parseJwtClaims(accessToken);
+  if (!next.sub && claims?.sub) next.sub = String(claims.sub);
+  next.last_refresh = new Date().toISOString();
+  return next;
+}
+
 const refreshCliAuth = async (kind, auth, fetcher, timeoutMs = 15_000) => {
   if (kind === 'codex') return refreshCodexAuth(auth, fetcher, timeoutMs);
   if (kind === 'claude') return refreshClaudeAuth(auth, fetcher, timeoutMs);
@@ -575,6 +699,7 @@ const refreshCliAuth = async (kind, auth, fetcher, timeoutMs = 15_000) => {
   if (kind === 'kimi') return refreshKimiWebAuth(auth, fetcher, timeoutMs);
   if (kind === 'grok') return refreshGrokAuth(auth, fetcher, timeoutMs);
   if (kind === 'copilot') throw new CliRefreshError('GitHub Copilot 令牌不支持自动续期，请重新设备码登录', { permanent: true, authStatus: 'reauth_required' });
+  if (kind === 'grokbot') return refreshGrokBotAuth(auth, fetcher, timeoutMs);
   throw new Error(`未知的 CLI 类型：${kind}`);
 };
 
@@ -633,6 +758,8 @@ const authVersionMatches = (kind, current, previous) => {
 // 防止把 cc-switch 刚切换进去的其它 profile 覆盖掉（原子写，避免 CLI 读到半截文件）
 const writeLiveIfCurrent = (kind, previousAuth, nextAuth) => {
   if (!nextAuth) return false;
+  // Grok Bot 客户端的 sand-secrets.json 是其私有加密存储，保持只读，续期结果只更新账号快照
+  if (kind === 'grokbot') return false;
   if (kind === 'grok') return writeGrokLiveIfCurrent(previousAuth, nextAuth);
   const livePath = liveAuthPath(kind);
   if (!livePath) return false;
@@ -741,10 +868,12 @@ module.exports = {
   fetchWithCliAuth,
   __grok: { selectGrokAuthEntry, selectGrokAuthRecord, grokEntryOf, grokScopeOf, grokEndpointIsAllowed, discoverGrokTokenEndpoint },
   __copilot: { copilotEntryOf },
+  __grokbot: { oscryptDecrypt },
   __constants: {
     CODEX_CLIENT_ID, CODEX_TOKEN_URL, CLAUDE_CLIENT_ID, CLAUDE_TOKEN_URL,
     GEMINI_CLIENT_ID, GEMINI_CLIENT_SECRET, GEMINI_TOKEN_URL, KIMI_AUTH_HOST, KIMI_REFRESH_PATH,
     GROK_ISSUER, GROK_DISCOVERY_URL, GROK_CLIENT_ID, GROK_TOKEN_URL, GROK_SCOPE,
     COPILOT_CLIENT_ID, COPILOT_DEVICE_CODE_URL, COPILOT_TOKEN_URL, COPILOT_SCOPE,
+    GROKBOT_TOKEN_URL, GROKBOT_CLIENT_ID,
   },
 };

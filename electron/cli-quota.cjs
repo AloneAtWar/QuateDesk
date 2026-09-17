@@ -271,4 +271,70 @@ async function queryCopilotQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS,
   return [meter('monthly', quota.remaining, 100, '%', quota.resetAt, { amount: quota.amount, limitAmount: quota.limitAmount })];
 }
 
-module.exports = { queryClaudeQuota, queryCodexQuota, queryGeminiQuota, queryKimiWebQuota, queryCopilotQuota, __copilot: { parseCopilotQuota, COPILOT_USER_ENDPOINT } };
+// Grok Bot 凭据形态（导入快照或本机客户端登录）：{ machine_id, access_token, refresh_token, sub?, email? }。
+// Grok Bot 是 Cursor 技术栈的 fork，用量存于 Cursor 后端：connect-rpc JSON 调
+// DashboardService.GetSandUsageStatus（grok.com / SuperGrok 渠道的 Bot 周额度，与 Grok 聊天额度独立）。
+// 请求需带客户端的 x-cursor-checksum（混淆时间戳 + machineId），算法移植自 Grok Bot 客户端。
+const GROKBOT_USAGE_URL = 'https://api2.cursor.sh/aiserver.v1.DashboardService/GetSandUsageStatus';
+
+const grokBotChecksum = (machineId, nowMs = Date.now()) => {
+  const kiloSeconds = Math.floor(nowMs / 1_000_000);
+  // 与客户端 TS 原版同款：JS 位运算的移位量按 mod-32 处理（1 >> 32 === 1），
+  // 千秒时间戳在该语义下的"错位"组装即服务端校验所期望的格式
+  const bytes = Buffer.from([
+    (kiloSeconds >> 40) & 255, (kiloSeconds >> 32) & 255, (kiloSeconds >> 24) & 255,
+    (kiloSeconds >> 16) & 255, (kiloSeconds >> 8) & 255, kiloSeconds & 255,
+  ]);
+  let lastByte = 165;
+  for (let index = 0; index < bytes.length; index += 1) {
+    const current = bytes[index] ?? 0;
+    bytes[index] = ((current ^ lastByte) + index % 256) & 255;
+    lastByte = bytes[index] ?? 0;
+  }
+  return `${bytes.toString('base64url')}${machineId || ''}`;
+};
+
+async function queryGrokBotUsage(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS, ctx = {}) {
+  const resolved = resolveCliAuth('grokbot', ctx.variables);
+  if (!resolved) throw reauthRequiredError('未检测到 Grok Bot 登录。请先在 Grok Bot 桌面客户端登录，再到「导入订阅登录」收录本机登录');
+  const response = await fetchWithCliAuth('grokbot', {
+    auth: resolved.auth,
+    source: resolved.source,
+    fetcher,
+    timeoutMs,
+    buildRequest: (auth) => ({
+      url: GROKBOT_USAGE_URL,
+      init: {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${auth.access_token}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'connect-protocol-version': '1',
+          'x-cursor-checksum': grokBotChecksum(auth.machine_id),
+          'x-cursor-client-type': 'sand',
+          'x-cursor-client-version': '0.18.0',
+          'x-sand-box-namespace': 'prod',
+          'x-ghost-mode': 'true',
+        },
+        body: '{}',
+      },
+    }),
+    onAuthUpdate: ctx.onAuthUpdate,
+  });
+  if (response.status === 401 || response.status === 403) throw reauthRequiredError('Grok Bot 凭据被拒绝（自动续期后仍无效），请重新登录该账号并再次「导入订阅登录」');
+  if (!response.ok) throw new Error(`Grok Bot 用量接口返回 HTTP ${response.status}`);
+  const payload = await response.json();
+  if (payload?.usesPooledEnterpriseAllowance === true) throw new Error('该账号走团队池化额度，暂无个人百分比可展示');
+  const used = Number(payload?.usagePercent);
+  if (!Number.isFinite(used)) throw new Error('Grok Bot 用量响应中没有 usagePercent');
+  const resetAt = payload?.nextResetTimestampUtc || null;
+  const startAt = Date.parse(payload?.currentPeriodStart || '');
+  // 周期起止都可用时按真实时长判窗口（客户端实测为 7 天周期，容错到月）
+  const days = resetAt && Number.isFinite(startAt) ? (Date.parse(resetAt) - startAt) / 86_400_000 : 7;
+  const key = days >= 5.5 && days <= 8.5 ? 'weekly' : 'monthly';
+  const remaining = Math.max(0, Math.min(100, 100 - used));
+  return [meter(key, remaining, 100, '%', resetAt, { amount: remaining, limitAmount: 100 })];
+}
+
+module.exports = { queryClaudeQuota, queryCodexQuota, queryGeminiQuota, queryKimiWebQuota, queryCopilotQuota, queryGrokBotUsage, __copilot: { parseCopilotQuota, COPILOT_USER_ENDPOINT }, __grokbot: { GROKBOT_USAGE_URL, grokBotChecksum } };
