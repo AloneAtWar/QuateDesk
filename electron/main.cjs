@@ -1282,6 +1282,9 @@ function createMainWindow() {
   mainWindow.on('focus', () => { if (mainWindow.isAlwaysOnTop()) ensureWidgetOnTop(); });
   mainWindow.webContents.on('did-fail-load', (_event, code, description, url) => console.error('[Quota Desk] load failed', code, description, url));
   mainWindow.webContents.on('render-process-gone', (_event, details) => console.error('[Quota Desk] renderer gone', details.reason));
+  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    if (level >= 2) console.error('[Quota Desk] renderer', message, sourceId || '', line || '');
+  });
   mainWindow.once('ready-to-show', () => mainWindow.show());
   mainWindow.on('close', (event) => { if (!quitting) { event.preventDefault(); mainWindow.hide(); } });
   mainWindow.on('closed', () => { mainWindow = null; });
@@ -1954,7 +1957,15 @@ function registerIpc() {
 
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  app.on('second-instance', () => { mainWindow?.show(); mainWindow?.focus(); });
+  app.on('second-instance', async () => {
+    if (!mainWindow) return;
+    mainWindow.show();
+    mainWindow.focus();
+    try {
+      const len = await mainWindow.webContents.executeJavaScript('document.getElementById("root")?.childElementCount || 0');
+      if (len === 0) mainWindow.webContents.reload();
+    } catch { mainWindow.webContents.reload(); }
+  });
   app.whenReady().then(async () => {
     store = new DesktopStore();
     store.purgeAllCycles();

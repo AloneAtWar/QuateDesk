@@ -416,6 +416,11 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .priority-reset .rule-marks .tag-pill { max-width: 42px; }
 /* reset timeline at the top of the periods view */
 .timeline-section .section-heading { padding-bottom: 4px; }
+.period-sort-row { display: grid; gap: 6px; padding: 8px 0; }
+.period-sort-row > span { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.period-sort-row b { font-size: 12px; font-weight: 600; }
+.period-sort-row small { color: var(--faint); font-size: 10px; }
+.period-sort-row input[type=range] { width: 100%; margin: 0; accent-color: var(--green); }
 .reset-timeline { overflow-x: auto; overflow-y: hidden; cursor: grab; padding: 2px 12px 8px; user-select: none; }
 .reset-timeline:active { cursor: grabbing; }
 .timeline-track { position: relative; height: 62px; }

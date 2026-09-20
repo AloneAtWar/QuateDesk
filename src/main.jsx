@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { initialAccounts, providerCatalog, windowCatalog } from './data';
 import { adapterDefinitions } from './adapters';
+import { clampRemainingWeight, comparePriority } from './priority-score';
 import { newApiTemplateScript } from './newapi-template';
 import { computeUsageStreaks, formatProviderUsageCost, formatProviderUsageSummaryTokens } from './provider-usage-format';
 import qrcode from 'qrcode-generator';
@@ -189,6 +190,8 @@ const normalizeSettings = (value = {}) => {
     widgetLength: clampWidgetLength(value.widgetLength ?? 0.9),
     proxyMode: ['direct', 'system', 'manual'].includes(value.proxyMode) ? value.proxyMode : 'system',
     proxyUrl: String(value.proxyUrl ?? ''),
+    periodSort5hRemaining: clampRemainingWeight(value.periodSort5hRemaining),
+    periodSortLongRemaining: clampRemainingWeight(value.periodSortLongRemaining),
     widgetSize: undefined,
     widgetWidth: undefined,
     widgetHeight: undefined,
@@ -383,7 +386,8 @@ function ResetTimeline({ accounts, providers }) {
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
   }, [points.length]);
-  if (!points.length) return null;
+  const heading = <div className="section-heading"><div><h2>重置时间轴</h2></div><span className="section-count">{points.length ? `${points.length} 个重置点 · 滚轮或拖动查看` : '暂无重置点'}</span></div>;
+  if (!points.length) return <section className="surface-section timeline-section">{heading}<div className="timeline-detail"><span className="timeline-detail-hint">暂无重置时间</span></div></section>;
   const now = Date.now();
   const NEAR_HOURS = 24;
   const NEAR_PX = 30;
@@ -420,7 +424,7 @@ function ResetTimeline({ accounts, providers }) {
   };
   const endDrag = () => { dragRef.current = null; };
   return <section className="surface-section timeline-section">
-    <div className="section-heading"><div><h2>重置时间轴</h2></div><span className="section-count">{points.length} 个重置点 · 滚轮或拖动查看</span></div>
+    {heading}
     <div className="timeline-detail">{active
       ? <><b>{active.name}</b><em>{active.providerName} · {active.label}</em><strong>{active.amount}</strong><small>{active.absolute} · {active.relative}</small></>
       : <span className="timeline-detail-hint">悬停圆点查看账号详情</span>}</div>
@@ -456,30 +460,31 @@ function ResetTimeline({ accounts, providers }) {
   </section>;
 }
 
-function PriorityView({ accounts, providers, reminderRules, onOpenHistory }) {
+function PriorityRow({ account, meter, provider, reminderRules, onOpenHistory }) {
+  return <div className="priority-row clickable" role="button" tabIndex={0} title="点击查看额度趋势" onClick={() => onOpenHistory?.(account)} onKeyDown={(event) => { if (event.key === 'Enter') onOpenHistory?.(account); }}>
+    <AccountIdentity account={account} provider={provider} />
+    <div className="priority-meter"><div className="meter-track"><span className="meter-fill" style={{ width: `${meter.remaining}%` }} /></div><b>{formatAmount(meter)}</b></div>
+    <div className="priority-reset"><Clock3 size={13} /><span>{formatReset(meter.resetAt)}</span><RuleMarks meter={meter} rules={reminderRules} /></div>
+  </div>;
+}
+
+function PriorityView({ accounts, providers, reminderRules, onOpenHistory, sortWeights }) {
   const [collapsed, setCollapsed] = useState({});
   const grouped = useMemo(() => {
     const byWindow = new Map();
-    accounts.flatMap((account) => account.windows.map((meter) => ({ account, meter }))).forEach((row) => {
+    accounts.flatMap((account) => (account.windows || []).map((meter) => ({ account, meter }))).forEach((row) => {
       if (!byWindow.has(row.meter.key)) byWindow.set(row.meter.key, []);
       byWindow.get(row.meter.key).push(row);
     });
     return [...byWindow.entries()]
       .sort(([a], [b]) => (durationOrder[a] || 9) - (durationOrder[b] || 9))
-      .map(([key, rows]) => [key, rows.sort((a, b) => new Date(a.meter.resetAt || '9999').getTime() - new Date(b.meter.resetAt || '9999').getTime())]);
-  }, [accounts]);
+      .map(([key, rows]) => [key, rows.sort((a, b) => comparePriority(a, b, sortWeights))]);
+  }, [accounts, sortWeights]);
   return <div className="view-stack">
     <ResetTimeline accounts={accounts} providers={providers} />
     {grouped.map(([key, rows]) => <section className="surface-section" key={key}>
       <div className="section-heading"><div><h2>{windowCatalog[key]?.label || key}</h2></div><span className="section-count">{rows.length} 个账号</span><button type="button" className="icon-button faint section-toggle" title={collapsed[key] ? '展开' : '收起'} onClick={() => setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }))}>{collapsed[key] ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</button></div>
-      {!collapsed[key] && <div className="priority-list">{rows.map(({ account, meter }) => {
-        const provider = providers.find((item) => item.id === account.providerId);
-        return <div className="priority-row clickable" key={`${account.id}-${meter.key}`} role="button" tabIndex={0} title="点击查看额度趋势" onClick={() => onOpenHistory?.(account)} onKeyDown={(event) => { if (event.key === 'Enter') onOpenHistory?.(account); }}>
-          <AccountIdentity account={account} provider={provider} />
-          <div className="priority-meter"><div className="meter-track"><span className="meter-fill" style={{ width: `${meter.remaining}%` }} /></div><b>{formatAmount(meter)}</b></div>
-          <div className="priority-reset"><Clock3 size={13} /><span>{formatReset(meter.resetAt)}</span><RuleMarks meter={meter} rules={reminderRules} /></div>
-        </div>;
-      })}</div>}
+      {!collapsed[key] && <div className="priority-list">{rows.map(({ account, meter }) => <PriorityRow key={`${account.id}-${meter.key}`} account={account} meter={meter} provider={providers.find((item) => item.id === account.providerId)} reminderRules={reminderRules} onOpenHistory={onOpenHistory} />)}</div>}
     </section>)}
   </div>;
 }
@@ -1388,7 +1393,7 @@ function OverviewCard({ account, provider, feedback, onOpenHistory, onRelogin, o
   </div>;
 }
 
-function StatusView({ accounts, providers, runtime, onTestAccount, testingAccountId, testResults, reminderRules, mode = 'rings', onModeChange, onOpenSettings, lastSync, onRefresh, refreshing, onOpenHistory, onRelogin, onReorderAccounts }) {
+function StatusView({ accounts, providers, runtime, onTestAccount, testingAccountId, testResults, reminderRules, mode = 'rings', onModeChange, onOpenSettings, lastSync, onRefresh, refreshing, onOpenHistory, onRelogin, onReorderAccounts, sortWeights }) {
   // 停用账号从所有视图的常规列表里分离出来：rows/periods 直接不显示（resetAt 已过期会污染时间排序），
   // rings 视图单独收进置底的折叠分组；组内按停用时间倒序（最近停的排最前）
   const disabledAccounts = accounts.filter((a) => a.disabled)
@@ -1402,7 +1407,7 @@ function StatusView({ accounts, providers, runtime, onTestAccount, testingAccoun
     ? <div className="settings-empty all-disabled-empty">所有账号均已停用。切换到「账号总览」视图，或在设置的账号列表中可重新启用。</div>
     : null;
   if (mode === 'rows') return <div className="view-stack">{activeAccounts.length ? <WindowsView accounts={activeAccounts} providers={providers} reminderRules={reminderRules} embedded onOpenHistory={onOpenHistory} onRelogin={onRelogin} /> : allDisabledHint}</div>;
-  if (mode === 'periods') return <div className="view-stack">{activeAccounts.length ? <PriorityView accounts={activeAccounts} providers={providers} reminderRules={reminderRules} onOpenHistory={onOpenHistory} /> : allDisabledHint}</div>;
+  if (mode === 'periods') return <div className="view-stack">{activeAccounts.length ? <PriorityView accounts={activeAccounts} providers={providers} reminderRules={reminderRules} onOpenHistory={onOpenHistory} sortWeights={sortWeights} /> : allDisabledHint}</div>;
   // 总览按账号列表顺序展示（不再按状态分组），以便拖拽排序；异常账号仍用警告样式标出
   return <div className="view-stack">
     <section className="overview-grid">{activeAccounts.map((account) => {
@@ -1431,6 +1436,13 @@ function SettingsDrawer({ accounts, providers, settings, setSettings, onClose, o
   return <><div className="drawer-shade" onClick={onClose} /><aside className="settings-drawer" aria-label="设置">
     <div className="drawer-scroll">
       <section className="drawer-section"><div className="drawer-section-title"><Bell size={16} /><span>刷新提醒规则</span><button className="mini-add" onClick={() => setSettings((old) => ({ ...old, reminderRules: [...(old.reminderRules || []), { id: `rule-${Date.now()}`, beforeMinutes: 120, minRemaining: 50 }] }))}><Plus size={14} /> 新增规则</button></div><Toggle checked={settings.alerts !== false} onChange={(value) => setSettings((old) => ({ ...old, alerts: value }))} label="启用提醒" description="关闭后不发送桌面通知，也不标记命中规则" />{(settings.reminderRules || []).length === 0 ? <div className="settings-empty">当前没有运行规则</div> : (settings.reminderRules || []).map((rule, index) => <div className="rule-editor" key={rule.id}><label><span>刷新前多久（分钟）<small>窗口重置倒计时小于该值才提醒</small></span><input type="number" min="1" value={rule.beforeMinutes} onChange={(event) => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, beforeMinutes: event.target.value } : item) }))} /></label><label><span>剩余至少（百分比）<small>剩余额度不低于该值才提醒</small></span><input type="number" min="0" max="100" value={rule.minRemaining} onChange={(event) => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, minRemaining: event.target.value } : item) }))} /></label><button className="icon-button danger rule-delete" title="删除规则" aria-label={`删除 ${rule.label || '规则'}`} onClick={() => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.filter((item) => item.id !== rule.id) }))}><Trash2 size={13} /></button></div>)}<small className="drawer-help">满足“刷新前多久”且“剩余至少”时，额度窗口会标记该规则。可以一条规则都没有。</small><div className="setting-select"><span><b>轮询间隔</b><small>所有账号统一检查频率</small></span><select value={settings.pollMinutes} onChange={(event) => setSettings((old) => ({ ...old, pollMinutes: event.target.value }))}><option value="5">5 分钟</option><option value="10">10 分钟</option><option value="15">15 分钟</option><option value="30">30 分钟</option></select></div></section>
+      <section className="drawer-section"><div className="drawer-section-title"><SlidersHorizontal size={16} /><span>周期明细排序</span></div>
+        {[{ key: 'periodSort5hRemaining', label: '5 小时' }, { key: 'periodSortLongRemaining', label: '7 天 / 1 个月' }].map((item) => {
+          const remaining = clampRemainingWeight(settings[item.key]);
+          return <label className="period-sort-row" key={item.key}><span><b>{item.label}</b><small>剩余 {remaining}% · 重置 {100 - remaining}%</small></span><input type="range" min={0} max={100} step={5} value={remaining} onChange={(event) => setSettings((old) => ({ ...old, [item.key]: Number(event.target.value) }))} /></label>;
+        })}
+        <small className="drawer-help">默认剩余 0%、重置 100%，只按距重置时间从近到远排（与原来一致）。拉高剩余占比后，额度多的账号更靠前。「全部」视图里 5 小时与 7 天/1 个月仍各用各的比例。</small>
+      </section>
       <section className="drawer-section"><div className="drawer-section-title"><SunMoon size={16} /><span>主题</span></div><div className="setting-select"><span><b>界面主题</b><small>主窗口与桌面浮窗同步应用</small></span><select value={settings.theme === 'light' ? 'light' : 'dark'} onChange={(event) => setSettings((old) => ({ ...old, theme: event.target.value }))}><option value="dark">暗色</option><option value="light">亮色</option></select></div></section>
       <section className="drawer-section"><div className="drawer-section-title"><Monitor size={16} /><span>桌面浮窗</span></div><Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" description="固定在桌面顶层，双击展开主窗口" /><label className="size-slider"><span>大小</span><input type="range" min={80} max={300} step={5} value={Math.round(clampWidgetScale(settings.widgetScale) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetScale: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetScale(settings.widgetScale) * 100)}%</b></label><label className="size-slider"><span>长度</span><input type="range" min={Math.round(WIDGET_MIN_LENGTH * 100)} max={Math.round(WIDGET_MAX_LENGTH * 100)} step={5} value={Math.round(clampWidgetLength(settings.widgetLength) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetLength: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetLength(settings.widgetLength) * 100)}%</b></label><small className="drawer-help">长度只调整横向宽度（60%–150%）。浮窗会展示账号的全部额度窗口（含 1M）；空间不足时逐级收起：标签先缩成小圆点再隐藏，倒计时按周期从长到短逐个隐藏，最后才收起最长周期的额度——只有一个额度窗口的账号通常不用收起任何内容。名称放不下时显示省略号，悬停可查看完整内容。</small><button type="button" className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetScale: 0.9, widgetLength: 0.9 }))}>恢复默认大小与长度</button><div className="widget-setting-preview"><div style={{ width: Math.round(WIDGET_BASE_SIZE.width * clampWidgetLength(settings.widgetLength)), maxWidth: '100%', margin: '0 auto' }}>{(() => { const previewAccount = accounts.find((item) => !item.disabled) ?? accounts[0]; return <WidgetRow account={previewAccount} provider={providers.find((item) => item.id === previewAccount?.providerId)} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} />; })()}</div></div><button className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetPreview: true }))}><Eye size={15} /> 预览并调整</button></section>
       <section className="drawer-section"><div className="drawer-section-title"><History size={16} /><span>额度历史</span></div><div className="setting-select"><span><b>保留时长</b><small>每次成功刷新都会记录一条，用于账号卡片的趋势图</small></span><select value={settings.historyDays} onChange={(event) => setSettings((old) => ({ ...old, historyDays: Number(event.target.value) }))}><option value={3}>3 天</option><option value={7}>7 天（默认）</option><option value={15}>15 天</option><option value={30}>30 天</option><option value={60}>60 天</option><option value={90}>3 个月（最长）</option><option value={0}>永久</option></select></div><button className="outline-button full" onClick={onClearHistory}><Trash2 size={14} /> 清除全部历史记录</button><small className="drawer-help">删除账号时会一并删除该账号的额度历史；超过保留时长的记录会自动清理；永久保存时超过 30 天的记录会自动降采样为每小时一条。</small></section>
@@ -2916,7 +2928,7 @@ function App() {
     <header className="titlebar"><span className="titlebar-drag"><img src="./quota-desk.svg" alt="" /><b>Quota Desk</b></span><div className="titlebar-controls"><span className="last-checked" title="最后一次额度检查时间"><Clock3 size={11} />{formatChecked(lastSync)}</span>{update && ['available', 'downloading', 'downloaded', 'error'].includes(update.status) && !(update.status === 'available' && update.version && update.version === settings.ignoredUpdateVersion) && <button className={`update-badge ${update.status}`} onClick={() => setUpdateOpen(true)} title="查看版本更新"><Download size={11} />{update.status === 'available' && `v${update.version} 可更新`}{update.status === 'downloading' && `下载中 ${update.percent || 0}%`}{update.status === 'downloaded' && '重启升级'}{update.status === 'error' && '更新失败'}</button>}<button className="control-solo" onClick={refreshAll} disabled={refreshing} title="立即刷新全部账号" aria-label="立即刷新全部账号"><RefreshCw size={13} className={refreshing ? 'spinning' : ''} /></button><div className="overview-controls" aria-label="账号总览展示方式"><button className={overviewMode === 'rings' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rings'); }} title="账号总览" aria-label="账号总览"><CircleGauge size={13} /></button><button className={overviewMode === 'rows' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rows'); }} title="行式明细" aria-label="行式明细"><Rows3 size={13} /></button><button className={overviewMode === 'periods' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('periods'); }} title="周期明细" aria-label="周期明细"><Clock3 size={13} /></button></div></div><div className="titlebar-actions"><button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={13} /></button>{bridge && <><button className={pinned ? 'active' : ''} title={pinned ? '取消固定' : '固定在桌面最前面'} aria-label="固定在桌面最前面" onClick={async () => setPinned(await bridge.togglePin())}><Pin size={13} /></button><button title="关闭到托盘" aria-label="关闭到托盘" onClick={() => bridge.closeMainWindow()}><X size={14} /></button></>}</div></header>
     {toast && <div className={`toast ${toast.ok ? 'ok' : 'fail'}`} role="status">{toast.ok ? <Check size={13} /> : <AlertCircle size={13} />}<span>{toast.message}</span></div>}
     <main className="main-shell">
-      <div className="content-area">{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{accounts.length === 0 ? <section className="empty-workspace"><div className="empty-mark"><CircleGauge size={22} /></div><div><h2>把第一份 Coding Plan 接进来</h2><p>凭据将由 Windows 加密保存，额度请求只在本机发出。</p></div><button className="primary-button" onClick={() => setModal('account')}><Plus size={15} /> 添加账号</button><button className="outline-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> 设置</button>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button" onClick={() => setModal('import-ccswitch')}><Download size={15} /> 从 cc-switch 导入</button>}</section> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} onProviderUsageState={applyProviderUsageState} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} onReorderAccounts={reorderAccounts} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const kind = reloginChannel(provider)?.kind || 'kimi'; setModal({ type: `${kind}-relogin`, account }); }} />}</div>
+      <div className="content-area">{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{accounts.length === 0 ? <section className="empty-workspace"><div className="empty-mark"><CircleGauge size={22} /></div><div><h2>把第一份 Coding Plan 接进来</h2><p>凭据将由 Windows 加密保存，额度请求只在本机发出。</p></div><button className="primary-button" onClick={() => setModal('account')}><Plus size={15} /> 添加账号</button><button className="outline-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> 设置</button>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button" onClick={() => setModal('import-ccswitch')}><Download size={15} /> 从 cc-switch 导入</button>}</section> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} onProviderUsageState={applyProviderUsageState} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} onReorderAccounts={reorderAccounts} sortWeights={{ fiveHourRemaining: settings.periodSort5hRemaining, otherRemaining: settings.periodSortLongRemaining }} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const kind = reloginChannel(provider)?.kind || 'kimi'; setModal({ type: `${kind}-relogin`, account }); }} />}</div>
     </main>
     {settingsOpen && <SettingsDrawer accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)} openModal={setModal} onDeleteAccount={deleteAccount} onToggleAccountDisabled={toggleAccountDisabled} onTestAccount={testAccount} testingAccountId={testingAccountId} onEditProvider={editProvider} autoLaunch={autoLaunch} onToggleAutoLaunch={toggleAutoLaunch} appVersion={appVersion} update={update} onOpenUpdate={() => setUpdateOpen(true)} onCheckUpdate={onCheckUpdate} onClearHistory={clearHistory} runtime={runtime} />}
     {confirmState && <ConfirmModal confirm={confirmState} onClose={() => setConfirmState(null)} />}
