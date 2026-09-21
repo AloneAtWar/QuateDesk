@@ -6,6 +6,7 @@ const { DesktopStore } = require('./storage.cjs');
 const { queryAccount, authStatusForPollError } = require('./poller.cjs');
 const { clampRetentionDays } = require('./history.cjs');
 const { resolveWasteWindows } = require('./waste.cjs');
+const { computeRatios } = require('./ratio.cjs');
 const { builtinConfigs } = require('./builtin-configs.cjs');
 const { scanCcswitch } = require('./ccswitch.cjs');
 const { mergeMainOwnedUsageConnections } = require('./provider-usage-state.cjs');
@@ -1447,6 +1448,8 @@ function registerIpc() {
   ipcMain.handle('history:clear', () => { store.clearHistory(); return store.clearCycles(); });
   // 周期浪费档案：永久保留，不受历史保留时长影响
   ipcMain.handle('cycles:get', (_event, accountId) => store.getCycles(String(accountId || '')));
+  // 周期换算：从历史快照实时计算窗口对额度倍数，不落盘
+  ipcMain.handle('ratio:get', (_event, accountId) => computeRatios(store.getHistory(String(accountId || ''), historyRetentionDays())));
   ipcMain.handle('quota:test-account', async (_event, accountId) => {
     const state = await pollState([accountId]);
     const account = state.accounts.find((item) => item.id === accountId);

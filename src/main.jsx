@@ -1,8 +1,8 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import {
-  AlertCircle, ArrowLeft, Bell, BellOff, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, CircleGauge, CircleStop, Clock3, Download, Eye, ExternalLink, Globe, HelpCircle, History, LayoutGrid,
+  AlertCircle, ArrowLeft, ArrowRightLeft, Bell, BellOff, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, CircleGauge, CircleStop, Clock3, Download, Eye, ExternalLink, Globe, HelpCircle, History, LayoutGrid,
   Ellipsis, Flame, KeyRound, Monitor, Play, Plus, Power, RefreshCw, Rows3, Settings2, ShieldCheck, SlidersHorizontal, Square, Bot,
   Pencil, Pin, Sparkles, SunMoon, Tag, Trash2, TrendingUp, Trophy, UploadCloud, X, Zap,
 } from 'lucide-react';
@@ -514,7 +514,17 @@ function WindowsView({ accounts, providers, reminderRules, embedded = false, onO
 // 额度历史折线图：横轴时间、纵轴剩余额度（百分比窗口取 remaining，余额窗口取 amount），每个窗口维度一条线
 const CHART_COLORS = { five_hour: 'var(--cyan)', daily: 'var(--sky)', weekly: 'var(--violet)', monthly: 'var(--coral)', balance: 'var(--green)', gemini_pro: 'var(--sky)', gemini_flash: 'var(--cyan)', gemini_flash_lite: 'var(--green-deep)' };
 const CHART_FALLBACK_COLORS = ['var(--cyan)', 'var(--violet)', 'var(--coral)', 'var(--green)', 'var(--sky)'];
-const chartColor = (key, index) => CHART_COLORS[key] || CHART_FALLBACK_COLORS[index % CHART_FALLBACK_COLORS.length];
+// 换算窗口对（a>b）取两个窗口色的 50/50 混合：语义直观（7d×5h = 紫×青 的中间色），六种组合互不相同、随主题自适应
+const pairStroke = (key) => {
+  const sep = String(key).indexOf('>');
+  if (sep <= 0) return null;
+  const long = CHART_COLORS[String(key).slice(0, sep)];
+  const short = CHART_COLORS[String(key).slice(sep + 1)];
+  return long && short ? `color-mix(in srgb, ${long} 50%, ${short})` : null;
+};
+// 其他目录外的序列键按名字哈希取色：不随图例开关 / 序列增减变化，图例与折线颜色始终一致
+const chartColorHash = (key) => [...String(key)].reduce((sum, ch) => sum + ch.charCodeAt(0), 0);
+const chartColor = (key) => CHART_COLORS[key] || pairStroke(key) || CHART_FALLBACK_COLORS[chartColorHash(key) % CHART_FALLBACK_COLORS.length];
 const chartValue = (sample) => sample.unit === '%' ? sample.remaining : Number(sample.amount ?? sample.remaining);
 const formatChartValue = (sample, value) => sample.unit === '%' ? `${Math.round(value)}%` : `${sample.unit === 'CNY' ? '¥' : sample.unit}${Number(value).toFixed(2)}`;
 const formatChartNumber = (value) => Number.isInteger(value) ? String(value) : Number(value).toFixed(2);
@@ -574,7 +584,9 @@ const matchRangeKey = (next, fullStart, fullEnd) => {
   return null;
 };
 
-function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange }) {
+// 换算模式（plainNumbers）下序列值是倍数而非百分比：纵轴不按 0–100 夹紧、刻度不带 %。
+// formatDetail / shortOf / referenceOf 分别覆盖悬停数值、序列短名与墙钟参考线，供换算序列复用整张图。
+function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange, plainNumbers = false, formatDetail = null, shortOf = null, referenceOf = null, toolbarExtra = null }) {
   const [hover, setHover] = useState(null);
   // 断线区间（无数据时段）的悬停提示：{ from, to } 为区间前后两个数据点的时间
   const [hoverGap, setHoverGap] = useState(null);
@@ -592,7 +604,7 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
     // 抽样上限放宽到 2000，滚轮放大后仍能看清细节
     const stride = Math.max(1, Math.ceil(points.length / 2000));
     const sampled = points.filter((_point, index) => index % stride === 0 || index === points.length - 1);
-    const percentOnly = keys.every((key) => sampled.every((point) => !point.windows?.[key] || point.windows[key].unit === '%'));
+    const percentOnly = !plainNumbers && keys.every((key) => sampled.every((point) => !point.windows?.[key] || point.windows[key].unit === '%'));
     // 断线阈值 = 2 倍采样中位间隔且至少 10 分钟：默认 5 分钟轮询时正好 10 分钟，选了更长轮询间隔的账号按自身节奏放宽
     const times = sampled.map((point) => new Date(point.at).getTime());
     const gaps = times.slice(1).map((at, index) => at - times[index]).filter((gap) => gap > 0).sort((a, b) => a - b);
@@ -652,7 +664,7 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
   const yMin = values.length ? Math.min(...values) : 0;
   const yMax = values.length ? Math.max(...values) : (allPercent ? 100 : 1);
   const yPad = Math.max((yMax - yMin) * 0.15, allPercent ? 5 : Math.max(yMax * 0.02, 1));
-  const yLo = allPercent ? Math.max(0, yMin - yPad) : yMin - yPad;
+  const yLo = allPercent || plainNumbers ? Math.max(0, yMin - yPad) : yMin - yPad;
   const yHi = allPercent ? Math.min(100, yMax + yPad) : yMax + yPad;
   const toY = (value) => PAD.t + (1 - (value - yLo) / Math.max(1e-9, yHi - yLo)) * innerH;
   const paths = visibleKeys.map((key) => {
@@ -726,11 +738,13 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
     <div className="chart-detail">
       <div className="chart-detail-main">{hoverPoint ? <>
         <b>{formatChartStamp(hoverPoint.at)}</b>
-        {visibleKeys.map((key, index) => {
+        {visibleKeys.map((key) => {
           const sample = hoverPoint.windows?.[key];
           if (!sample) return null;
           const reset = formatPointResetShort(sample.resetAt, hoverPoint.at);
-          return <span className="chart-detail-item" key={key} title={[windowCatalog[key]?.label || key, formatChartDetail(sample), reset].filter(Boolean).join(' ')}><i style={{ background: chartColor(key, index) }} />{windowCatalog[key]?.short || key}<b>{formatChartDetail(sample)}</b>{reset && <small>{reset}</small>}</span>;
+          const label = shortOf ? shortOf(key) : (windowCatalog[key]?.label || key);
+          const value = formatDetail ? formatDetail(key, sample) : formatChartDetail(sample);
+          return <span className="chart-detail-item" key={key} title={[label, value, reset].filter(Boolean).join(' ')}><i style={{ background: chartColor(key) }} />{shortOf ? shortOf(key) : (windowCatalog[key]?.short || key)}<b>{value}</b>{reset && <small>{reset}</small>}</span>;
         })}
       </> : hoverGap ? <span className="chart-detail-hint">{formatChartStamp(hoverGap.from)} – {formatChartStamp(hoverGap.to)} · 该时段暂无数据</span> : <span className="chart-detail-hint">悬停查看该点的数值与重置时间</span>}</div>
       <div className="range-control" role="group" aria-label="趋势时间范围" onPointerDown={(event) => event.stopPropagation()}>
@@ -739,21 +753,32 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
           return <button type="button" key={preset.id} className={rangeKey === preset.id ? 'active' : ''} disabled={!available} title={available ? preset.label : `历史不足 ${preset.label}`} onClick={() => pickRange(preset)}>{preset.label}</button>;
         })}
       </div>
+      {toolbarExtra}
     </div>
     <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} onPointerDown={startPan} onPointerMove={movePan} onPointerUp={endPan} onPointerCancel={endPan} onMouseLeave={() => { setHover(null); setHoverGap(null); endPan(); }}>
       {yTicks.map((value) => <g key={value}><line x1={PAD.l} x2={W - PAD.r} y1={toY(value)} y2={toY(value)} className="chart-grid" /><text x={PAD.l - 6} y={toY(value) + 3} className="chart-y-label">{formatYTick(value)}</text></g>)}
       {xTicks.map((at) => <text key={Math.round(at)} x={Math.min(Math.max(toX(at), PAD.l + 16), W - PAD.r - 16)} y={H - 7} className="chart-x-label">{formatTick(at)}</text>)}
-      {paths.map((path, index) => path.segments.map((d) => <path key={`${path.key}-${d.slice(0, 12)}`} d={d} fill="none" stroke={chartColor(path.key, index)} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />))}
+      {paths.map((path) => path.segments.map((d) => <path key={`${path.key}-${d.slice(0, 12)}`} d={d} fill="none" stroke={chartColor(path.key)} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />))}
+      {/* 换算模式的墙钟参考线：按窗口时长算出的理论倍数（如 7d = 33.6 个 5h），实测值低于它说明额度口径比日历时间更紧 */}
+      {referenceOf && visibleKeys.map((key) => {
+        const ref = referenceOf(key);
+        if (!ref || ref.value < yLo || ref.value > yHi) return null;
+        const y = toY(ref.value);
+        return <g key={`ref-${key}`} className="chart-ref">
+          <line x1={PAD.l} x2={W - PAD.r} y1={y} y2={y} stroke={chartColor(key)} />
+          <text x={W - PAD.r} y={y - 3} textAnchor="end">{ref.label}</text>
+        </g>;
+      })}
       {/* 点稀疏（放大看细节）时标出每个数据点；缩小看全程时不标，悬停照样有详情 */}
-      {drawn.length <= 40 && paths.map((path, index) => drawn.map((point) => {
+      {drawn.length <= 40 && paths.map((path) => drawn.map((point) => {
         const sample = point.windows?.[path.key];
-        return sample ? <circle key={`${path.key}-${point.at}`} cx={toX(new Date(point.at).getTime())} cy={toY(chartValue(sample))} r={drawn.length === 1 ? 3 : 2} fill={chartColor(path.key, index)} /> : null;
+        return sample ? <circle key={`${path.key}-${point.at}`} cx={toX(new Date(point.at).getTime())} cy={toY(chartValue(sample))} r={drawn.length === 1 ? 3 : 2} fill={chartColor(path.key)} /> : null;
       }))}
       {hoverPoint && <g>
         <line x1={hoverX} x2={hoverX} y1={PAD.t} y2={H - PAD.b} className="chart-cursor" />
-        {visibleKeys.map((key, index) => {
+        {visibleKeys.map((key) => {
           const sample = hoverPoint.windows?.[key];
-          return sample ? <circle key={key} cx={hoverX} cy={toY(chartValue(sample))} r="3" fill={chartColor(key, index)} stroke="var(--surface)" strokeWidth="1.4" /> : null;
+          return sample ? <circle key={key} cx={hoverX} cy={toY(chartValue(sample))} r="3" fill={chartColor(key)} stroke="var(--surface)" strokeWidth="1.4" /> : null;
         })}
       </g>}
     </svg>
@@ -1192,6 +1217,10 @@ function HistoryView({ account, provider, onBack, onProviderUsageState }) {
   const [hiddenKeys, setHiddenKeys] = useState([]);
   const [view, setView] = useState('trend');
   const [rangeKey, setRangeKey] = useState('1d');
+  // 换算模式：把趋势图切换成「窗口对额度倍数」视图（如 7d ≈ 多少个 5h）
+  const [ratios, setRatios] = useState(null);
+  const [ratioOn, setRatioOn] = useState(false);
+  const [hiddenPairs, setHiddenPairs] = useState([]);
   // 该厂商参与浪费统计的周期窗口；为空时不提供「浪费」入口
   // 再按账号实际追踪的窗口过滤：用户选过窗口用 windowKeys，否则用接口实时返回的窗口；
   // 账号还没有任何窗口数据时不过滤（避免轮询失败期间入口闪烁）
@@ -1215,6 +1244,15 @@ function HistoryView({ account, provider, onBack, onProviderUsageState }) {
     window.quotaDesk.getHistory(account.id).then((rows) => { if (active) setPoints(rows || []); }).catch(() => { if (active) setPoints([]); });
     return () => { active = false; };
   }, [account.id, account.lastChecked]);
+  // 窗口对换算结果随历史一起取：主进程从 history.json 实时计算，不落盘
+  useEffect(() => {
+    let active = true;
+    if (!window.quotaDesk?.getRatios) { setRatios([]); return undefined; }
+    window.quotaDesk.getRatios(account.id).then((rows) => { if (active) setRatios(rows || []); }).catch(() => { if (active) setRatios([]); });
+    return () => { active = false; };
+  }, [account.id, account.lastChecked]);
+  // 换算入口随账号数据而异：切到没有可配对窗口的账号时退出换算模式；窗口对折叠选择也一并重置
+  useEffect(() => { setRatioOn(false); setHiddenPairs([]); }, [account.id]);
   const legendKeys = useMemo(() => [...new Set((points || []).flatMap((point) => Object.keys(point.windows || {})))]
     .sort((a, b) => (durationOrder[a] || 9) - (durationOrder[b] || 9)), [points]);
   // 图例读数：每条线取它最近一次出现的值
@@ -1230,6 +1268,57 @@ function HistoryView({ account, provider, onBack, onProviderUsageState }) {
     if (old.includes(key)) return old.filter((item) => item !== key);
     return legendKeys.length - old.length <= 1 ? old : [...old, key];
   });
+  // 换算模式：只有攒到观测点的窗口对才提供入口；跨档窗口对（如 5h×1M）默认折叠进图例
+  const ratioPairs = useMemo(() => (ratios || []).filter((pair) => pair.series.length > 0), [ratios]);
+  const defaultHiddenPairs = useMemo(() => {
+    const keys = [...new Set(ratioPairs.flatMap((pair) => [pair.shortKey, pair.longKey]))]
+      .sort((a, b) => (durationOrder[a] || 9) - (durationOrder[b] || 9));
+    const adjacent = new Set();
+    for (let i = 0; i + 1 < keys.length; i++) adjacent.add(`${keys[i + 1]}>${keys[i]}`);
+    return ratioPairs.filter((pair) => !adjacent.has(pair.key)).map((pair) => pair.key);
+  }, [ratioPairs]);
+  const toggleRatio = () => {
+    const next = !ratioOn;
+    setRatioOn(next);
+    if (next) {
+      setRangeKey('all');
+      setHiddenPairs((old) => (old.length ? old : defaultHiddenPairs));
+    }
+  };
+  const togglePairKey = (key) => setHiddenPairs((old) => {
+    if (old.includes(key)) return old.filter((item) => item !== key);
+    return ratioPairs.length - old.length <= 1 ? old : [...old, key];
+  });
+  const pairShortLabel = (pair) => `${windowCatalog[pair.longKey]?.short || pair.longKey}×${windowCatalog[pair.shortKey]?.short || pair.shortKey}`;
+  const fmtRatio = (value) => `${Number(value).toFixed(1)}×`;
+  const pairStatsTitle = (pair) => [
+    `${windowCatalog[pair.longKey]?.label || pair.longKey}额度 ≈ ${fmtRatio(pair.average)} × ${windowCatalog[pair.shortKey]?.label || pair.shortKey}额度（均值）`,
+    `${pair.cycleCount} 个周期 · ${pair.pairCount} 次配对` + (pair.toMs && pair.fromMs ? ` · 覆盖 ${Math.max(1, Math.round((new Date(pair.toMs).getTime() - new Date(pair.fromMs).getTime()) / 86_400_000))} 天` : ''),
+    `墙钟参考 ${Math.round(pair.wallClock * 10) / 10}×（按时长算的理论值）`,
+    pair.longOnly || pair.shortOnly ? `${pair.longOnly} 段仅长窗口爬升 · ${pair.shortOnly} 段仅短窗口爬升，未计入` : null,
+  ].filter(Boolean).join('\n');
+  // 换算序列伪装成普通快照喂给趋势图：窗口对当序列键、倍数当剩余率，图表的缩放/悬停/图例逻辑全部复用。
+  // 同一时刻各窗口对的值必须合并进同一个点（与趋势图的多窗口快照同构）——
+  // 否则图内逐点判定的断线逻辑会被另一个窗口对的点打断，整条折线碎成孤点
+  const ratioPoints = useMemo(() => {
+    if (!ratioOn) return [];
+    const byTick = new Map();
+    for (const pair of ratioPairs) {
+      if (hiddenPairs.includes(pair.key)) continue;
+      for (const sample of pair.series) {
+        const point = byTick.get(sample.at);
+        if (point) point.windows[pair.key] = { remaining: sample.value, unit: '%' };
+        else byTick.set(sample.at, { at: sample.at, windows: { [pair.key]: { remaining: sample.value, unit: '%' } } });
+      }
+    }
+    return [...byTick.values()].sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+  }, [ratioOn, ratioPairs, hiddenPairs]);
+  const pairByKey = useCallback((key) => ratioPairs.find((pair) => pair.key === key) || null, [ratioPairs]);
+  const ratioButton = ratioPairs.length > 0
+    ? <div className="range-control ratio-toggle" role="group" aria-label="换算模式">
+      <button type="button" className={ratioOn ? 'active' : ''} aria-pressed={ratioOn} aria-label="换算模式" title="换算：同一笔消耗让两个窗口的已用百分比同时爬升，爬升比就是额度倍数（如 7d ≈ 多少个 5h）。点击切换趋势图展示内容" onClick={toggleRatio}><ArrowRightLeft size={11} /></button>
+    </div>
+    : null;
   const historyTabs = [
     { key: 'trend', label: '趋势' },
     ...(showProviderUsageEntry ? [{ key: 'provider-usage', label: '用量' }] : []),
@@ -1265,12 +1354,23 @@ function HistoryView({ account, provider, onBack, onProviderUsageState }) {
       <div className="history-tabpanel" {...(hasHistoryTabs ? { role: 'tabpanel', id: historyPanelId, 'aria-labelledby': `${historyDomId}-tab-${view}` } : {})}>{showProviderUsage ? <ProviderUsageView account={account} provider={provider} onState={onProviderUsageState} /> : showWaste ? <WasteView account={account} wasteWindows={wasteWindows} /> : <div className="trend-view">
         {points === null ? <div className="settings-empty chart-empty">正在读取历史记录…</div>
           : points.length === 0 ? <div className="settings-empty chart-empty">暂无历史数据，每次成功刷新额度后都会记录一条</div>
-            : <UsageChart points={points} hiddenKeys={hiddenKeys} rangeKey={rangeKey} onRangeKeyChange={setRangeKey} />}
-        {legendKeys.length > 0 && <div className="chart-legend">{legendKeys.map((key, index) => {
-          const sample = latestSamples[key];
-          const hidden = hiddenKeys.includes(key);
-          return <button type="button" key={key} className={hidden ? 'off' : ''} title={hidden ? '点击显示该折线' : '点击隐藏该折线'} onClick={() => toggleKey(key)}><i style={{ background: chartColor(key, index) }} />{windowCatalog[key]?.label || key}{sample && <em>{formatChartValue(sample, chartValue(sample))}</em>}</button>;
-        })}<span className="legend-right">{points.length} 条记录</span></div>}
+            : ratioOn ? (ratioPoints.length > 1
+              ? <UsageChart points={ratioPoints} hiddenKeys={hiddenPairs} rangeKey={rangeKey} onRangeKeyChange={setRangeKey} plainNumbers
+                shortOf={(key) => { const pair = pairByKey(key); return pair ? pairShortLabel(pair) : key; }}
+                formatDetail={(_key, sample) => fmtRatio(sample.remaining)}
+                referenceOf={(key) => { const pair = pairByKey(key); return pair ? { value: pair.wallClock, label: `墙钟 ${Math.round(pair.wallClock * 10) / 10}×` } : null; }}
+                toolbarExtra={ratioButton} />
+              : <div className="settings-empty chart-empty">换算数据还不够：需要两个窗口在同一段时间里都有消耗记录，多攒几天再看</div>)
+            : <UsageChart points={points} hiddenKeys={hiddenKeys} rangeKey={rangeKey} onRangeKeyChange={setRangeKey} toolbarExtra={ratioButton} />}
+        {ratioOn ? (ratioPoints.length > 1 && <div className="chart-legend">{ratioPairs.map((pair) => {
+          const hidden = hiddenPairs.includes(pair.key);
+          return <button type="button" key={pair.key} className={hidden ? 'off' : ''} title={pairStatsTitle(pair)} onClick={() => togglePairKey(pair.key)}><i style={{ background: chartColor(pair.key) }} />{pairShortLabel(pair)}{pair.average != null && <em>{fmtRatio(pair.average)}</em>}</button>;
+        })}<span className="legend-right">均值 = 两窗口已用爬升之比</span></div>)
+          : legendKeys.length > 0 && <div className="chart-legend">{legendKeys.map((key) => {
+            const sample = latestSamples[key];
+            const hidden = hiddenKeys.includes(key);
+            return <button type="button" key={key} className={hidden ? 'off' : ''} title={hidden ? '点击显示该折线' : '点击隐藏该折线'} onClick={() => toggleKey(key)}><i style={{ background: chartColor(key) }} />{windowCatalog[key]?.label || key}{sample && <em>{formatChartValue(sample, chartValue(sample))}</em>}</button>;
+          })}<span className="legend-right">{points.length} 条记录</span></div>}
       </div>}</div>
     </section>
     <div className="history-foot"><button type="button" className="outline-button" onClick={onBack}><ArrowLeft size={14} /> 返回</button></div>

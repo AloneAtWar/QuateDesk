@@ -620,6 +620,8 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .range-control button.active { color: var(--ink); background: var(--surface-3); }
 .range-control button:hover:not(.active):not(:disabled) { color: var(--ink-soft); }
 .range-control button:disabled { opacity: .32; cursor: default; }
+.ratio-toggle { margin-left: 2px; padding-left: 6px; border-left: 1px solid var(--line-inner); }
+.ratio-toggle button { display: inline-flex; align-items: center; justify-content: center; padding: 2px 5px; }
 .back-button { flex: 0 0 auto; width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-soft); background: var(--control); }
 .back-button:hover { color: var(--ink); border-color: var(--hover-border); }
 /* 趋势/浪费两个视图主体锁成同一固定高度，切换时整个卡片与头部切换按钮都不动；多余空间由图例行（趋势）或滚动区（浪费）吸收 */
@@ -632,6 +634,8 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .chart-y-label { text-anchor: end; }
 .chart-x-label { text-anchor: middle; }
 .chart-cursor { stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart-ref line { stroke-width: 1; stroke-dasharray: 4 3; opacity: .6; }
+.chart-ref text { fill: var(--faint); font-size: 8px; font-family: 'DM Mono', monospace; }
 .chart-detail { display: flex; align-items: center; gap: 4px; min-height: 22px; margin: 0 6px 4px; padding: 3px 6px 3px 8px; border: 1px solid var(--line-inner); border-radius: 7px; background: var(--surface-2); overflow: hidden; white-space: nowrap; }
 .chart-detail-main { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; overflow: hidden; }
 .chart-detail-main > b { flex: 0 0 auto; color: var(--muted); font-size: 10px; font-weight: 600; }
