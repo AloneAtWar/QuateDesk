@@ -1,4 +1,5 @@
 const { resolveCliAuth, refreshTokenOf, accessTokenExpiryMs, fetchWithCliAuth, __grok: cliGrok } = require('./cli-auth.cjs');
+const { fetchMimoSnapshot, mimoCookieHeader, ProviderUsageError, PROVIDER_USAGE_AUTH_KEY } = require('./provider-usage.cjs');
 
 const reauthRequiredError = (message) => Object.assign(new Error(message), { authStatus: 'reauth_required' });
 const authStatusForPollError = (error) => error?.authStatus === 'reauth_required' ? 'reauth_required' : 'temporary_error';
@@ -363,6 +364,13 @@ async function queryAccountOnce(account, provider, credential, fetcher = fetch, 
     if (config.adapterMode === 'grokbot') return queryGrokBotUsage(fetcher, meter, timeoutMs, cliContext);
     return queryGeminiQuota(fetcher, meter, timeoutMs, cliContext);
   }
+  // MiMo Token Plan：额度接口只认网页会话 Cookie（没有 API Key 端点），凭据
+  // 来自官方账号登录保存在加密变量里的 Cookie 快照；会话 24 小时过期后由
+  // 主进程 pollState 的静默续期（recoverBrowserUsageAuth）换发再重试。
+  if (config.adapterMode === 'mimo') {
+    const variables = options.getSecretVariables ? options.getSecretVariables() : secretVariables;
+    return queryMimoQuota(fetcher, meter, timeoutMs, variables);
+  }
   const credentialRequired = config.adapterMode === 'script' ? config.credentialRequired === true : config.auth !== 'none';
   if (!credential && credentialRequired) throw reauthRequiredError('缺少凭据，请在「设置 → 账号与凭据」中编辑该账号填写 API Token');
   const scripted = config.adapterMode === 'script' && config.script ? runScriptAdapter(account, provider, credential, null, secretVariables) : null;
@@ -390,6 +398,58 @@ async function queryAccountOnce(account, provider, credential, fetcher = fetch, 
   const visibleWindows = selected ? windows.filter((item) => selected.has(item.key)) : windows;
   if (!visibleWindows.length) throw new Error('接口已返回额度，但没有包含该账号选择的窗口');
   return visibleWindows;
+}
+
+// ── Xiaomi MiMo Token Plan 额度专属适配 ─────────────────────────────────────
+// 额度数据来自平台控制台的内部接口（tokenPlan/usage + detail），鉴权是官方账号
+// 登录保存的网页会话 Cookie（见 provider-usage.cjs 的 MiMo 段）。
+// 展示口径：只展示套餐 Credits（原始值以“亿”为单位，cc-switch 社区惯例，
+// Lite ≈ 492 亿）；钱包余额不作为额度窗口。会话过期抛 reauth_required，由主进程
+// 走隐藏窗口静默续期后重试，续期失败才提示用户重新登录。
+const MIMO_CREDITS_YI = 1e8;
+
+const readMimoAuthCookies = (variables = {}) => {
+  const raw = variables?.[PROVIDER_USAGE_AUTH_KEY];
+  if (!raw) return [];
+  try {
+    const auth = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Array.isArray(auth?.cookies) ? auth.cookies : [];
+  } catch { return []; }
+};
+
+async function queryMimoQuota(fetcher, meter, timeoutMs, variables = {}) {
+  const cookies = readMimoAuthCookies(variables);
+  if (!cookies.length) {
+    throw reauthRequiredError('尚未连接小米账号：请编辑该账号并勾选「官方账号用量」完成登录');
+  }
+  const cookieHeader = mimoCookieHeader(cookies);
+  if (!cookieHeader) throw reauthRequiredError('MiMo 登录 Cookie 缺失，请重新连接官方账号');
+  let snapshot;
+  try {
+    snapshot = await fetchMimoSnapshot(fetcher, { cookieHeader, timeoutMs });
+  } catch (error) {
+    if (error instanceof ProviderUsageError && (error.code === 'AUTH_EXPIRED' || error.code === 'AUTH_MISSING')) {
+      throw reauthRequiredError('MiMo 官方账号登录已失效，请重新连接官方账号');
+    }
+    throw error;
+  }
+  const windows = [];
+  const plan = snapshot.plan;
+  if (plan && plan.limit !== null && plan.limit > 0) {
+    const remainingCredits = Math.max(0, plan.limit - (plan.used ?? 0));
+    const remainingPercent = plan.usedPercent !== null
+      ? Math.max(0, 100 - plan.usedPercent)
+      : percent(remainingCredits, plan.limit);
+    windows.push(meter('mimo_plan', remainingPercent, 100, '%', snapshot.detail?.resetsAt ?? null, {
+      amount: Number((remainingCredits / MIMO_CREDITS_YI).toFixed(2)),
+      limitAmount: Number((plan.limit / MIMO_CREDITS_YI).toFixed(2)),
+      available: !(snapshot.detail?.expired),
+    }));
+  }
+  if (!windows.length) {
+    throw new Error('MiMo 账号没有识别到 Token Plan 套餐 Credits（可能尚未订阅）');
+  }
+  return windows;
 }
 
 // ── Grok（xAI）订阅额度专属适配 ─────────────────────────────────────────────
@@ -595,5 +655,6 @@ module.exports = {
   queryAccount,
   authStatusForPollError,
   __grok: { selectGrokAuthEntry, parseGrokBilling, grokWindowKey, grpcStatusFromData },
+  __mimo: { queryMimoQuota, readMimoAuthCookies, MIMO_CREDITS_YI },
   __network: { accountTimeoutMs, isTransientNetworkError, describeNetworkError },
 };

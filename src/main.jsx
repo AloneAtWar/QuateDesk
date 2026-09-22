@@ -128,6 +128,7 @@ const reloginChannel = (provider) => {
   if (provider?.id === 'grok' || mode === 'grok') return { kind: 'grok', action: '重新导入', title: 'Grok 令牌已失效，点击重新导入本机 CLI 登录' };
   if (provider?.id === 'grokbot' || mode === 'grokbot') return { kind: 'grok', action: '重新导入', title: 'Grok Bot 登录已失效，点击重新导入本机客户端登录' };
   if (provider?.id === 'copilot' || mode === 'copilot') return { kind: 'copilot', action: '重新授权', title: 'GitHub 授权已失效，点击重新设备码登录' };
+  if (provider?.id === 'mimo' || mode === 'mimo') return { kind: 'mimo', action: '重新登录', title: 'Xiaomi MiMo 登录已失效，点击重新登录小米账号' };
   return null;
 };
 const providerVariableRequired = (provider, variable) => Boolean(variable?.required
@@ -361,7 +362,7 @@ function RuleMarks({ meter, rules = [] }) {
   return matched.length ? <span className="rule-marks">{matched.map((rule) => { const text = rule.label || `${rule.beforeMinutes} 分钟内刷新 · ≥${rule.minRemaining}%`; return <TagPill key={rule.id} tone="warm" title={text}>{text}</TagPill>; })}</span> : null;
 }
 
-const durationOrder = { five_hour: 1, daily: 2, weekly: 3, monthly: 4, balance: 5 };
+const durationOrder = { five_hour: 1, daily: 2, weekly: 3, monthly: 4, mimo_plan: 4.5, balance: 5 };
 function ConcentricRings({ account }) {
   const meters = [...(account.windows || [])].sort((a, b) => (durationOrder[b.key] || 9) - (durationOrder[a.key] || 9)).slice(0, 4);
   const smallest = meters.reduce((current, meter) => !current || (durationOrder[meter.key] || 9) < (durationOrder[current.key] || 9) ? meter : current, null);
@@ -520,7 +521,7 @@ function WindowsView({ accounts, providers, reminderRules, embedded = false, onO
 }
 
 // 额度历史折线图：横轴时间、纵轴剩余额度（百分比窗口取 remaining，余额窗口取 amount），每个窗口维度一条线
-const CHART_COLORS = { five_hour: 'var(--cyan)', daily: 'var(--sky)', weekly: 'var(--violet)', monthly: 'var(--coral)', balance: 'var(--green)', gemini_pro: 'var(--sky)', gemini_flash: 'var(--cyan)', gemini_flash_lite: 'var(--green-deep)' };
+const CHART_COLORS = { five_hour: 'var(--cyan)', daily: 'var(--sky)', weekly: 'var(--violet)', monthly: 'var(--coral)', balance: 'var(--green)', mimo_plan: 'var(--coral)', gemini_pro: 'var(--sky)', gemini_flash: 'var(--cyan)', gemini_flash_lite: 'var(--green-deep)' };
 const CHART_FALLBACK_COLORS = ['var(--cyan)', 'var(--violet)', 'var(--coral)', 'var(--green)', 'var(--sky)'];
 const chartColor = (key, index) => CHART_COLORS[key] || CHART_FALLBACK_COLORS[index % CHART_FALLBACK_COLORS.length];
 const chartValue = (sample) => sample.unit === '%' ? sample.remaining : Number(sample.amount ?? sample.remaining);
@@ -1692,7 +1693,7 @@ function AccountModalV2({ providers, onClose, onSave, onTestDraft, embedded = fa
     try { await onSave({ providerId, name: name.trim() || provider?.name || '新账号', identity: identity.trim(), tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean), windowKeys: selected, credential: credential.trim(), endpoint: accountEndpoint, timeoutSeconds: clampAccountTimeout(timeoutSeconds), variables: publicVariables, secretVariables, connectUsageAfterSave: (autoConnect || (usageConnectVisible && connectUsageAfterSave)) }); }
     finally { setSaving(false); }
   };
-  const formFields = <>{!fixedProvider && <label className="field"><span>厂商</span><select value={providerId} onChange={(event) => { const next = selectableProviders.find((item) => item.id === event.target.value); setProviderId(event.target.value); setEndpoint(defaultEndpoint(next)); setSelected(providerWindowKeys(next)); setVariableValues(defaultVariableValues(next)); }}>{selectableProviders.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>}<div className="form-grid"><label className="field"><span>账号名</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder={provider?.name || '账号名称'} /></label><label className="field"><span>标识</span><input value={identity} onChange={(event) => setIdentity(event.target.value)} placeholder="邮箱、用户名或币种" /></label></div><label className="field"><span>标签 <small>用逗号分隔，可留空</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="可留空，多个用逗号分隔" /></label>{!['script', 'grok', 'grokbot'].includes(provider?.requestConfig?.adapterMode) && <label className="field"><span>详细额度接口路径</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder="https://api.example.com/v1/usage" /></label>}<div className="form-grid"><label className="field"><span>请求超时（秒）<small>5–120，默认 15；跨境或代理网络可调大</small></span><input type="number" min="5" max="120" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.target.value)} /></label></div><div className="field"><span>额度窗口</span><div className="window-choice">{availableWindows.map((key) => <button type="button" key={key} className={`window-choice-item ${selected.includes(key) ? 'selected' : ''}`} onClick={() => toggle(key)}><span>{selected.includes(key) ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>)}</div></div>{variableDefinitions.length > 0 && <div className="adapter-config account-variables"><span className="eyebrow">厂商变量</span><div className="form-grid">{variableDefinitions.map((item) => <label className="field" key={item.key}><span>{item.label || item.key}{item.required && <small> 必填</small>}</span><input type={item.secret ? 'password' : 'text'} required={item.required} value={variableValues[item.key] ?? ''} onChange={(event) => setVariableValues((old) => ({ ...old, [item.key]: event.target.value }))} placeholder={item.defaultValue || item.key} /></label>)}</div></div>}{!['script', 'grok', 'grokbot'].includes(provider?.requestConfig?.adapterMode) && <label className="field"><span>{credentialRequired ? 'API Token' : '凭据（可选）'}</span><input type="password" required={credentialRequired} value={credential} onChange={(event) => setCredential(event.target.value)} placeholder={credentialRequired ? '凭据只会加密保存在本机' : '此接口无需凭据'} /></label>}{testResult && <div className={`draft-test-result ${testResult.ok ? 'ok' : 'fail'}`}><span>{testResult.ok ? '测试通过' : '测试失败'} · {testResult.message}</span></div>}</>;
+  const formFields = <>{!fixedProvider && <label className="field"><span>厂商</span><select value={providerId} onChange={(event) => { const next = selectableProviders.find((item) => item.id === event.target.value); setProviderId(event.target.value); setEndpoint(defaultEndpoint(next)); setSelected(providerWindowKeys(next)); setVariableValues(defaultVariableValues(next)); }}>{selectableProviders.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>}<div className="form-grid"><label className="field"><span>账号名</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder={provider?.name || '账号名称'} /></label><label className="field"><span>标识</span><input value={identity} onChange={(event) => setIdentity(event.target.value)} placeholder="邮箱、用户名或币种" /></label></div><label className="field"><span>标签 <small>用逗号分隔，可留空</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="可留空，多个用逗号分隔" /></label>{!['script', 'grok', 'grokbot', 'mimo'].includes(provider?.requestConfig?.adapterMode) && <label className="field"><span>详细额度接口路径</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder="https://api.example.com/v1/usage" /></label>}<div className="form-grid"><label className="field"><span>请求超时（秒）<small>5–120，默认 15；跨境或代理网络可调大</small></span><input type="number" min="5" max="120" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.target.value)} /></label></div><div className="field"><span>额度窗口</span><div className="window-choice">{availableWindows.map((key) => <button type="button" key={key} className={`window-choice-item ${selected.includes(key) ? 'selected' : ''}`} onClick={() => toggle(key)}><span>{selected.includes(key) ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>)}</div></div>{variableDefinitions.length > 0 && <div className="adapter-config account-variables"><span className="eyebrow">厂商变量</span><div className="form-grid">{variableDefinitions.map((item) => <label className="field" key={item.key}><span>{item.label || item.key}{item.required && <small> 必填</small>}</span><input type={item.secret ? 'password' : 'text'} required={item.required} value={variableValues[item.key] ?? ''} onChange={(event) => setVariableValues((old) => ({ ...old, [item.key]: event.target.value }))} placeholder={item.defaultValue || item.key} /></label>)}</div></div>}{!['script', 'grok', 'grokbot', 'mimo'].includes(provider?.requestConfig?.adapterMode) && <label className="field"><span>{credentialRequired ? 'API Token' : '凭据（可选）'}</span><input type="password" required={credentialRequired} value={credential} onChange={(event) => setCredential(event.target.value)} placeholder={credentialRequired ? '凭据只会加密保存在本机' : '此接口无需凭据'} /></label>}{testResult && <div className={`draft-test-result ${testResult.ok ? 'ok' : 'fail'}`}><span>{testResult.ok ? '测试通过' : '测试失败'} · {testResult.message}</span></div>}</>;
   const canRun = !((credentialRequired && !credential.trim()) || missingRequiredVariables || !selected.length || !accountEndpoint);
   const canSave = !(saving || (credentialRequired && !credential.trim()) || missingRequiredVariables || !selected.length || !accountEndpoint);
   const usageConnectOption = usageConnectVisible && usageCopy
@@ -1831,7 +1832,7 @@ function AccountEditModalV2({ account, provider, onClose, onSave, onTestDraft, o
     } finally { setTesting(false); }
   };
   const submit = async (event) => { event.preventDefault(); if (!name.trim() || (!cliProvider && !accountEndpoint) || !selected.length) return; const { publicVariables, secretVariables } = splitVariableValues(provider, variableValues); setSaving(true); try { await onSave({ account, name: name.trim(), identity: identity.trim(), tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean), endpoint: accountEndpoint, windowKeys: selected, timeoutSeconds: clampAccountTimeout(timeoutSeconds), variables: publicVariables, secretVariables }); } finally { setSaving(false); } };
-  return <div className="modal-backdrop" onClick={onClose}><form className="modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><h2>编辑 {account.name}</h2></div></div><div className="form-grid"><label className="field"><span>账号名</span><input required value={name} onChange={(event) => setName(event.target.value)} /></label><label className="field"><span>标识</span><input value={identity} onChange={(event) => setIdentity(event.target.value)} /></label></div><label className="field"><span>标签 <small>用逗号分隔，可留空</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} /></label>{!['script', 'grok', 'grokbot'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <label className="field"><span>详细额度接口路径</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} /></label>}<div className="form-grid"><label className="field"><span>请求超时（秒）<small>5–120，默认 15；跨境或代理网络可调大</small></span><input type="number" min="5" max="120" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.target.value)} placeholder="15" /></label></div><div className="field"><span>额度窗口</span><div className="window-choice">{availableWindows.map((key) => <button type="button" key={key} className={`window-choice-item ${selected.includes(key) ? 'selected' : ''}`} onClick={() => toggle(key)}><span>{selected.includes(key) ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>)}</div></div>{account.cliAuthSource === 'snapshot' && <div className="adapter-note"><ShieldCheck size={15} /><span>{cliProvider && (provider?.requestConfig?.adapterMode === 'kimi' || provider?.adapter === 'kimi') ? '该账号使用扫码导入的 Kimi 订阅登录快照：令牌由本应用自动续期；若登录在官方侧失效，请重新扫码「导入订阅登录」。' : cliProvider && (provider?.requestConfig?.adapterMode === 'copilot' || provider?.adapter === 'copilot') ? '该账号使用设备码授权的 GitHub 登录快照：令牌长期有效、无需续期；若授权被吊销或已改密，请重新「导入订阅登录」完成设备码授权。' : '该账号使用独立的登录快照：令牌由本应用自动续期，不依赖本机 CLI 当前激活的 profile；若登录在官方侧失效，请重新登录后再次「导入订阅登录」。'}</span></div>}{variableDefinitions.length > 0 && <div className="adapter-config account-variables"><span className="eyebrow">厂商变量</span><div className="form-grid">{variableDefinitions.map((item) => { const lockedKey = item.system && item.key === 'apiKey'; return <label className="field" key={item.key}><span>{item.label || item.key}{lockedKey ? <small> 创建后不可修改</small> : item.secret && <small> 留空保留原值</small>}</span><input type={item.secret ? 'password' : 'text'} required={item.required && !item.secret} disabled={lockedKey} value={lockedKey ? '' : (variableValues[item.key] ?? '')} onChange={(event) => setVariableValues((old) => ({ ...old, [item.key]: event.target.value }))} placeholder={lockedKey ? '如需更换请删除账号后重新添加' : item.secret ? '未修改' : (item.defaultValue || item.key)} /></label>; })}</div></div>}{!['script', 'grok', 'grokbot'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <div className="adapter-note"><KeyRound size={15} /><span>凭据创建后不可修改；如需更换 API Token，请删除该账号后重新添加。</span></div>}<ProviderUsageConnectionCard account={account} provider={provider} onState={onProviderUsageState} />{testResult && <div className={`draft-test-result ${testResult.ok ? 'ok' : 'fail'}`}><span>{testResult.ok ? '测试通过' : '测试失败'} · {testResult.message}</span></div>}<div className="modal-actions"><button type="button" className="outline-button" onClick={onClose}>取消</button><button type="button" className="outline-button" disabled={testing || !name.trim() || (!cliProvider && !accountEndpoint) || !selected.length} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" disabled={saving || !selected.length}>{saving ? '正在保存' : '保存'}</button></div></form></div>;
+  return <div className="modal-backdrop" onClick={onClose}><form className="modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><h2>编辑 {account.name}</h2></div></div><div className="form-grid"><label className="field"><span>账号名</span><input required value={name} onChange={(event) => setName(event.target.value)} /></label><label className="field"><span>标识</span><input value={identity} onChange={(event) => setIdentity(event.target.value)} /></label></div><label className="field"><span>标签 <small>用逗号分隔，可留空</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} /></label>{!['script', 'grok', 'grokbot', 'mimo'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <label className="field"><span>详细额度接口路径</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} /></label>}<div className="form-grid"><label className="field"><span>请求超时（秒）<small>5–120，默认 15；跨境或代理网络可调大</small></span><input type="number" min="5" max="120" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.target.value)} placeholder="15" /></label></div><div className="field"><span>额度窗口</span><div className="window-choice">{availableWindows.map((key) => <button type="button" key={key} className={`window-choice-item ${selected.includes(key) ? 'selected' : ''}`} onClick={() => toggle(key)}><span>{selected.includes(key) ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>)}</div></div>{account.cliAuthSource === 'snapshot' && <div className="adapter-note"><ShieldCheck size={15} /><span>{cliProvider && (provider?.requestConfig?.adapterMode === 'kimi' || provider?.adapter === 'kimi') ? '该账号使用扫码导入的 Kimi 订阅登录快照：令牌由本应用自动续期；若登录在官方侧失效，请重新扫码「导入订阅登录」。' : cliProvider && (provider?.requestConfig?.adapterMode === 'copilot' || provider?.adapter === 'copilot') ? '该账号使用设备码授权的 GitHub 登录快照：令牌长期有效、无需续期；若授权被吊销或已改密，请重新「导入订阅登录」完成设备码授权。' : '该账号使用独立的登录快照：令牌由本应用自动续期，不依赖本机 CLI 当前激活的 profile；若登录在官方侧失效，请重新登录后再次「导入订阅登录」。'}</span></div>}{variableDefinitions.length > 0 && <div className="adapter-config account-variables"><span className="eyebrow">厂商变量</span><div className="form-grid">{variableDefinitions.map((item) => { const lockedKey = item.system && item.key === 'apiKey'; return <label className="field" key={item.key}><span>{item.label || item.key}{lockedKey ? <small> 创建后不可修改</small> : item.secret && <small> 留空保留原值</small>}</span><input type={item.secret ? 'password' : 'text'} required={item.required && !item.secret} disabled={lockedKey} value={lockedKey ? '' : (variableValues[item.key] ?? '')} onChange={(event) => setVariableValues((old) => ({ ...old, [item.key]: event.target.value }))} placeholder={lockedKey ? '如需更换请删除账号后重新添加' : item.secret ? '未修改' : (item.defaultValue || item.key)} /></label>; })}</div></div>}{!['script', 'grok', 'grokbot', 'mimo'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <div className="adapter-note"><KeyRound size={15} /><span>凭据创建后不可修改；如需更换 API Token，请删除该账号后重新添加。</span></div>}<ProviderUsageConnectionCard account={account} provider={provider} onState={onProviderUsageState} />{testResult && <div className={`draft-test-result ${testResult.ok ? 'ok' : 'fail'}`}><span>{testResult.ok ? '测试通过' : '测试失败'} · {testResult.message}</span></div>}<div className="modal-actions"><button type="button" className="outline-button" onClick={onClose}>取消</button><button type="button" className="outline-button" disabled={testing || !name.trim() || (!cliProvider && !accountEndpoint) || !selected.length} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" disabled={saving || !selected.length}>{saving ? '正在保存' : '保存'}</button></div></form></div>;
 }
 
 function ProviderModalV2({ provider, onClose, onSave }) {
@@ -2170,6 +2171,119 @@ function KimiQrPanel({ mode = 'import', reloginAccount = null, onExit, onImporte
   </>;
 }
 
+// MiMo 官方账号浏览器登录面板（无弹窗壳，两种宿主共用）：与 Kimi 扫码同一两步模式——
+// 第一步主进程弹浏览器窗口实际登录小米账号（扫码 / 密码 / 短信均可，Cookie 只留在
+// 主进程），登录成功窗口自动关闭并进入第二步；第二步确认账号名 / 标签后点「完成」
+// 才真正导入（import 新建账号 / relogin 回写原账号）。导入动作由按钮触发（不在
+// effect 里），与 KimiQrPanel 同一套防抖守卫。
+function MimoBrowserLoginPanel({ mode = 'import', reloginAccount = null, onExit, onImported, onFinish, exitLabel = '退出' }) {
+  const bridge = window.quotaDesk;
+  const [phase, setPhase] = useState('login'); // login（浏览器登录中）| configure（确认账号信息）
+  const [status, setStatus] = useState('pending'); // pending | cancelled | error
+  const [message, setMessage] = useState('');
+  const [code, setCode] = useState('');
+  const [display, setDisplay] = useState('');
+  const [importing, setImporting] = useState(false);
+  const [draft, setDraft] = useState(() => mode === 'relogin'
+    ? { name: reloginAccount?.name || 'Xiaomi MiMo', tags: (reloginAccount?.tags || []).join(', ') }
+    : { name: 'Xiaomi MiMo', tags: '日常' });
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const importingRef = useRef(false);
+  const onImportedRef = useRef(onImported);
+  onImportedRef.current = onImported;
+  const onFinishRef = useRef(onFinish);
+  onFinishRef.current = onFinish;
+  const start = async () => {
+    importingRef.current = false;
+    setImporting(false);
+    setPhase('login');
+    setStatus('pending');
+    setMessage('');
+    setCode('');
+    setDisplay('');
+    try {
+      const result = await bridge?.startMimoLogin?.();
+      if (!result || result.cancelled || !result.code) { setStatus('cancelled'); return; }
+      setCode(result.code);
+      setDisplay(result.display || '');
+      setPhase('configure');
+    } catch (startError) {
+      setStatus('error');
+      setMessage(startError.message || '登录失败，请重试');
+    }
+  };
+  useEffect(() => { start(); }, []);
+  const confirm = () => {
+    if (importingRef.current || phase !== 'configure' || !code) return;
+    importingRef.current = true;
+    setImporting(true);
+    const options = {
+      ...(mode === 'relogin' ? { accountId: reloginAccount?.id } : {}),
+      name: String(draftRef.current?.name || '').trim(),
+      tags: String(draftRef.current?.tags || '').split(',').map((tag) => tag.trim()).filter(Boolean),
+    };
+    bridge?.importMimoLogin?.(code, options).then((imported) => {
+      if (imported?.duplicate) {
+        // 登录属于另一个已收录账号：登录码已消费，只能换号重新登录
+        importingRef.current = false;
+        setImporting(false);
+        setPhase('login');
+        setStatus('error');
+        setMessage(`该登录已是账号「${imported.name}」的登录，请换一个小米账号`);
+        return;
+      }
+      onImportedRef.current?.('mimo', imported);
+      onFinishRef.current?.();
+    }).catch((importError) => {
+      importingRef.current = false;
+      setImporting(false);
+      setStatus('error');
+      setMessage(importError.message);
+    });
+  };
+  const loginStatusCopy = {
+    pending: '浏览器窗口已打开：请在其中登录小米账号（扫码 / 密码 / 短信均可），登录成功后窗口会自动关闭',
+    cancelled: '未完成登录（窗口已关闭），点击重试重新打开',
+    error: message || '出错了，请重试',
+  }[status] || '';
+  return <>
+    <div className="modal-head"><div><h2>{mode === 'relogin' ? '重新登录 Xiaomi MiMo' : '添加 Xiaomi MiMo Token Plan'}<TitleHelp>{mode === 'relogin'
+      ? 'MiMo 登录已失效：重新登录小米账号即可恢复额度巡检，账号名与标签在第二步可顺手修改。'
+      : '浏览器登录小米账号：会话 Cookie 加密保存在本机并自动续期，读取 Token Plan 套餐 Credits 额度与钱包余额。'}</TitleHelp></h2></div></div>
+    {phase === 'login'
+      ? <div className="kimi-qr-stage">
+        <div className={`kimi-qr-frame ${status === 'error' || status === 'cancelled' ? 'stale' : ''}`}>
+          <div className="kimi-qr-placeholder"><Globe size={16} className={status === 'pending' ? 'spinning' : ''} /></div>
+          {(status === 'cancelled' || status === 'error') && (
+            <button type="button" className="kimi-qr-refresh" title="重试" aria-label="重试" onClick={start}><RefreshCw size={22} /></button>
+          )}
+        </div>
+        <small className={`kimi-qr-status ${status === 'error' || status === 'cancelled' ? 'fail' : ''}`}>{loginStatusCopy}</small>
+      </div>
+      : <div className="kimi-qr-configure">
+        <div className="kimi-qr-ok">
+          <span className="kimi-qr-done-icon"><Check size={18} /></span>
+          <div><b>登录成功</b>{display && <small>标识：{display}</small>}</div>
+        </div>
+        {status === 'error' && <div className="adapter-note update-error"><AlertCircle size={15} /><span>{message}</span></div>}
+        {importing && <div className="adapter-note"><RefreshCw size={15} className="spinning" /><span>正在导入，请稍候…</span></div>}
+        <div className="form-grid">
+          <label className="field"><span>账号名 <small>留空则用渠道名</small></span><input value={draft.name} onChange={(event) => setDraft((old) => ({ ...old, name: event.target.value }))} placeholder="Xiaomi MiMo" disabled={importing} /></label>
+          <label className="field"><span>标签 <small>逗号分隔，可留空</small></span><input value={draft.tags} onChange={(event) => setDraft((old) => ({ ...old, tags: event.target.value }))} placeholder="日常, 主力" disabled={importing} /></label>
+        </div>
+      </div>}
+    <div className="modal-actions">
+      {phase === 'login'
+        ? <button type="button" className="outline-button" onClick={onExit}>{exitLabel}</button>
+        : <>
+          <button type="button" className="outline-button" disabled={importing} onClick={start}><RefreshCw size={13} /> 重新登录</button>
+          <button type="button" className="primary-button" disabled={importing} onClick={confirm}>{importing ? '正在导入…' : '完成'}</button>
+        </>}
+    </div>
+  </>;
+}
+
 // GitHub 设备码轮询的基础间隔：GitHub 给该客户端的 interval 是 5 秒，加 300ms 余量
 // 避免贴着边界发被限频（slow_down 后间隔自动 +5 秒，上限 30 秒）
 const COPILOT_POLL_GAP_MS = 5_300;
@@ -2389,6 +2503,7 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
   const [imported, setImported] = useState({});
   // Kimi 订阅扫码：同一个弹窗内切换视图（列表 ↔ 扫码），窗口尺寸恒定不变
   const [kimiQrOpen, setKimiQrOpen] = useState(false);
+  const [mimoLoginOpen, setMimoLoginOpen] = useState(false);
   // GitHub Copilot 设备码：与 Kimi 同一模式，列表只是入口，点击进入授权视图（同窗口）
   const [copilotOpen, setCopilotOpen] = useState(false);
   // CLI 渠道与 Kimi 同一模式：列表只是入口，点击进入渠道详情视图（同窗口）填写信息再导入
@@ -2429,7 +2544,7 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
   const tiles = useMemo(() => {
     const apiDefaults = new Map(['deepseek', 'zai', 'minimax', 'wlb'].map((id, index) => [id, index]));
     const apiProviders = (providers || [])
-      .filter((provider) => !isCliProvider(provider))
+      .filter((provider) => !isCliProvider(provider) && provider.id !== 'mimo')
       .sort((left, right) => (apiDefaults.get(left.id) ?? 99) - (apiDefaults.get(right.id) ?? 99));
     const all = [
       ...CLI_LOGIN_KINDS,
@@ -2441,6 +2556,10 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
     const minimaxIndex = all.findIndex((channel) => channel.kind === 'minimax');
     if (minimaxIndex >= 0) all.splice(minimaxIndex, 0, ...kimiTile);
     else all.push(...kimiTile);
+    // MiMo 与 Kimi 同为「先登录后建号」渠道：浏览器登录小米账号，磁贴紧跟 MiniMax
+    const mimoTile = bridge?.startMimoLogin ? [{ kind: 'mimo', name: 'Xiaomi MiMo', providerId: 'mimo', mimo: true }] : [];
+    if (minimaxIndex >= 0) all.splice(all.findIndex((channel) => channel.kind === 'minimax') + 1, 0, ...mimoTile);
+    else all.push(...mimoTile);
     // Grok Bot 默认排在 wlbclub 前面（用户指定）：从 CLI 订阅段挪出，插到 wlb 磁贴之前；
     // wlb 不在列表时退回 CLI 段原位。已保存自定义顺序时，未记录项按稳定排序保持该相对位
     const grokBotIndex = all.findIndex((channel) => channel.kind === 'grokbot');
@@ -2508,9 +2627,14 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
     window.addEventListener('pointerup', up);
     window.addEventListener('pointercancel', cancel);
   };
-  const selected = tiles.find((channel) => channel.kind === selectedKind && !channel.kimi && !channel.copilot && !channel.api) || null;
+  const selected = tiles.find((channel) => channel.kind === selectedKind && !channel.kimi && !channel.copilot && !channel.api && !channel.mimo) || null;
   return <div className="modal-backdrop" onClick={onClose}><div className="modal compact-modal import-modal kimi-qr-modal import-window" onClick={(event) => event.stopPropagation()}>
-    {kimiQrOpen
+    {mimoLoginOpen
+      ? <MimoBrowserLoginPanel mode="import" exitLabel="返回" onExit={() => setMimoLoginOpen(false)} onFinish={() => setMimoLoginOpen(false)} onImported={(_kind, result) => {
+        setImported((old) => ({ ...old, mimo: true }));
+        onImported('mimo', result);
+      }} />
+      : kimiQrOpen
       ? <KimiQrPanel mode="import" exitLabel="返回" onExit={() => setKimiQrOpen(false)} onFinish={() => setKimiQrOpen(false)} onImported={(_kind, result) => {
         setImported((old) => ({ ...old, 'kimi-subscription': true }));
         onImported('kimi-subscription', result);
@@ -2569,6 +2693,13 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
               const done = imported['kimi-subscription'];
               const title = done ? 'Kimi 订阅 · 本次已导入' : 'Kimi 订阅 · 手机扫码登录，含月订阅额度，点击导入';
               return <button type="button" {...tileProps} className={`${tileProps.className} ${done ? 'is-disabled' : ''}`} title={title} aria-label={title} onClick={() => { if (!done && !dragMovedRef.current) setKimiQrOpen(true); }}>
+                <Logo provider={provider} interactive={false} />
+              </button>;
+            }
+            if (channel.mimo) {
+              const done = imported.mimo;
+              const title = done ? 'Xiaomi MiMo · 本次已导入' : 'Xiaomi MiMo Token Plan · 浏览器登录小米账号，读取套餐 Credits 额度，点击登录';
+              return <button type="button" {...tileProps} className={`${tileProps.className} ${done ? 'is-disabled' : ''}`} title={title} aria-label={title} onClick={() => { if (!done && !dragMovedRef.current) { setError(''); setMimoLoginOpen(true); } }}>
                 <Logo provider={provider} interactive={false} />
               </button>;
             }
@@ -2968,6 +3099,13 @@ function App() {
         if (result?.state) { setAccounts(result.state.accounts || []); setProviders(result.state.providers || []); setLastSync(result.state.lastSync || new Date().toISOString()); if (result.state.runtime) setRuntime(result.state.runtime); }
         lastSaved.current = '';
         setToast({ id: Date.now(), ok: !result?.duplicate, message: result?.duplicate ? `该登录已收录在账号「${result.name}」中，请换一个账号扫码` : `已重新登录「${result.name}」，正在刷新额度` });
+      }} />
+    </div></div>}
+    {modal?.type === 'mimo-relogin' && <div className="modal-backdrop" onClick={() => setModal(null)}><div className="modal compact-modal import-modal kimi-qr-modal import-window" onClick={(event) => event.stopPropagation()}>
+      <MimoBrowserLoginPanel mode="relogin" reloginAccount={modal.account} onExit={() => setModal(null)} onFinish={() => setModal(null)} onImported={(_kind, result) => {
+        if (result?.state) { setAccounts(result.state.accounts || []); setProviders(result.state.providers || []); setLastSync(result.state.lastSync || new Date().toISOString()); if (result.state.runtime) setRuntime(result.state.runtime); }
+        lastSaved.current = '';
+        setToast({ id: Date.now(), ok: !result?.duplicate, message: result?.duplicate ? `该登录已收录在账号「${result.name}」中，请换一个小米账号` : `已重新登录「${result.name}」，正在刷新额度` });
       }} />
     </div></div>}
     {modal?.type === 'copilot-relogin' && <div className="modal-backdrop" onClick={() => setModal(null)}><div className="modal compact-modal import-modal kimi-qr-modal import-window" onClick={(event) => event.stopPropagation()}>
