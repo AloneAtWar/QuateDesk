@@ -275,6 +275,9 @@ const PROVIDER_USAGE_COPY = {
     display: 'MiMo',
     required: true,
     defaultConnect: true,
+    // 个人版没有逐日用量端点（只有 tokenPlan/usage 聚合值），历史面板无内容
+    // 可展示——隐藏「用量」标签页；连接卡片（账号编辑里的登录/重连）保留
+    hideHistoryEntry: true,
     loading: '查询 MiMo Token Plan 套餐额度',
     connectHint: '弹窗登录小米账号（扫码 / 密码 / 短信均可），捕获的会话 Cookie 只加密保存在本机；平台会话 24 小时过期后会用小米通行证自动续期。',
     connectAction: '连接小米账号',
@@ -1224,7 +1227,7 @@ function HistoryView({ account, provider, onBack, onProviderUsageState }) {
     return tracked ? base.filter((key) => tracked.includes(key)) : base;
   }, [provider, account]);
   // 用量统计入口常驻：未连接时页内直接引导登录，登录过期也能在原位置重新连接。
-  const showProviderUsageEntry = providerUsageSupported(account, provider);
+  const showProviderUsageEntry = providerUsageSupported(account, provider) && !providerUsageCopy(provider)?.hideHistoryEntry;
   const showWaste = view === 'waste' && wasteWindows.length > 0;
   const showProviderUsage = view === 'provider-usage' && showProviderUsageEntry;
   useEffect(() => {
