@@ -1982,23 +1982,25 @@ const mimoUsageItem = (payload, names) => {
 
 // 套餐详情：档位名 + 当前周期结束时间（重置时间）。控制台时间是
 // "YYYY-MM-DD HH:mm:ss"（UTC），补 T/Z 后解析。
+const mimoPlanTimestamp = (raw) => {
+  if (!raw) return null;
+  const text = String(raw).trim().replace(' ', 'T');
+  const normalized = /Z$|[+-]\d\d:?\d\d$/.test(text) ? text : `${text}Z`;
+  const time = Date.parse(normalized);
+  return Number.isFinite(time) ? new Date(time).toISOString() : null;
+};
 const mimoPlanDetail = (payload) => {
   const data = objectOf(payload?.data) ? payload.data : {};
   const label = ['planCode', 'plan_code', 'planName', 'plan_name']
     .map((key) => typeof data[key] === 'string' ? data[key].trim() : '')
     .find(Boolean) || null;
-  const rawEnd = data.currentPeriodEnd ?? data.current_period_end;
-  let resetsAt = null;
-  if (rawEnd) {
-    const text = String(rawEnd).trim().replace(' ', 'T');
-    const normalized = /Z$|[+-]\d\d:?\d\d$/.test(text) ? text : `${text}Z`;
-    const time = Date.parse(normalized);
-    if (Number.isFinite(time)) resetsAt = new Date(time).toISOString();
-  }
+  const resetsAt = mimoPlanTimestamp(data.currentPeriodEnd ?? data.current_period_end);
+  // 周期起点（可选）：与终点一起算出完整周期时长，用来区分包月 / 包年
+  const periodStartAt = mimoPlanTimestamp(data.currentPeriodStart ?? data.current_period_start);
   const status = String(data.planStatus ?? data.plan_status ?? data.subscriptionStatus ?? data.status ?? '').trim().toLowerCase();
   const active = ['active', 'subscribed'].includes(status) || data.active === true || data.isActive === true;
   const expired = ['expired', 'ended'].includes(status) || data.expired === true;
-  return { label, resetsAt, active, expired, status: status || null };
+  return { label, resetsAt, periodStartAt, active, expired, status: status || null };
 };
 
 // 钱包余额（按量付费充值）：balance/cashBalance/giftBalance 均为字符串金额

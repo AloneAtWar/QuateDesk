@@ -121,6 +121,10 @@ test('mimoPlanDetail parses plan label, status and UTC period end', () => {
   assert.equal(detail.active, true);
   assert.equal(detail.expired, false);
   assert.equal(detail.resetsAt, '2027-05-27T23:59:59.000Z');
+  assert.equal(detail.periodStartAt, null);
+
+  const withStart = __test.mimoPlanDetail(detailPayload({ currentPeriodStart: '2026-05-27 23:59:59' }));
+  assert.equal(withStart.periodStartAt, '2026-05-27T23:59:59.000Z');
 
   const expired = __test.mimoPlanDetail(detailPayload({ planStatus: 'expired', currentPeriodEnd: '2026-01-01 00:00:00' }));
   assert.equal(expired.expired, true);
@@ -212,14 +216,15 @@ test('fetchMimoUsage returns the shared shape with plan summary and empty days',
   assert.equal(data.coverage.partial, true);
 });
 
-test('queryMimoQuota maps plan credits to the mimo_plan window in 亿', async () => {
+test('queryMimoQuota maps an annual plan (far reset) to the yearly window in 亿', async () => {
   const meter = (key, remaining, total, unit, resetAt, extra = {}) => ({ key, remaining, total, unit, resetAt, ...extra });
   const windows = await __mimo.queryMimoQuota(snapshotFetcher(), meter, 1000, {
     providerUsageAuth: JSON.stringify({ cookies: [{ name: 'api-platform_serviceToken', value: 'tok', domain: '.platform.xiaomimimo.com' }] }),
   });
   assert.equal(windows.length, 1);
   const plan = windows[0];
-  assert.equal(plan.key, 'mimo_plan');
+  // 详情 fixture 的重置时间在 8 个月外：距重置超过阈值 → 包年 → yearly「一年」窗口
+  assert.equal(plan.key, 'yearly');
   assert.equal(plan.unit, '%');
   // 1.2e11 / 4.56e11 ≈ 26.32% 已用 → 剩余 ≈ 73.68
   assert.ok(Math.abs(plan.remaining - (100 - (1.2e11 / 4.56e11) * 100)) < 0.01);
@@ -228,13 +233,45 @@ test('queryMimoQuota maps plan credits to the mimo_plan window in 亿', async ()
   assert.equal(plan.resetAt, '2027-05-27T23:59:59.000Z');
 });
 
+test('queryMimoQuota maps a monthly plan (near reset) to the monthly window', async () => {
+  const meter = (key) => ({ key });
+  // 包月：距重置只剩两周，周期起点也在本月内
+  const detail = detailPayload({ currentPeriodStart: '2026-09-10 00:00:00', currentPeriodEnd: '2026-10-10 23:59:59' });
+  const windows = await __mimo.queryMimoQuota(snapshotFetcher({ detail }), meter, 1000, {
+    providerUsageAuth: JSON.stringify({ cookies: [{ name: 'api-platform_serviceToken', value: 'tok', domain: '.platform.xiaomimimo.com' }] }),
+  });
+  assert.deepEqual(windows.map((window) => window.key), ['monthly']);
+});
+
+test('queryMimoQuota tells annual from monthly by full period span even near renewal', async () => {
+  const meter = (key) => ({ key });
+  // 年付临近续期：距重置只剩 5 天（只看剩余时长会误判成包月），周期起点在一年前 → 仍按包年
+  const detail = detailPayload({ currentPeriodStart: '2025-09-27 00:00:00', currentPeriodEnd: '2026-09-27 23:59:59' });
+  const windows = await __mimo.queryMimoQuota(snapshotFetcher({ detail }), meter, 1000, {
+    providerUsageAuth: JSON.stringify({ cookies: [{ name: 'api-platform_serviceToken', value: 'tok', domain: '.platform.xiaomimimo.com' }] }),
+  });
+  assert.deepEqual(windows.map((window) => window.key), ['yearly']);
+});
+
+test('queryMimoQuota falls back to monthly when plan detail is unavailable', async () => {
+  const meter = (key) => ({ key });
+  const fetcher = async (url) => {
+    if (url.includes('/tokenPlan/usage')) return jsonResponse(usagePayload([{ name: 'plan_total_token', used: 1, limit: 10 }]));
+    throw new Error('network hiccup');
+  };
+  const windows = await __mimo.queryMimoQuota(fetcher, meter, 1000, {
+    providerUsageAuth: JSON.stringify({ cookies: [{ name: 'api-platform_serviceToken', value: 'tok', domain: '.platform.xiaomimimo.com' }] }),
+  });
+  assert.deepEqual(windows.map((window) => window.key), ['monthly']);
+});
+
 test('queryMimoQuota never surfaces the wallet balance as a quota window', async () => {
   const meter = (key) => ({ key });
   // 钱包有余额也不出 balance 窗口：额度窗口只保留套餐 Credits
   const windows = await __mimo.queryMimoQuota(snapshotFetcher({ balance: balancePayload({ balance: '88.5' }) }), meter, 1000, {
     providerUsageAuth: JSON.stringify({ cookies: [{ name: 'api-platform_serviceToken', value: 'tok', domain: '.platform.xiaomimimo.com' }] }),
   });
-  assert.deepEqual(windows.map((window) => window.key), ['mimo_plan']);
+  assert.deepEqual(windows.map((window) => window.key), ['yearly']);
 });
 
 test('queryMimoQuota requires a saved login and rejects expired sessions with reauth_required', async () => {

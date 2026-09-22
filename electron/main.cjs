@@ -387,8 +387,24 @@ const migrateProvider = (provider) => {
   const seededVariables = !builtin && builtinConfig?.adapterMode === 'script' && !provider.requestConfig?.variables?.some((item) => item.key === 'endpoint')
     ? { ...provider, requestConfig: { ...provider.requestConfig, variables: builtinConfig.variables } }
     : provider;
+  // MiMo 窗口改版：存量 state 的 requestConfig.windows 还是旧的 ['mimo_plan'] 时，
+  // 刷新为内置的周期窗口（包月 monthly「1个月」/ 包年 yearly「1年」）；旧配置的
+  // wasteWindows 是空数组（当时明确不做浪费统计），一并刷新为内置预设参与浪费统计
+  const mimoWindowsStale = provider.id === 'mimo' && Array.isArray(provider.requestConfig?.windows) && provider.requestConfig.windows.includes('mimo_plan');
+  const refreshedWindows = mimoWindowsStale && builtinConfig?.windows
+    ? {
+        ...seededVariables,
+        requestConfig: {
+          ...seededVariables.requestConfig,
+          windows: builtinConfig.windows,
+          ...(Array.isArray(seededVariables.requestConfig?.wasteWindows) && !seededVariables.requestConfig.wasteWindows.length
+            ? { wasteWindows: builtinConfig.wasteWindows }
+            : {}),
+        },
+      }
+    : seededVariables;
   const website = provider.website === undefined ? (builtinWebsites[provider.id] ?? '') : provider.website;
-  const migrated = builtin ? { ...provider, website, baseUrl: undefined, domain: undefined, requestConfig: builtin, logo } : { ...seededVariables, website, baseUrl: undefined, domain: undefined, logo };
+  const migrated = builtin ? { ...provider, website, baseUrl: undefined, domain: undefined, requestConfig: builtin, logo } : { ...refreshedWindows, website, baseUrl: undefined, domain: undefined, logo };
   // 浪费统计预设补齐：存量 state 的 requestConfig 还没有 wasteWindows 字段时用内置预设；
   // 用户手动设置过（包括空数组 = 明确不做浪费统计）则保留不动
   const seededWaste = builtinConfig && migrated.requestConfig && !Array.isArray(migrated.requestConfig.wasteWindows)
@@ -419,6 +435,11 @@ const migrateAccount = (account) => {
   // wlbclub 上线 1 天限额：已显式选择过窗口的 wlb 账号自动补上 daily；没选过窗口的账号不做过滤，本来就会显示
   if (normalized.providerId === 'wlb' && Array.isArray(normalized.windowKeys) && normalized.windowKeys.length && !normalized.windowKeys.includes('daily')) {
     return { ...normalized, windowKeys: [...normalized.windowKeys, 'daily'] };
+  }
+  // MiMo 额度窗口从单一 Credits 改为按套餐周期出窗口（包月 → monthly「1个月」，包年 →
+  // yearly「1年」）：已显式选过窗口的存量账号把 mimo_plan 换成两个新键，巡检出哪个显示哪个
+  if (normalized.providerId === 'mimo' && Array.isArray(normalized.windowKeys) && normalized.windowKeys.includes('mimo_plan')) {
+    return { ...normalized, windowKeys: [...normalized.windowKeys.filter((key) => key !== 'mimo_plan'), 'monthly', 'yearly'] };
   }
   return normalized;
 };
@@ -1977,7 +1998,7 @@ function registerIpc() {
       name: customName || provider.name,
       identity: display,
       tags: customTags,
-      windowKeys: provider.requestConfig?.windows?.length ? provider.requestConfig.windows : ['mimo_plan'],
+      windowKeys: provider.requestConfig?.windows?.length ? provider.requestConfig.windows : ['monthly', 'yearly'],
       windows: [],
       status: 'active',
       lastError: null,

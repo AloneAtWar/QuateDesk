@@ -362,7 +362,7 @@ function RuleMarks({ meter, rules = [] }) {
   return matched.length ? <span className="rule-marks">{matched.map((rule) => { const text = rule.label || `${rule.beforeMinutes} 分钟内刷新 · ≥${rule.minRemaining}%`; return <TagPill key={rule.id} tone="warm" title={text}>{text}</TagPill>; })}</span> : null;
 }
 
-const durationOrder = { five_hour: 1, daily: 2, weekly: 3, monthly: 4, mimo_plan: 4.5, balance: 5 };
+const durationOrder = { five_hour: 1, daily: 2, weekly: 3, monthly: 4, yearly: 4.6, mimo_plan: 4.5, balance: 5 };
 function ConcentricRings({ account }) {
   const meters = [...(account.windows || [])].sort((a, b) => (durationOrder[b.key] || 9) - (durationOrder[a.key] || 9)).slice(0, 4);
   const smallest = meters.reduce((current, meter) => !current || (durationOrder[meter.key] || 9) < (durationOrder[current.key] || 9) ? meter : current, null);
@@ -521,7 +521,7 @@ function WindowsView({ accounts, providers, reminderRules, embedded = false, onO
 }
 
 // 额度历史折线图：横轴时间、纵轴剩余额度（百分比窗口取 remaining，余额窗口取 amount），每个窗口维度一条线
-const CHART_COLORS = { five_hour: 'var(--cyan)', daily: 'var(--sky)', weekly: 'var(--violet)', monthly: 'var(--coral)', balance: 'var(--green)', mimo_plan: 'var(--coral)', gemini_pro: 'var(--sky)', gemini_flash: 'var(--cyan)', gemini_flash_lite: 'var(--green-deep)' };
+const CHART_COLORS = { five_hour: 'var(--cyan)', daily: 'var(--sky)', weekly: 'var(--violet)', monthly: 'var(--coral)', yearly: 'var(--amber)', balance: 'var(--green)', mimo_plan: 'var(--coral)', gemini_pro: 'var(--sky)', gemini_flash: 'var(--cyan)', gemini_flash_lite: 'var(--green-deep)' };
 const CHART_FALLBACK_COLORS = ['var(--cyan)', 'var(--violet)', 'var(--coral)', 'var(--green)', 'var(--sky)'];
 const chartColor = (key, index) => CHART_COLORS[key] || CHART_FALLBACK_COLORS[index % CHART_FALLBACK_COLORS.length];
 const chartValue = (sample) => sample.unit === '%' ? sample.remaining : Number(sample.amount ?? sample.remaining);
@@ -773,10 +773,11 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
 // ── 浪费统计视图 ──
 // 周期档案的 from/end/observedAt 都是 ISO 字符串，展示时只取 MM/DD
 const formatWasteDay = (iso) => { const d = new Date(iso); return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`; };
-// 由重置时间反推周期起点（仅用于展示区间）：周 = 前 7 天，月 = 前一个月
+// 由重置时间反推周期起点（仅用于展示区间）：周 = 前 7 天，月 = 前一个月，年 = 前一年
 const wasteCycleStart = (endIso, windowKey) => {
   const date = new Date(endIso);
-  if (windowKey === 'monthly') date.setMonth(date.getMonth() - 1);
+  if (windowKey === 'yearly') date.setFullYear(date.getFullYear() - 1);
+  else if (windowKey === 'monthly') date.setMonth(date.getMonth() - 1);
   else date.setDate(date.getDate() - 7);
   return date.toISOString();
 };
@@ -1226,6 +1227,12 @@ function HistoryView({ account, provider, onBack, onProviderUsageState }) {
   }, [account.id, account.lastChecked]);
   const legendKeys = useMemo(() => [...new Set((points || []).flatMap((point) => Object.keys(point.windows || {})))]
     .sort((a, b) => (durationOrder[a] || 9) - (durationOrder[b] || 9)), [points]);
+  // 图例上「已停更」的线：历史里出现过、但不在账号当前窗口里的键——最典型是套餐从包月
+  // 换成包年后停在切换点的「1个月」线；账号暂时没有窗口数据（轮询失败）时不标注
+  const staleWindowKeys = useMemo(() => {
+    const active = account.windows?.length ? new Set(account.windows.map((item) => item.key)) : null;
+    return active ? legendKeys.filter((key) => !active.has(key)) : [];
+  }, [account.windows, legendKeys]);
   // 图例读数：每条线取它最近一次出现的值
   const latestSamples = useMemo(() => {
     const found = {};
@@ -1278,7 +1285,7 @@ function HistoryView({ account, provider, onBack, onProviderUsageState }) {
         {legendKeys.length > 0 && <div className="chart-legend">{legendKeys.map((key, index) => {
           const sample = latestSamples[key];
           const hidden = hiddenKeys.includes(key);
-          return <button type="button" key={key} className={hidden ? 'off' : ''} title={hidden ? '点击显示该折线' : '点击隐藏该折线'} onClick={() => toggleKey(key)}><i style={{ background: chartColor(key, index) }} />{windowCatalog[key]?.label || key}{sample && <em>{formatChartValue(sample, chartValue(sample))}</em>}</button>;
+          return <button type="button" key={key} className={hidden ? 'off' : ''} title={hidden ? '点击显示该折线' : '点击隐藏该折线'} onClick={() => toggleKey(key)}><i style={{ background: chartColor(key, index) }} />{windowCatalog[key]?.label || key}{staleWindowKeys.includes(key) && <small>已停更</small>}{sample && <em>{formatChartValue(sample, chartValue(sample))}</em>}</button>;
         })}<span className="legend-right">{points.length} 条记录</span></div>}
       </div>}</div>
     </section>
@@ -2186,7 +2193,7 @@ function MimoBrowserLoginPanel({ mode = 'import', reloginAccount = null, onExit,
   const [importing, setImporting] = useState(false);
   const [draft, setDraft] = useState(() => mode === 'relogin'
     ? { name: reloginAccount?.name || 'Xiaomi MiMo', tags: (reloginAccount?.tags || []).join(', ') }
-    : { name: 'Xiaomi MiMo', tags: '日常' });
+    : { name: 'Xiaomi MiMo', tags: '' });
   const draftRef = useRef(draft);
   draftRef.current = draft;
   const importingRef = useRef(false);
@@ -2250,7 +2257,7 @@ function MimoBrowserLoginPanel({ mode = 'import', reloginAccount = null, onExit,
   return <>
     <div className="modal-head"><div><h2>{mode === 'relogin' ? '重新登录 Xiaomi MiMo' : '添加 Xiaomi MiMo Token Plan'}<TitleHelp>{mode === 'relogin'
       ? 'MiMo 登录已失效：重新登录小米账号即可恢复额度巡检，账号名与标签在第二步可顺手修改。'
-      : '浏览器登录小米账号：会话 Cookie 加密保存在本机并自动续期，读取 Token Plan 套餐 Credits 额度与钱包余额。'}</TitleHelp></h2></div></div>
+      : '浏览器登录小米账号：会话 Cookie 加密保存在本机并自动续期，读取 Token Plan 套餐 Credits 额度；按套餐周期自动区分包月（1个月窗口）与包年（1年窗口）。'}</TitleHelp></h2></div></div>
     {phase === 'login'
       ? <div className="kimi-qr-stage">
         <div className={`kimi-qr-frame ${status === 'error' || status === 'cancelled' ? 'stale' : ''}`}>
@@ -2270,7 +2277,7 @@ function MimoBrowserLoginPanel({ mode = 'import', reloginAccount = null, onExit,
         {importing && <div className="adapter-note"><RefreshCw size={15} className="spinning" /><span>正在导入，请稍候…</span></div>}
         <div className="form-grid">
           <label className="field"><span>账号名 <small>留空则用渠道名</small></span><input value={draft.name} onChange={(event) => setDraft((old) => ({ ...old, name: event.target.value }))} placeholder="Xiaomi MiMo" disabled={importing} /></label>
-          <label className="field"><span>标签 <small>逗号分隔，可留空</small></span><input value={draft.tags} onChange={(event) => setDraft((old) => ({ ...old, tags: event.target.value }))} placeholder="日常, 主力" disabled={importing} /></label>
+          <label className="field"><span>标签 <small>逗号分隔，可留空</small></span><input value={draft.tags} onChange={(event) => setDraft((old) => ({ ...old, tags: event.target.value }))} placeholder="可留空，多个用逗号分隔" disabled={importing} /></label>
         </div>
       </div>}
     <div className="modal-actions">
@@ -2539,7 +2546,7 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
     } catch (importError) { setError(importError.message); }
     finally { setImporting(null); }
   };
-  // 磁贴渠道清单：默认顺序 = CLI 订阅 → Copilot → DeepSeek → Z.ai → Kimi 订阅 → MiniMax → Grok Bot → wlbclub
+  // 磁贴渠道清单：默认顺序 = CLI 订阅 → Copilot → DeepSeek → Z.ai → Kimi 订阅 → MiniMax → Grok Bot → Xiaomi MiMo → wlbclub
   // → 其它 API / 中转厂商；用户拖过的自定义顺序（settings.providerOrder）叠在最前
   const tiles = useMemo(() => {
     const apiDefaults = new Map(['deepseek', 'zai', 'minimax', 'wlb'].map((id, index) => [id, index]));
@@ -2556,7 +2563,7 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
     const minimaxIndex = all.findIndex((channel) => channel.kind === 'minimax');
     if (minimaxIndex >= 0) all.splice(minimaxIndex, 0, ...kimiTile);
     else all.push(...kimiTile);
-    // MiMo 与 Kimi 同为「先登录后建号」渠道：浏览器登录小米账号，磁贴紧跟 MiniMax
+    // MiMo 与 Kimi 同为「先登录后建号」渠道：浏览器登录小米账号，先入列表占位（最终位置在下方调整）
     const mimoTile = bridge?.startMimoLogin ? [{ kind: 'mimo', name: 'Xiaomi MiMo', providerId: 'mimo', mimo: true }] : [];
     if (minimaxIndex >= 0) all.splice(all.findIndex((channel) => channel.kind === 'minimax') + 1, 0, ...mimoTile);
     else all.push(...mimoTile);
@@ -2568,6 +2575,15 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
       const wlbIndex = all.findIndex((channel) => channel.kind === 'wlb');
       if (wlbIndex >= 0) all.splice(wlbIndex, 0, grokBotTile);
       else all.splice(grokBotIndex, 0, grokBotTile);
+    }
+    // Xiaomi MiMo 也默认排在 wlbclub 前面（用户指定）：从 MiniMax 之后挪到 wlb 磁贴之前，
+    // 紧跟 Grok Bot；wlb 不在列表时保持紧跟 MiniMax 的原位
+    const mimoIndex = all.findIndex((channel) => channel.kind === 'mimo');
+    if (mimoIndex >= 0) {
+      const [mimoMoved] = all.splice(mimoIndex, 1);
+      const wlbIndex = all.findIndex((channel) => channel.kind === 'wlb');
+      if (wlbIndex >= 0) all.splice(wlbIndex, 0, mimoMoved);
+      else all.splice(mimoIndex, 0, mimoMoved);
     }
     if (!Array.isArray(providerOrder) || !providerOrder.length) return all;
     const orderIndex = new Map(providerOrder.map((id, index) => [id, index]));
@@ -2698,7 +2714,7 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
             }
             if (channel.mimo) {
               const done = imported.mimo;
-              const title = done ? 'Xiaomi MiMo · 本次已导入' : 'Xiaomi MiMo Token Plan · 浏览器登录小米账号，读取套餐 Credits 额度，点击登录';
+              const title = done ? 'Xiaomi MiMo · 本次已导入' : 'Xiaomi MiMo Token Plan · 浏览器登录小米账号，读取套餐 Credits 额度（自动区分包月 / 包年），点击登录';
               return <button type="button" {...tileProps} className={`${tileProps.className} ${done ? 'is-disabled' : ''}`} title={title} aria-label={title} onClick={() => { if (!done && !dragMovedRef.current) { setError(''); setMimoLoginOpen(true); } }}>
                 <Logo provider={provider} interactive={false} />
               </button>;

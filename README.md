@@ -78,7 +78,7 @@ Quota Desk 专注解决这件事：把多个服务商、多个账号、多个周
 | wlbclub | 1 天、7 天 | API Token |
 | Grok / SuperGrok | 自动识别周期窗口 | 读取本机 grok CLI 登录状态 |
 | MiniMax Coding Plan | 5 小时、7 天 | API Token |
-| Xiaomi MiMo Token Plan | Credits | 浏览器登录小米账号（会话 Cookie 加密保存，过期自动续期） |
+| Xiaomi MiMo Token Plan | 1 个月（包月）/ 1 年（包年，按套餐周期自动区分） | 浏览器登录小米账号（会话 Cookie 加密保存，过期自动续期） |
 | Claude Code | 5 小时、7 天 | 读取本机 Claude Code 登录状态 |
 | OpenAI Codex | 5 小时、7 天、1 个月 | 读取本机 Codex CLI 的 ChatGPT OAuth 登录状态 |
 | Gemini CLI | Gemini Pro、Flash、Flash Lite | 读取本机 Gemini CLI 登录状态 |

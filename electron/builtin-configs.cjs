@@ -65,10 +65,12 @@ const builtinConfigs = {
   },
   // Xiaomi MiMo Token Plan：专属适配（poller.cjs queryMimoQuota），额度来自
   // platform.xiaomimimo.com 控制台内部接口，凭据是「连接官方账号」捕获的小米
-  // 账号会话 Cookie（加密保存，24 小时过期由主进程静默续期），无需 API Key
+  // 账号会话 Cookie（加密保存，24 小时过期由主进程静默续期），无需 API Key。
+  // 窗口按套餐周期自动区分：包月挂 monthly（「1个月」），包年挂 yearly（「1年」）；
+  // 两种周期都参与浪费统计（重置时未用完的 Credits）
   mimo: {
     endpoint: 'https://platform.xiaomimimo.com',
-    windows: ['mimo_plan'], wasteWindows: [], adapterMode: 'mimo', auth: 'none', credentialRequired: false,
+    windows: ['monthly', 'yearly'], wasteWindows: ['monthly', 'yearly'], adapterMode: 'mimo', auth: 'none', credentialRequired: false,
   },
   // Claude / Codex / Gemini 官方订阅：专属适配（cli-quota.cjs），复用本机 CLI 登录态
   claude: { windows: ['five_hour', 'weekly'], wasteWindows: ['weekly'], adapterMode: 'claude', auth: 'none', credentialRequired: false },

@@ -408,6 +408,20 @@ async function queryAccountOnce(account, provider, credential, fetcher = fetch, 
 // 走隐藏窗口静默续期后重试，续期失败才提示用户重新登录。
 const MIMO_CREDITS_YI = 1e8;
 
+// 包年 / 包月按周期时长自动区分：包月账号挂到通用的 monthly 窗口（「1个月」，
+// 与其它厂商的月度窗口同一口径），包年账号挂到新增的 yearly 窗口（「1年」）。
+// 优先用详情里的周期起点 + 终点算完整时长（年付临近续期的最后一两个月，
+// 只看「距重置还剩多久」会误判成包月）；拿不到起点时退回距重置的剩余时长
+// （月付周期 ≤ 31 天，距重置超过阈值即视为包年）。
+const MIMO_YEARLY_THRESHOLD_MS = 45 * 24 * 60 * 60 * 1000;
+const mimoPlanWindowKey = (detail) => {
+  const end = detail?.resetsAt ? Date.parse(detail.resetsAt) : NaN;
+  if (!Number.isFinite(end)) return 'monthly';
+  const start = detail?.periodStartAt ? Date.parse(detail.periodStartAt) : NaN;
+  const span = Number.isFinite(start) ? end - start : end - Date.now();
+  return span > MIMO_YEARLY_THRESHOLD_MS ? 'yearly' : 'monthly';
+};
+
 const readMimoAuthCookies = (variables = {}) => {
   const raw = variables?.[PROVIDER_USAGE_AUTH_KEY];
   if (!raw) return [];
@@ -440,7 +454,7 @@ async function queryMimoQuota(fetcher, meter, timeoutMs, variables = {}) {
     const remainingPercent = plan.usedPercent !== null
       ? Math.max(0, 100 - plan.usedPercent)
       : percent(remainingCredits, plan.limit);
-    windows.push(meter('mimo_plan', remainingPercent, 100, '%', snapshot.detail?.resetsAt ?? null, {
+    windows.push(meter(mimoPlanWindowKey(snapshot.detail), remainingPercent, 100, '%', snapshot.detail?.resetsAt ?? null, {
       amount: Number((remainingCredits / MIMO_CREDITS_YI).toFixed(2)),
       limitAmount: Number((plan.limit / MIMO_CREDITS_YI).toFixed(2)),
       available: !(snapshot.detail?.expired),
@@ -655,6 +669,6 @@ module.exports = {
   queryAccount,
   authStatusForPollError,
   __grok: { selectGrokAuthEntry, parseGrokBilling, grokWindowKey, grpcStatusFromData },
-  __mimo: { queryMimoQuota, readMimoAuthCookies, MIMO_CREDITS_YI },
+  __mimo: { queryMimoQuota, readMimoAuthCookies, mimoPlanWindowKey, MIMO_CREDITS_YI, MIMO_YEARLY_THRESHOLD_MS },
   __network: { accountTimeoutMs, isTransientNetworkError, describeNetworkError },
 };

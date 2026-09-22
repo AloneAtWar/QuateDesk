@@ -643,6 +643,7 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .chart-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 4px 18px 8px; border-top: 1px solid var(--line-inner); }
 .chart-legend span { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; color: var(--muted); }
 .chart-legend em { font-style: normal; font-weight: 700; color: var(--ink); }
+.chart-legend small { font-size: 9px; color: var(--faint); }
 .chart-empty { padding: 34px 16px; }
 
 /* 浮窗省略号模式下解除名称块宽度上限：让内容撑满以便检测溢出，标签先于名称被收起 */

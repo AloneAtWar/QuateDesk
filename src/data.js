@@ -46,7 +46,7 @@ export const adapterRegistry = {
     label: 'Xiaomi MiMo Token Plan',
     endpoint: '',
     auth: 'none',
-    windows: ['mimo_plan'],
+    windows: ['monthly', 'yearly'],
   },
   claude: {
     id: 'claude',
@@ -102,7 +102,9 @@ export const windowCatalog = {
   daily: { key: 'daily', label: '1 天', short: '1d', group: '短周期', color: 'sky' },
   weekly: { key: 'weekly', label: '7 天', short: '7d', group: '中周期', color: 'violet' },
   monthly: { key: 'monthly', label: '1个月', short: '1M', group: '长周期', color: 'coral' },
+  yearly: { key: 'yearly', label: '1年', short: '1Y', group: '长周期', color: 'amber' },
   balance: { key: 'balance', label: '余额', short: '余额', group: '余额', color: 'green' },
+  // 旧版 MiMo 套餐窗口：已按包月 / 包年并入 monthly / yearly，条目留给历史数据标名
   mimo_plan: { key: 'mimo_plan', label: 'Credits', short: 'Credits', group: 'MiMo', color: 'coral' },
   gemini_pro: { key: 'gemini_pro', label: 'Gemini Pro', short: 'Pro', group: 'Gemini', color: 'sky' },
   gemini_flash: { key: 'gemini_flash', label: 'Gemini Flash', short: 'Flash', group: 'Gemini', color: 'cyan' },
