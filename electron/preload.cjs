@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld('quotaDesk', {
   startKimiQrLogin: () => ipcRenderer.invoke('kimi:qr-start'),
   pollKimiQrLogin: (code) => ipcRenderer.invoke('kimi:qr-poll', code),
   importKimiQrLogin: (code, options) => ipcRenderer.invoke('kimi:qr-import', code, options),
+  startMimoLogin: () => ipcRenderer.invoke('mimo:login-start'),
+  importMimoLogin: (code, options) => ipcRenderer.invoke('mimo:login-import', code, options),
   startCopilotDeviceLogin: () => ipcRenderer.invoke('copilot:device-start'),
   pollCopilotDeviceLogin: (key) => ipcRenderer.invoke('copilot:device-poll', key),
   importCopilotDeviceLogin: (key, options) => ipcRenderer.invoke('copilot:device-import', key, options),

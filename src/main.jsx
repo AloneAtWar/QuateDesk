@@ -120,6 +120,7 @@ const reloginChannel = (provider) => {
   if (provider?.id === 'grok' || mode === 'grok') return { kind: 'grok', action: '重新导入', title: 'Grok 令牌已失效，点击重新导入本机 CLI 登录' };
   if (provider?.id === 'grokbot' || mode === 'grokbot') return { kind: 'grok', action: '重新导入', title: 'Grok Bot 登录已失效，点击重新导入本机客户端登录' };
   if (provider?.id === 'copilot' || mode === 'copilot') return { kind: 'copilot', action: '重新授权', title: 'GitHub 授权已失效，点击重新设备码登录' };
+  if (provider?.id === 'mimo' || mode === 'mimo') return { kind: 'mimo', action: '重新登录', title: 'MiMo 官方账号登录已失效，点击重新登录小米账号' };
   return null;
 };
 const providerVariableRequired = (provider, variable) => Boolean(variable?.required
@@ -268,30 +269,6 @@ const PROVIDER_USAGE_COPY = {
     saveAction: '保存并登录',
     connectedDetail: '可读取最近 1 年服务端历史',
     disconnectTitle: '断开 MiniMax 官方账号',
-  },
-  // MiMo 的官方登录与 DeepSeek/MiniMax 不同：额度轮询本身依赖这份登录态
-  //（MiMo 没有 API Key 额度端点），因此 defaultConnect 打开、必选
-  mimo: {
-    display: 'MiMo',
-    required: true,
-    defaultConnect: true,
-    // 个人版没有逐日用量端点（只有 tokenPlan/usage 聚合值），历史面板无内容
-    // 可展示——隐藏「用量」标签页；连接卡片（账号编辑里的登录/重连）保留
-    hideHistoryEntry: true,
-    loading: '查询 MiMo Token Plan 套餐额度',
-    connectHint: '弹窗登录小米账号（扫码 / 密码 / 短信均可），捕获的会话 Cookie 只加密保存在本机；平台会话 24 小时过期后会用小米通行证自动续期。',
-    connectAction: '连接小米账号',
-    connecting: '等待登录…',
-    reauthLabel: '需要重新登录',
-    reauthDetail: 'MiMo 官方账号登录已失效',
-    reauthHint: '自动续期失败（小米通行证也已失效），请重新连接小米账号后继续读取套餐额度。',
-    emptyHint: 'MiMo 已连接，但暂无逐日用量数据（官方暂未提供逐日接口）。',
-    editHint: '保存后打开小米账号登录，用于读取 Token Plan 套餐额度',
-    connectedToast: '已连接 MiMo 官方账号，额度巡检即刻生效',
-    savedToast: '账号已保存，并已连接 MiMo 官方账号',
-    saveAction: '保存并登录',
-    connectedDetail: '套餐 Credits 额度巡检 + 自动续期',
-    disconnectTitle: '断开 MiMo 官方账号',
   },
 };
 const providerUsageCopy = (provider) => PROVIDER_USAGE_COPY[provider?.id] || null;
@@ -1227,7 +1204,7 @@ function HistoryView({ account, provider, onBack, onProviderUsageState }) {
     return tracked ? base.filter((key) => tracked.includes(key)) : base;
   }, [provider, account]);
   // 用量统计入口常驻：未连接时页内直接引导登录，登录过期也能在原位置重新连接。
-  const showProviderUsageEntry = providerUsageSupported(account, provider) && !providerUsageCopy(provider)?.hideHistoryEntry;
+  const showProviderUsageEntry = providerUsageSupported(account, provider);
   const showWaste = view === 'waste' && wasteWindows.length > 0;
   const showProviderUsage = view === 'provider-usage' && showProviderUsageEntry;
   useEffect(() => {
@@ -1674,7 +1651,7 @@ function AccountModalV2({ providers, onClose, onSave, onTestDraft, embedded = fa
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
-  const [connectUsageAfterSave, setConnectUsageAfterSave] = useState(() => Boolean(PROVIDER_USAGE_COPY[fixedProvider?.id]?.defaultConnect));
+  const [connectUsageAfterSave, setConnectUsageAfterSave] = useState(false);
   const provider = selectableProviders.find((item) => item.id === providerId);
   const availableWindows = providerWindowKeys(provider);
   const variableDefinitions = providerVariableDefinitions(provider);
@@ -1683,12 +1660,7 @@ function AccountModalV2({ providers, onClose, onSave, onTestDraft, embedded = fa
   // Z.ai / Codex 这类免额外操作的厂商：保存时自动连接官方用量，表单里不出开关
   const usageCopy = providerUsageCopy(provider);
   const usageConnectVisible = Boolean(usageCopy?.saveAction) && Boolean(window.quotaDesk?.connectProviderUsage);
-  useEffect(() => {
-    const copy = PROVIDER_USAGE_COPY[providerId];
-    if (!copy?.saveAction) setConnectUsageAfterSave(false);
-    // MiMo 这类「官方登录 = 额度凭据」的厂商换入时默认勾上；其余厂商不打扰用户上次的勾选
-    else if (copy.defaultConnect) setConnectUsageAfterSave(true);
-  }, [providerId]);
+  useEffect(() => { if (!PROVIDER_USAGE_COPY[providerId]?.saveAction) setConnectUsageAfterSave(false); }, [providerId]);
   const toggle = (key) => setSelected((old) => old.includes(key) ? old.filter((item) => item !== key) : [...old, key]);
   const accountEndpoint = provider?.requestConfig?.adapterMode === 'script' ? String(variableValues.endpoint || provider.requestConfig.endpoint || '') : endpoint.trim();
   // 草稿连通性测试：不保存账号与凭据，直接用当前表单值查一次
@@ -1716,7 +1688,7 @@ function AccountModalV2({ providers, onClose, onSave, onTestDraft, embedded = fa
   const canRun = !((credentialRequired && !credential.trim()) || missingRequiredVariables || !selected.length || !accountEndpoint);
   const canSave = !(saving || (credentialRequired && !credential.trim()) || missingRequiredVariables || !selected.length || !accountEndpoint);
   const usageConnectOption = usageConnectVisible && usageCopy
-    ? <label className="setting-toggle provider-login-option"><span><b>{usageCopy.required ? '官方账号登录' : <>官方账号用量 <small>可选</small></>}</b><small>{usageCopy.editHint}</small></span><input type="checkbox" checked={connectUsageAfterSave} onChange={(event) => setConnectUsageAfterSave(event.target.checked)} /><i /></label>
+    ? <label className="setting-toggle provider-login-option"><span><b>官方账号用量 <small>可选</small></b><small>{usageCopy.editHint}</small></span><input type="checkbox" checked={connectUsageAfterSave} onChange={(event) => setConnectUsageAfterSave(event.target.checked)} /><i /></label>
     : null;
   const actions = (onCancel) => <div className="modal-actions"><button type="button" className="outline-button" onClick={onCancel}>{embedded ? '返回' : '取消'}</button><button type="button" className="outline-button" disabled={testing || !canRun} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" type="submit" form={embedded ? 'custom-account-form' : undefined} disabled={!canSave}>{saving ? '正在保存' : (usageCopy?.saveAction ? (connectUsageAfterSave ? usageCopy.saveAction : '保存') : usageCopy ? '保存并连接' : '保存')}</button></div>;
   // 嵌入模式（磁贴列表点进来的厂商表单）：表单区域滚动，标题与操作条固定，窗口尺寸与磁贴页一致；
@@ -2190,6 +2162,119 @@ function KimiQrPanel({ mode = 'import', reloginAccount = null, onExit, onImporte
   </>;
 }
 
+// MiMo 官方账号浏览器登录面板（无弹窗壳，两种宿主共用）：与 Kimi 扫码同一两步模式——
+// 第一步主进程弹浏览器窗口实际登录小米账号（扫码 / 密码 / 短信均可，Cookie 只留在
+// 主进程），登录成功窗口自动关闭并进入第二步；第二步确认账号名 / 标签后点「完成」
+// 才真正导入（import 新建账号 / relogin 回写原账号）。导入动作由按钮触发（不在
+// effect 里），与 KimiQrPanel 同一套防抖守卫。
+function MimoBrowserLoginPanel({ mode = 'import', reloginAccount = null, onExit, onImported, onFinish, exitLabel = '退出' }) {
+  const bridge = window.quotaDesk;
+  const [phase, setPhase] = useState('login'); // login（浏览器登录中）| configure（确认账号信息）
+  const [status, setStatus] = useState('pending'); // pending | cancelled | error
+  const [message, setMessage] = useState('');
+  const [code, setCode] = useState('');
+  const [display, setDisplay] = useState('');
+  const [importing, setImporting] = useState(false);
+  const [draft, setDraft] = useState(() => mode === 'relogin'
+    ? { name: reloginAccount?.name || 'MiMo', tags: (reloginAccount?.tags || []).join(', ') }
+    : { name: 'MiMo', tags: '日常' });
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const importingRef = useRef(false);
+  const onImportedRef = useRef(onImported);
+  onImportedRef.current = onImported;
+  const onFinishRef = useRef(onFinish);
+  onFinishRef.current = onFinish;
+  const start = async () => {
+    importingRef.current = false;
+    setImporting(false);
+    setPhase('login');
+    setStatus('pending');
+    setMessage('');
+    setCode('');
+    setDisplay('');
+    try {
+      const result = await bridge?.startMimoLogin?.();
+      if (!result || result.cancelled || !result.code) { setStatus('cancelled'); return; }
+      setCode(result.code);
+      setDisplay(result.display || '');
+      setPhase('configure');
+    } catch (startError) {
+      setStatus('error');
+      setMessage(startError.message || '登录失败，请重试');
+    }
+  };
+  useEffect(() => { start(); }, []);
+  const confirm = () => {
+    if (importingRef.current || phase !== 'configure' || !code) return;
+    importingRef.current = true;
+    setImporting(true);
+    const options = {
+      ...(mode === 'relogin' ? { accountId: reloginAccount?.id } : {}),
+      name: String(draftRef.current?.name || '').trim(),
+      tags: String(draftRef.current?.tags || '').split(',').map((tag) => tag.trim()).filter(Boolean),
+    };
+    bridge?.importMimoLogin?.(code, options).then((imported) => {
+      if (imported?.duplicate) {
+        // 登录属于另一个已收录账号：登录码已消费，只能换号重新登录
+        importingRef.current = false;
+        setImporting(false);
+        setPhase('login');
+        setStatus('error');
+        setMessage(`该登录已是账号「${imported.name}」的登录，请换一个小米账号`);
+        return;
+      }
+      onImportedRef.current?.('mimo', imported);
+      onFinishRef.current?.();
+    }).catch((importError) => {
+      importingRef.current = false;
+      setImporting(false);
+      setStatus('error');
+      setMessage(importError.message);
+    });
+  };
+  const loginStatusCopy = {
+    pending: '浏览器窗口已打开：请在其中登录小米账号（扫码 / 密码 / 短信均可），登录成功后窗口会自动关闭',
+    cancelled: '未完成登录（窗口已关闭），点击重试重新打开',
+    error: message || '出错了，请重试',
+  }[status] || '';
+  return <>
+    <div className="modal-head"><div><h2>{mode === 'relogin' ? '重新登录 MiMo' : '添加 MiMo 官方账号'}<TitleHelp>{mode === 'relogin'
+      ? 'MiMo 登录已失效：重新登录小米账号即可恢复额度巡检，账号名与标签在第二步可顺手修改。'
+      : '浏览器登录小米账号：会话 Cookie 加密保存在本机并自动续期，读取 Token Plan 套餐 Credits 额度与钱包余额。'}</TitleHelp></h2></div></div>
+    {phase === 'login'
+      ? <div className="kimi-qr-stage">
+        <div className={`kimi-qr-frame ${status === 'error' || status === 'cancelled' ? 'stale' : ''}`}>
+          <div className="kimi-qr-placeholder"><Globe size={16} className={status === 'pending' ? 'spinning' : ''} /></div>
+          {(status === 'cancelled' || status === 'error') && (
+            <button type="button" className="kimi-qr-refresh" title="重试" aria-label="重试" onClick={start}><RefreshCw size={22} /></button>
+          )}
+        </div>
+        <small className={`kimi-qr-status ${status === 'error' || status === 'cancelled' ? 'fail' : ''}`}>{loginStatusCopy}</small>
+      </div>
+      : <div className="kimi-qr-configure">
+        <div className="kimi-qr-ok">
+          <span className="kimi-qr-done-icon"><Check size={18} /></span>
+          <div><b>登录成功</b>{display && <small>标识：{display}</small>}</div>
+        </div>
+        {status === 'error' && <div className="adapter-note update-error"><AlertCircle size={15} /><span>{message}</span></div>}
+        {importing && <div className="adapter-note"><RefreshCw size={15} className="spinning" /><span>正在导入，请稍候…</span></div>}
+        <div className="form-grid">
+          <label className="field"><span>账号名 <small>留空则用渠道名</small></span><input value={draft.name} onChange={(event) => setDraft((old) => ({ ...old, name: event.target.value }))} placeholder="MiMo" disabled={importing} /></label>
+          <label className="field"><span>标签 <small>逗号分隔，可留空</small></span><input value={draft.tags} onChange={(event) => setDraft((old) => ({ ...old, tags: event.target.value }))} placeholder="日常, 主力" disabled={importing} /></label>
+        </div>
+      </div>}
+    <div className="modal-actions">
+      {phase === 'login'
+        ? <button type="button" className="outline-button" onClick={onExit}>{exitLabel}</button>
+        : <>
+          <button type="button" className="outline-button" disabled={importing} onClick={start}><RefreshCw size={13} /> 重新登录</button>
+          <button type="button" className="primary-button" disabled={importing} onClick={confirm}>{importing ? '正在导入…' : '完成'}</button>
+        </>}
+    </div>
+  </>;
+}
+
 // GitHub 设备码轮询的基础间隔：GitHub 给该客户端的 interval 是 5 秒，加 300ms 余量
 // 避免贴着边界发被限频（slow_down 后间隔自动 +5 秒，上限 30 秒）
 const COPILOT_POLL_GAP_MS = 5_300;
@@ -2409,6 +2494,7 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
   const [imported, setImported] = useState({});
   // Kimi 订阅扫码：同一个弹窗内切换视图（列表 ↔ 扫码），窗口尺寸恒定不变
   const [kimiQrOpen, setKimiQrOpen] = useState(false);
+  const [mimoLoginOpen, setMimoLoginOpen] = useState(false);
   // GitHub Copilot 设备码：与 Kimi 同一模式，列表只是入口，点击进入授权视图（同窗口）
   const [copilotOpen, setCopilotOpen] = useState(false);
   // CLI 渠道与 Kimi 同一模式：列表只是入口，点击进入渠道详情视图（同窗口）填写信息再导入
@@ -2447,9 +2533,9 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
   // 磁贴渠道清单：默认顺序 = CLI 订阅 → Copilot → DeepSeek → Z.ai → Kimi 订阅 → MiniMax → Grok Bot → wlbclub
   // → 其它 API / 中转厂商；用户拖过的自定义顺序（settings.providerOrder）叠在最前
   const tiles = useMemo(() => {
-    const apiDefaults = new Map(['deepseek', 'zai', 'minimax', 'mimo', 'wlb'].map((id, index) => [id, index]));
+    const apiDefaults = new Map(['deepseek', 'zai', 'minimax', 'wlb'].map((id, index) => [id, index]));
     const apiProviders = (providers || [])
-      .filter((provider) => !isCliProvider(provider))
+      .filter((provider) => !isCliProvider(provider) && provider.id !== 'mimo')
       .sort((left, right) => (apiDefaults.get(left.id) ?? 99) - (apiDefaults.get(right.id) ?? 99));
     const all = [
       ...CLI_LOGIN_KINDS,
@@ -2461,6 +2547,10 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
     const minimaxIndex = all.findIndex((channel) => channel.kind === 'minimax');
     if (minimaxIndex >= 0) all.splice(minimaxIndex, 0, ...kimiTile);
     else all.push(...kimiTile);
+    // MiMo 与 Kimi 同为「先登录后建号」渠道：浏览器登录小米账号，磁贴紧跟 MiniMax
+    const mimoTile = bridge?.startMimoLogin ? [{ kind: 'mimo', name: 'MiMo', providerId: 'mimo', mimo: true }] : [];
+    if (minimaxIndex >= 0) all.splice(all.findIndex((channel) => channel.kind === 'minimax') + 1, 0, ...mimoTile);
+    else all.push(...mimoTile);
     // Grok Bot 默认排在 wlbclub 前面（用户指定）：从 CLI 订阅段挪出，插到 wlb 磁贴之前；
     // wlb 不在列表时退回 CLI 段原位。已保存自定义顺序时，未记录项按稳定排序保持该相对位
     const grokBotIndex = all.findIndex((channel) => channel.kind === 'grokbot');
@@ -2528,9 +2618,14 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
     window.addEventListener('pointerup', up);
     window.addEventListener('pointercancel', cancel);
   };
-  const selected = tiles.find((channel) => channel.kind === selectedKind && !channel.kimi && !channel.copilot && !channel.api) || null;
+  const selected = tiles.find((channel) => channel.kind === selectedKind && !channel.kimi && !channel.copilot && !channel.api && !channel.mimo) || null;
   return <div className="modal-backdrop" onClick={onClose}><div className="modal compact-modal import-modal kimi-qr-modal import-window" onClick={(event) => event.stopPropagation()}>
-    {kimiQrOpen
+    {mimoLoginOpen
+      ? <MimoBrowserLoginPanel mode="import" exitLabel="返回" onExit={() => setMimoLoginOpen(false)} onFinish={() => setMimoLoginOpen(false)} onImported={(_kind, result) => {
+        setImported((old) => ({ ...old, mimo: true }));
+        onImported('mimo', result);
+      }} />
+      : kimiQrOpen
       ? <KimiQrPanel mode="import" exitLabel="返回" onExit={() => setKimiQrOpen(false)} onFinish={() => setKimiQrOpen(false)} onImported={(_kind, result) => {
         setImported((old) => ({ ...old, 'kimi-subscription': true }));
         onImported('kimi-subscription', result);
@@ -2589,6 +2684,13 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
               const done = imported['kimi-subscription'];
               const title = done ? 'Kimi 订阅 · 本次已导入' : 'Kimi 订阅 · 手机扫码登录，含月订阅额度，点击导入';
               return <button type="button" {...tileProps} className={`${tileProps.className} ${done ? 'is-disabled' : ''}`} title={title} aria-label={title} onClick={() => { if (!done && !dragMovedRef.current) setKimiQrOpen(true); }}>
+                <Logo provider={provider} interactive={false} />
+              </button>;
+            }
+            if (channel.mimo) {
+              const done = imported.mimo;
+              const title = done ? 'MiMo · 本次已导入' : 'MiMo Token Plan · 浏览器登录小米账号，读取套餐 Credits 额度，点击登录';
+              return <button type="button" {...tileProps} className={`${tileProps.className} ${done ? 'is-disabled' : ''}`} title={title} aria-label={title} onClick={() => { if (!done && !dragMovedRef.current) { setError(''); setMimoLoginOpen(true); } }}>
                 <Logo provider={provider} interactive={false} />
               </button>;
             }
@@ -2988,6 +3090,13 @@ function App() {
         if (result?.state) { setAccounts(result.state.accounts || []); setProviders(result.state.providers || []); setLastSync(result.state.lastSync || new Date().toISOString()); if (result.state.runtime) setRuntime(result.state.runtime); }
         lastSaved.current = '';
         setToast({ id: Date.now(), ok: !result?.duplicate, message: result?.duplicate ? `该登录已收录在账号「${result.name}」中，请换一个账号扫码` : `已重新登录「${result.name}」，正在刷新额度` });
+      }} />
+    </div></div>}
+    {modal?.type === 'mimo-relogin' && <div className="modal-backdrop" onClick={() => setModal(null)}><div className="modal compact-modal import-modal kimi-qr-modal import-window" onClick={(event) => event.stopPropagation()}>
+      <MimoBrowserLoginPanel mode="relogin" reloginAccount={modal.account} onExit={() => setModal(null)} onFinish={() => setModal(null)} onImported={(_kind, result) => {
+        if (result?.state) { setAccounts(result.state.accounts || []); setProviders(result.state.providers || []); setLastSync(result.state.lastSync || new Date().toISOString()); if (result.state.runtime) setRuntime(result.state.runtime); }
+        lastSaved.current = '';
+        setToast({ id: Date.now(), ok: !result?.duplicate, message: result?.duplicate ? `该登录已收录在账号「${result.name}」中，请换一个小米账号` : `已重新登录「${result.name}」，正在刷新额度` });
       }} />
     </div></div>}
     {modal?.type === 'copilot-relogin' && <div className="modal-backdrop" onClick={() => setModal(null)}><div className="modal compact-modal import-modal kimi-qr-modal import-window" onClick={(event) => event.stopPropagation()}>

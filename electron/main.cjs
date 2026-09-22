@@ -26,9 +26,11 @@ const {
   isAllowedMinimaxLoginUrl,
   isMinimaxCookieDomain,
   fetchMimoUsage,
+  fetchMimoProfile,
   probeMimoSession,
   isAllowedMimoLoginUrl,
   isMimoCookieDomain,
+  mimoCookieHeader,
   ProviderUsageError,
   PROVIDER_USAGE_AUTH_KEY,
   shouldUseCachedUsage,
@@ -1889,6 +1891,104 @@ function registerIpc() {
     sendState(saved);
     await pollState([id]).catch(() => {});
     return { imported: 1, duplicate: false, name: account.name, state: migrateState(store.loadState()) };
+  });
+
+  // ── MiMo 官方账号登录（Kimi 扫码同款两步模式）─────────────────────────────
+  // 第一步 login-start：弹浏览器窗口实际登录小米账号，捕获的 Cookie 只暂存主进程
+  // 内存（顺手读一次邮箱做标识）；第二步 login-import：用户确认账号名/标签后，
+  // 由主进程原子建号/回写并立即巡检。账号指纹 = 会话里的 userId Cookie。
+  const mimoPendingLogins = new Map();
+  const mimoUserIdOf = (cookies) => {
+    const userId = (Array.isArray(cookies) ? cookies : []).find((cookie) => cookie?.name === 'userId');
+    return typeof userId?.value === 'string' ? userId.value.trim().slice(0, 64) : '';
+  };
+  const mimoLoginDisplay = (entry) => entry.display || (() => {
+    const userId = mimoUserIdOf(entry.cookies);
+    return userId ? `…${userId.slice(-4)}` : '';
+  })();
+
+  ipcMain.handle('mimo:login-start', async () => {
+    const config = PROVIDER_USAGE_CONFIGS.mimo;
+    // 登录窗口用一次性 draft id：分区是内存态、窗口关闭即清理，不落任何账号数据
+    const loginId = `mimo-login-${Date.now().toString(36)}`;
+    const result = await captureBrowserUsageLogin(config, { accountId: loginId, interactive: true });
+    if (!result) return { cancelled: true };
+    let display = '';
+    try {
+      const profile = await fetchMimoProfile(net.fetch, { cookieHeader: mimoCookieHeader(result.cookies), timeoutMs: 10_000 });
+      display = profile?.email || '';
+    } catch {}
+    const code = crypto.randomBytes(12).toString('hex');
+    mimoPendingLogins.set(code, { cookies: result.cookies, connectedAt: result.validatedAt || new Date().toISOString(), display, createdAt: Date.now() });
+    return { code, display };
+  });
+
+  ipcMain.handle('mimo:login-import', async (_event, code, options = {}) => {
+    const entry = mimoPendingLogins.get(String(code || ''));
+    mimoPendingLogins.delete(String(code || ''));
+    if (!entry?.cookies?.length) throw new Error('登录会话已失效，请重新登录');
+    const config = PROVIDER_USAGE_CONFIGS.mimo;
+    const state = migrateState(store.loadState());
+    if (!state) throw new Error('桌面状态尚未初始化');
+    const provider = (state.providers || []).find((item) => item.id === 'mimo');
+    if (!provider) throw new Error('找不到厂商配置：mimo');
+    const fingerprint = mimoUserIdOf(entry.cookies);
+    const display = mimoLoginDisplay(entry);
+    // 重新登录已有账号（静默续期失败后的「重新登录」）：新 Cookie 写回原账号，
+    // 配置全部保留；账号名 / 标签允许在重登面板里顺手改
+    const reloginId = String(options?.accountId || '');
+    if (reloginId) {
+      const target = (state.accounts || []).find((account) => account.id === reloginId && account.providerId === 'mimo');
+      if (!target) throw new Error('找不到要重新登录的 MiMo 账号');
+      if (fingerprint) {
+        const conflict = (state.accounts || []).find((account) => account.id !== reloginId && account.providerId === 'mimo'
+          && mimoUserIdOf(readProviderUsageAuth(account.id)?.cookies || []) === fingerprint);
+        if (conflict) return { imported: 0, duplicate: true, name: conflict.name, state: migrateState(store.loadState()) };
+      }
+      const previous = readProviderUsageAuth(reloginId);
+      saveProviderUsageAuth(reloginId, config, null, previous?.connectedAt, entry.cookies);
+      clearProviderUsageCache(reloginId);
+      const customName = String(options?.name || '').trim();
+      const customTags = Array.isArray(options?.tags) ? options.tags.map((tag) => String(tag).trim()).filter(Boolean) : null;
+      // 自动生成的标识（邮箱 / …尾号）跟随新登录更新，用户手填的标识不动
+      const nextIdentity = (!target.identity || target.identity.startsWith('…') || /.+@.+\..+/.test(target.identity || '')) ? (display || target.identity) : target.identity;
+      const updatedAccounts = (state.accounts || []).map((account) => account.id === reloginId
+        ? { ...account, identity: nextIdentity, ...(customName ? { name: customName } : {}), ...(customTags ? { tags: customTags } : {}), status: 'active', authStatus: null, lastError: null }
+        : account);
+      const saved = store.saveState(cleanState({ ...state, accounts: updatedAccounts }));
+      sendState(saved);
+      markProviderUsageConnected(reloginId, config, previous?.connectedAt, true);
+      await pollState([reloginId]).catch(() => {});
+      return { imported: 1, duplicate: false, relogin: true, name: customName || target.name, display, state: migrateState(store.loadState()) };
+    }
+    // 指纹去重：同一小米账号已收录为独立账号时不重复导入
+    if (fingerprint) {
+      const existing = (state.accounts || []).find((account) => account.providerId === 'mimo'
+        && mimoUserIdOf(readProviderUsageAuth(account.id)?.cookies || []) === fingerprint);
+      if (existing) return { imported: 0, duplicate: true, name: existing.name, state: migrateState(store.loadState()) };
+    }
+    const id = `mimo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    saveProviderUsageAuth(id, config, null, entry.connectedAt, entry.cookies);
+    const customName = String(options?.name || '').trim();
+    const customTags = (Array.isArray(options?.tags) ? options.tags : []).map((tag) => String(tag).trim()).filter(Boolean);
+    const account = {
+      id,
+      providerId: 'mimo',
+      name: customName || provider.name,
+      identity: display,
+      tags: customTags,
+      windowKeys: provider.requestConfig?.windows?.length ? provider.requestConfig.windows : ['mimo_plan', 'balance'],
+      windows: [],
+      status: 'active',
+      lastError: null,
+      lastChecked: null,
+      lastTestAt: null,
+    };
+    const saved = store.saveState(cleanState({ ...state, accounts: [...(state.accounts || []), account] }));
+    sendState(saved);
+    markProviderUsageConnected(id, config, entry.connectedAt, true);
+    await pollState([id]).catch(() => {});
+    return { imported: 1, duplicate: false, name: account.name, display, state: migrateState(store.loadState()) };
   });
   // 从 cc-switch 导入：扫描结果不含 API key / OAuth token，应用时主进程重新提取并写凭据
   ipcMain.handle('import:scan-ccswitch', () => {

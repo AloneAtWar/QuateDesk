@@ -2060,6 +2060,21 @@ const probeMimoSession = async (fetcher, options = {}) => {
   return balance;
 };
 
+// 账号资料：登录成功后读一次邮箱，用作账号标识展示（失败不影响导入）
+const fetchMimoProfile = async (fetcher, options = {}) => {
+  const payload = await requestMimoJson({
+    fetcher,
+    path: '/userProfile',
+    ...(options.cookieHeader ? { cookieHeader: options.cookieHeader } : { credentials: 'include' }),
+    timeoutMs: usageTimeoutMs(options.timeoutMs),
+    signal: normalizeAbortSignal(options.signal),
+  });
+  const data = objectOf(payload?.data) ? payload.data : {};
+  const email = [data.email, data.platformEmail]
+    .find((value) => typeof value === 'string' && value.trim());
+  return { email: email ? email.trim().slice(0, 254) : '' };
+};
+
 /**
  * Fetch the MiMo account snapshot into the shared usage shape.
  * MiMo 没有已知的逐日用量接口，days 为空、heat 图按空数据渲染；summary 带
@@ -2145,6 +2160,7 @@ module.exports = {
   normalizeMinimaxOrigin,
   fetchMimoSnapshot,
   fetchMimoUsage,
+  fetchMimoProfile,
   probeMimoSession,
   isAllowedMimoLoginUrl,
   isMimoCookieDomain,
