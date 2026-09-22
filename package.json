@@ -14,10 +14,10 @@
     "build": "vite build",
     "preview": "vite preview",
     "desktop": "npm run build && electron .",
-    "dist": "npm run build && electron-builder",
-    "dist:win": "npm run build && electron-builder --win",
-    "dist:mac": "npm run build && electron-builder --mac",
-    "dist:linux": "npm run build && electron-builder --linux"
+    "dist": "node build/preflight.cjs && npm run build && electron-builder",
+    "dist:win": "node build/preflight.cjs && npm run build && electron-builder --win",
+    "dist:mac": "node build/preflight.cjs && npm run build && electron-builder --mac",
+    "dist:linux": "node build/preflight.cjs && npm run build && electron-builder --linux"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
