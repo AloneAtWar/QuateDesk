@@ -63,6 +63,13 @@ const builtinConfigs = {
   })`,
     variables: scriptVariables('https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains'),
   },
+  // Xiaomi MiMo Token Plan：专属适配（poller.cjs queryMimoQuota），额度来自
+  // platform.xiaomimimo.com 控制台内部接口，凭据是「连接官方账号」捕获的小米
+  // 账号会话 Cookie（加密保存，24 小时过期由主进程静默续期），无需 API Key
+  mimo: {
+    endpoint: 'https://platform.xiaomimimo.com',
+    windows: ['mimo_plan', 'balance'], wasteWindows: [], adapterMode: 'mimo', auth: 'none', credentialRequired: false,
+  },
   // Claude / Codex / Gemini 官方订阅：专属适配（cli-quota.cjs），复用本机 CLI 登录态
   claude: { windows: ['five_hour', 'weekly'], wasteWindows: ['weekly'], adapterMode: 'claude', auth: 'none', credentialRequired: false },
   codex: { windows: ['five_hour', 'weekly', 'monthly'], wasteWindows: ['weekly', 'monthly'], adapterMode: 'codex', auth: 'none', credentialRequired: false },

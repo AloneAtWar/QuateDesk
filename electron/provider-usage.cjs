@@ -1799,11 +1799,336 @@ const fetchMinimaxUsage = async (fetcher, options = {}) => {
     fetchedAt: new Date().toISOString(),
   };
 };
+// ── Xiaomi MiMo Token Plan（小米 Token Plan 套餐额度） ─────────────────────
+// MiMo 开放平台没有 API Key 可用的额度接口（官方与社区均确认），额度只在网页
+// 控制台展示：platform.xiaomimimo.com/api/v1 下的内部接口，鉴权走小米账号
+// OAuth 的会话 Cookie（api-platform_serviceToken 等，官方 Cookie 政策标注
+// 24 小时有效期），而不是 tp-xxx API Key。登录走标准小米通行证 SSO：
+// /api/v1/genLoginUrl → account.xiaomi.com/pass/serviceLogin?sid=api-platform
+// → 登录成功经 /sts 回调换发平台会话 Cookie。接口形状参考
+// Javis603/token-monitor 的 src/shared/providers/mimo/limits.js 与
+// cc-switch issue #2488 的社区抓包。
+const MIMO_PLATFORM_ORIGIN = 'https://platform.xiaomimimo.com';
+const MIMO_API_BASE = `${MIMO_PLATFORM_ORIGIN}/api/v1`;
+const MIMO_LABEL = 'MiMo 平台';
+const MIMO_AUTH_EXPIRED_MESSAGE = 'MiMo 官方账号登录已失效，请重新连接';
+const MIMO_TIMEZONE_OFFSET_SEC = 8 * 60 * 60;
+// 平台会话 Cookie 按官方政策 24 小时过期；通行证 Cookie（passToken 等）长期
+// 有效，是会话过期后静默续期的关键——登录窗口重放 genLoginUrl 时，通行证
+// 仍在即可无感换发新会话，无需用户再输密码。
+const MIMO_SESSION_COOKIE_TTL_MS = 24 * 60 * 60 * 1000;
+// 登录链路允许跳转的主机：MiMo 平台 + 小米通行证（国际账号走 i.account）
+const MIMO_LOGIN_HOSTS = new Set([
+  'platform.xiaomimimo.com',
+  'account.xiaomi.com',
+  'i.account.xiaomi.com',
+]);
+// 官方账号登录态在加密存储里的变量名（与 main.cjs 的 PROVIDER_USAGE_AUTH_KEY 同源）
+const PROVIDER_USAGE_AUTH_KEY = 'providerUsageAuth';
+
+const isAllowedMimoLoginUrl = (rawUrl) => {
+  try {
+    const url = new URL(String(rawUrl || ''));
+    return url.protocol === 'https:'
+      && !url.username
+      && !url.password
+      && (!url.port || url.port === '443')
+      && MIMO_LOGIN_HOSTS.has(url.hostname.toLowerCase());
+  } catch { return false; }
+};
+
+// 捕获/恢复的 Cookie 域：平台会话（.platform.xiaomimimo.com / .xiaomimimo.com）
+// 加小米通行证（account.xiaomi.com / .xiaomi.com）。通行证 Cookie 只在本机
+// 加密保存、只随续期窗口发往小米自己的域名，用于 24 小时会话过期后的静默续期。
+const isMimoCookieDomain = (value) => {
+  const domain = String(value || '').toLowerCase().replace(/^\./, '');
+  return domain === 'xiaomimimo.com' || domain.endsWith('.xiaomimimo.com')
+    || domain === 'xiaomi.com' || domain.endsWith('.xiaomi.com');
+};
+
+// 平台 API 请求只携带 xiaomimimo.com 域的 Cookie；通行证 Cookie 不外发
+const isMimoRequestCookieDomain = (value) => {
+  const domain = String(value || '').toLowerCase().replace(/^\./, '');
+  return domain === 'xiaomimimo.com' || domain.endsWith('.xiaomimimo.com');
+};
+
+const mimoCookieHeader = (cookies) => (Array.isArray(cookies) ? cookies : [])
+  .filter((cookie) => cookie?.name && typeof cookie.value === 'string' && isMimoRequestCookieDomain(cookie.domain))
+  .map((cookie) => `${cookie.name}=${cookie.value}`)
+  .join('; ');
+
+const mimoApiHost = (value) => {
+  try { return new URL(String(value || '')).hostname.toLowerCase(); } catch { return ''; }
+};
+
+// 会话失效时 MiMo 接口可能直接回 401/403，也可能 302 跳登录页（跟随重定向后
+// 落在 account.xiaomi.com、拿到 HTML）。请求统一 redirect:'follow'，按最终
+// URL、状态码与响应体综合判定，避免依赖各 fetch 实现对 manual 重定向的差异。
+const requestMimoJson = async ({ fetcher, path, cookieHeader = null, credentials = undefined, timeoutMs, signal = null }) => {
+  throwIfAborted(signal);
+  const controller = new AbortController();
+  let timedOut = false;
+  let rejectStop;
+  const stopPromise = new Promise((_, reject) => { rejectStop = reject; });
+  const providerAbortError = () => new ProviderUsageError('MiMo 请求已取消', 'ABORTED');
+  const handleExternalAbort = () => { controller.abort(signal?.reason); rejectStop(providerAbortError()); };
+  if (signal) {
+    signal.addEventListener('abort', handleExternalAbort, { once: true });
+    if (signal.aborted) handleExternalAbort();
+  }
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+    rejectStop(new ProviderUsageError('MiMo 平台请求超时', 'TIMEOUT'));
+  }, timeoutMs);
+  const awaitWithStop = (promise) => Promise.race([Promise.resolve(promise), stopPromise]);
+  const throwIfStopped = () => {
+    if (signal?.aborted) throw providerAbortError();
+    if (timedOut) throw new ProviderUsageError('MiMo 平台请求超时', 'TIMEOUT');
+  };
+  const authExpired = (status = null) => new ProviderUsageError(MIMO_AUTH_EXPIRED_MESSAGE, 'AUTH_EXPIRED', status);
+  try {
+    let response;
+    try {
+      response = await awaitWithStop(fetcher(`${MIMO_API_BASE}${path}`, {
+        method: 'GET',
+        cache: 'no-store',
+        redirect: 'follow',
+        ...(credentials ? { credentials } : {}),
+        headers: {
+          Accept: 'application/json, text/plain, */*',
+          ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+          Origin: MIMO_PLATFORM_ORIGIN,
+          Referer: `${MIMO_PLATFORM_ORIGIN}/console/plan-manage`,
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        },
+        signal: controller.signal,
+      }));
+      throwIfStopped();
+    } catch (error) {
+      if (signal?.aborted || error?.code === 'ABORTED') throw providerAbortError();
+      if (error instanceof ProviderUsageError && error.code === 'TIMEOUT') throw error;
+      throw new ProviderUsageError(
+        timedOut ? 'MiMo 平台请求超时' : '无法连接 MiMo 平台',
+        timedOut ? 'TIMEOUT' : 'NETWORK_ERROR',
+      );
+    }
+    throwIfStopped();
+    // 跟随重定向后落在登录域 = 会话失效被弹去登录页
+    const finalHost = mimoApiHost(response?.url);
+    if (finalHost && MIMO_LOGIN_HOSTS.has(finalHost) && finalHost !== 'platform.xiaomimimo.com') throw authExpired();
+    const status = Number(response?.status);
+    if (status === 401 || status === 403) throw authExpired(Number.isFinite(status) ? status : null);
+    const ok = response?.ok === true || (response?.ok === undefined && status >= 200 && status < 300);
+    if (!ok) throw new ProviderUsageError('MiMo 平台请求失败', 'HTTP_ERROR', Number.isFinite(status) ? status : null);
+    let payload = null;
+    if (typeof response?.json === 'function') {
+      try {
+        payload = await awaitWithStop(response.json());
+        throwIfStopped();
+      } catch (error) {
+        if (signal?.aborted || error?.code === 'ABORTED') throw providerAbortError();
+        if (error instanceof ProviderUsageError) throw error;
+        payload = null;
+      }
+    }
+    if (payload === null || typeof payload !== 'object') {
+      // 200 + HTML 也按会话失效处理（登录页直出）
+      if (finalHost && finalHost !== 'platform.xiaomimimo.com') throw authExpired();
+      throw new ProviderUsageError('MiMo 平台响应不是有效 JSON', 'SCHEMA_INCOMPATIBLE');
+    }
+    const bodyCode = Number(payload?.code);
+    if (bodyCode === 401 || bodyCode === 403) throw authExpired(null);
+    if (payload?.code !== undefined && payload?.code !== null && bodyCode !== 0) {
+      throw new ProviderUsageError(`MiMo 平台返回错误：${String(payload?.message || payload?.msg || '未知错误').slice(0, 120)}`, 'PLATFORM_ERROR');
+    }
+    return payload;
+  } finally {
+    clearTimeout(timer);
+    if (signal) signal.removeEventListener('abort', handleExternalAbort);
+  }
+};
+
+// usage 响应有两种历史形状：data.usage.items（plan_total_token 套餐总量 /
+// compensation_total_token 补偿积分，cc-switch 社区抓包）与 data.monthUsage.items
+// （month_total_token 月度量，token-monitor/CodexBar）。逐个探测取第一个命中。
+const mimoUsageItems = (payload) => {
+  const data = objectOf(payload?.data) ? payload.data : null;
+  if (!data) return [];
+  for (const container of [data.usage, data.monthUsage, data.month_usage]) {
+    if (Array.isArray(container?.items)) return container.items;
+  }
+  return [];
+};
+
+const mimoUsageItem = (payload, names) => {
+  const items = mimoUsageItems(payload);
+  for (const name of names) {
+    const item = items.find((entry) => String(entry?.name || '').trim().toLowerCase() === name);
+    if (!item) continue;
+    const used = finiteNumber(item.used);
+    const limit = finiteNumber(item.limit);
+    // percent 是 0–1 比例（token-monitor #292：当百分比读会把用尽的套餐看成
+    // 99% 剩余）；used/limit 无量纲歧义，凡两者齐备一律优先。
+    const percent = finiteNumber(item.percent);
+    const usedPercent = used !== null && limit !== null && limit > 0
+      ? Math.max(0, Math.min(100, (used / limit) * 100))
+      : percent !== null ? Math.max(0, Math.min(100, percent * 100)) : null;
+    if (used === null && limit === null && usedPercent === null) continue;
+    return { name, used, limit, usedPercent };
+  }
+  return null;
+};
+
+// 套餐详情：档位名 + 当前周期结束时间（重置时间）。控制台时间是
+// "YYYY-MM-DD HH:mm:ss"（UTC），补 T/Z 后解析。
+const mimoPlanDetail = (payload) => {
+  const data = objectOf(payload?.data) ? payload.data : {};
+  const label = ['planCode', 'plan_code', 'planName', 'plan_name']
+    .map((key) => typeof data[key] === 'string' ? data[key].trim() : '')
+    .find(Boolean) || null;
+  const rawEnd = data.currentPeriodEnd ?? data.current_period_end;
+  let resetsAt = null;
+  if (rawEnd) {
+    const text = String(rawEnd).trim().replace(' ', 'T');
+    const normalized = /Z$|[+-]\d\d:?\d\d$/.test(text) ? text : `${text}Z`;
+    const time = Date.parse(normalized);
+    if (Number.isFinite(time)) resetsAt = new Date(time).toISOString();
+  }
+  const status = String(data.planStatus ?? data.plan_status ?? data.subscriptionStatus ?? data.status ?? '').trim().toLowerCase();
+  const active = ['active', 'subscribed'].includes(status) || data.active === true || data.isActive === true;
+  const expired = ['expired', 'ended'].includes(status) || data.expired === true;
+  return { label, resetsAt, active, expired, status: status || null };
+};
+
+// 钱包余额（按量付费充值）：balance/cashBalance/giftBalance 均为字符串金额
+const mimoBalanceOf = (payload) => {
+  const data = objectOf(payload?.data) ? payload.data : {};
+  return {
+    balance: finiteNumber(data.balance),
+    currency: validCurrency(data.currency) ? String(data.currency).trim().toUpperCase() : 'CNY',
+    cashBalance: finiteNumber(data.cashBalance ?? data.cash_balance),
+    giftBalance: finiteNumber(data.giftBalance ?? data.gift_balance),
+  };
+};
+
+// 额度查询可能携带的错误向下透传（AUTH_EXPIRED / ABORTED 致命，其余降级）
+const mimoOptional = (error) => {
+  if (error?.code === 'AUTH_EXPIRED' || error?.code === 'ABORTED') throw error;
+  return null;
+};
+
+/**
+ * Fetch the MiMo account snapshot (plan usage + plan detail + wallet balance).
+ * `cookieHeader` 直发 Cookie 头（轮询路径）；`credentials: 'include'` 走浏览器
+ * 会话（登录捕获/恢复路径）。usage 为必需，detail 与 balance 尽力而为。
+ */
+const fetchMimoSnapshot = async (fetcher, options = {}) => {
+  if (typeof fetcher !== 'function') throw new ProviderUsageError('缺少网络请求实现', 'INVALID_ARGUMENT');
+  const timeoutMs = usageTimeoutMs(options.timeoutMs);
+  const signal = normalizeAbortSignal(options.signal);
+  throwIfAborted(signal);
+  const args = {
+    fetcher,
+    cookieHeader: options.cookieHeader ?? null,
+    credentials: options.credentials,
+    timeoutMs,
+    signal,
+  };
+  const usagePayload = await requestMimoJson({ ...args, path: '/tokenPlan/usage' });
+  const plan = mimoUsageItem(usagePayload, ['plan_total_token', 'month_total_token']);
+  const [detail, balance] = await Promise.all([
+    requestMimoJson({ ...args, path: '/tokenPlan/detail' }).then(mimoPlanDetail, mimoOptional),
+    requestMimoJson({ ...args, path: '/balance' }).then(mimoBalanceOf, mimoOptional),
+  ]);
+  return { plan, detail, balance };
+};
+
+// 登录探针：余额接口能读通即证明会话有效（token-monitor 同款判据）
+const probeMimoSession = async (fetcher, options = {}) => {
+  const timeoutMs = usageTimeoutMs(options.timeoutMs);
+  const signal = normalizeAbortSignal(options.signal);
+  const payload = await requestMimoJson({
+    fetcher,
+    path: '/balance',
+    credentials: 'include',
+    timeoutMs,
+    signal,
+  });
+  const balance = mimoBalanceOf(payload);
+  if (balance.balance === null) throw new ProviderUsageError('MiMo 响应中没有余额字段', 'SCHEMA_INCOMPATIBLE');
+  return balance;
+};
+
+/**
+ * Fetch the MiMo account snapshot into the shared usage shape.
+ * MiMo 没有已知的逐日用量接口，days 为空、heat 图按空数据渲染；summary 带
+ * 套餐档位与钱包余额，后续发现逐日端点再补齐 days。
+ */
+const fetchMimoUsage = async (fetcher, options = {}) => {
+  const timezoneOffsetSec = normalizeUsageTimezoneOffset(options.timezoneOffsetSec, MIMO_TIMEZONE_OFFSET_SEC, 'MiMo 用量');
+  const fallbackRange = defaultRange(timezoneOffsetSec, options.nowMs);
+  const start = parseDate(options.startDate || fallbackRange.startDate, 'startDate');
+  const end = parseDate(options.endDate || fallbackRange.endDate, 'endDate');
+  const timeoutMs = usageTimeoutMs(options.timeoutMs);
+  const signal = normalizeAbortSignal(options.signal);
+  throwIfAborted(signal);
+  const snapshot = await fetchMimoSnapshot(fetcher, {
+    credentials: 'include',
+    timeoutMs,
+    signal,
+  });
+  const emptyCoverage = (source) => ({
+    complete: false,
+    coveredPeriods: 0,
+    totalPeriods: 0,
+    sources: [],
+    legacyFallback: false,
+    ...(source ? { source } : {}),
+  });
+  return {
+    provider: 'mimo',
+    metric: 'tokens',
+    currency: null,
+    summary: {
+      balance: snapshot.balance?.balance ?? null,
+      grantedBalance: snapshot.balance?.giftBalance ?? null,
+      toppedUpBalance: snapshot.balance?.cashBalance ?? null,
+      totalCost: null,
+      rangeCost: null,
+      peakDailyCost: null,
+      rangeTokens: null,
+      knownRangeTokens: null,
+      planName: snapshot.detail?.label || null,
+      planCreditsLimit: snapshot.plan?.limit ?? null,
+      planCreditsUsed: snapshot.plan?.used ?? null,
+      activeDays: null,
+      inputTokens: null,
+      outputTokens: null,
+      requests: null,
+    },
+    coverage: {
+      start: start.value,
+      end: end.value,
+      timeZone: timezoneOffsetSec,
+      timezoneOffsetSec,
+      source: 'token-plan',
+      partial: true,
+      tokens: emptyCoverage(),
+      cost: emptyCoverage(),
+      issues: [{ period: `${start.value}~${end.value}`, code: 'NO_DAILY_ENDPOINT' }],
+    },
+    days: [],
+    fetchedAt: new Date().toISOString(),
+  };
+};
+
 module.exports = {
   fetchDeepSeekUsage,
   fetchDeepSeekSummary,
   queryDeepSeekUsage: fetchDeepSeekUsage,
   ProviderUsageError,
+  PROVIDER_USAGE_AUTH_KEY,
   isAllowedDeepSeekLoginUrl,
   normalizeDeepSeekUserToken,
   fetchZaiUsage,
@@ -1818,6 +2143,12 @@ module.exports = {
   isAllowedMinimaxLoginUrl,
   isMinimaxCookieDomain,
   normalizeMinimaxOrigin,
+  fetchMimoSnapshot,
+  fetchMimoUsage,
+  probeMimoSession,
+  isAllowedMimoLoginUrl,
+  isMimoCookieDomain,
+  mimoCookieHeader,
   shouldUseCachedUsage,
   __test: {
     ZAI_DEFAULT_ORIGIN,
@@ -1841,6 +2172,15 @@ module.exports = {
     DEEPSEEK_PLATFORM_ORIGIN,
     DEEPSEEK_ROUTES,
     DEEPSEEK_LOGIN_HOSTS,
+    MIMO_PLATFORM_ORIGIN,
+    MIMO_API_BASE,
+    MIMO_LOGIN_HOSTS,
+    MIMO_SESSION_COOKIE_TTL_MS,
+    MIMO_TIMEZONE_OFFSET_SEC,
+    mimoUsageItem,
+    mimoPlanDetail,
+    mimoBalanceOf,
+    mimoCookieHeader,
     buildMonthChunks,
     normalizeSummary,
     shouldFallbackToLegacy,

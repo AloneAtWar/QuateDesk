@@ -25,7 +25,12 @@ const {
   probeMinimaxSession,
   isAllowedMinimaxLoginUrl,
   isMinimaxCookieDomain,
+  fetchMimoUsage,
+  probeMimoSession,
+  isAllowedMimoLoginUrl,
+  isMimoCookieDomain,
   ProviderUsageError,
+  PROVIDER_USAGE_AUTH_KEY,
   shouldUseCachedUsage,
 } = require('./provider-usage.cjs');
 
@@ -50,7 +55,7 @@ const providerUsageWindows = new Map();
 const providerUsageSessions = new Map();
 const providerUsageRequests = new Map();
 const providerUsageEpochs = new Map();
-const PROVIDER_USAGE_AUTH_KEY = 'providerUsageAuth';
+const mimoRenewalAttempts = new Map();
 const PROVIDER_USAGE_CACHE_MS = 2 * 60 * 1000;
 const DEEPSEEK_USAGE_URL = 'https://platform.deepseek.com/usage';
 const DEEPSEEK_PLATFORM_ORIGIN = new URL(DEEPSEEK_USAGE_URL).origin;
@@ -327,6 +332,7 @@ const builtinLogos = {
   grok: './logos/grok.png',
   grokbot: './logos/grokbot.png',
   minimax: './logos/minimax.svg',
+  mimo: './logos/mimo.svg',
   claude: './logos/claude.jpg',
   codex: './logos/codex.svg',
   gemini: './logos/gemini.svg',
@@ -341,6 +347,7 @@ const builtinWebsites = {
   grok: 'https://grok.com/',
   grokbot: 'https://x.ai/bot',
   minimax: 'https://platform.minimaxi.com',
+  mimo: 'https://platform.xiaomimimo.com',
   claude: 'https://claude.com/claude-code',
   codex: 'https://developers.openai.com/codex/',
   gemini: 'https://gemini.google.com/',
@@ -352,6 +359,9 @@ const ensureCliProviders = (providers) => {
     { id: 'grok', name: 'Grok', legalName: 'xAI Grok', monogram: 'G', tone: 'slate', adapter: 'grok', logo: './logos/grok.png' },
     { id: 'grokbot', name: 'Grok Bot', legalName: 'xAI Grok Bot', monogram: 'G', tone: 'slate', adapter: 'grokbot', logo: './logos/grokbot.png' },
     { id: 'minimax', name: 'MiniMax', legalName: 'MiniMax Coding Plan', monogram: 'M', tone: 'mint', adapter: 'minimax', logo: './logos/minimax.svg' },
+    // MiMo Token Plan：额度接口只认网页会话 Cookie（无 API Key 端点），账号
+    // 凭据即「连接官方账号」捕获的小米账号登录，轮询与静默续期都在主进程
+    { id: 'mimo', name: 'MiMo', legalName: 'Xiaomi MiMo Token Plan', monogram: 'M', tone: 'coral', adapter: 'mimo', logo: './logos/mimo.svg' },
     { id: 'claude', name: 'Claude', legalName: 'Claude Code', monogram: 'C', tone: 'coral', adapter: 'claude', logo: './logos/claude.jpg' },
     { id: 'codex', name: 'Codex', legalName: 'OpenAI Codex', monogram: 'O', tone: 'mint', adapter: 'codex', logo: './logos/codex.svg' },
     { id: 'gemini', name: 'Gemini', legalName: 'Gemini CLI', monogram: 'G', tone: 'sky', adapter: 'gemini', logo: './logos/gemini.svg' },
@@ -411,9 +421,10 @@ const migrateAccount = (account) => {
   return normalized;
 };
 
-// 下线的渠道在迁移时一并丢弃：mimo 从未推出适配接口；kimi 的独立 API Key 渠道已下线
-// （订阅统一走 kimi-subscription 扫码登录，避免同一厂商出现两个入口）
-const dropProviderIds = new Set(['mimo', 'kimi']);
+// 下线的渠道在迁移时一并丢弃：kimi 的独立 API Key 渠道已下线
+// （订阅统一走 kimi-subscription 扫码登录，避免同一厂商出现两个入口）。
+// mimo 曾因无适配接口下线，现以官方账号 Cookie 适配重新上架，不在丢弃列表。
+const dropProviderIds = new Set(['kimi']);
 const migrateState = (state) => state ? {
   ...state,
   accounts: (state.accounts || []).map(migrateAccount).filter((account) => !dropProviderIds.has(account.providerId)),
@@ -638,6 +649,7 @@ const deleteAccountLocalData = async (accountId) => {
   abortProviderUsageRequests(accountId);
   closeProviderUsageWindows(accountId);
   clearProviderUsageCache(accountId);
+  mimoRenewalAttempts.delete(accountId);
   // The auxiliary session is memory-only. Always remove the encrypted credential even
   // if Chromium cannot eagerly release its in-process cache.
   await clearProviderUsageSession(accountId);
@@ -740,6 +752,28 @@ const PROVIDER_USAGE_CONFIGS = {
       readCredential: null,
       validate: (_auth, sessionFetch, signal) => probeMinimaxSession(sessionFetch, { timeoutMs: 15_000, signal }),
       fetchUsage: (_auth, sessionFetch, options) => fetchMinimaxUsage(sessionFetch, options),
+    },
+  },
+  // MiMo Token Plan 的官方账号登录不只是历史用量增强——额度轮询本身也依赖这
+  // 份 Cookie 快照（MiMo 没有 API Key 额度端点）。登录走小米通行证 SSO：
+  // 控制台页 → genLoginUrl → account.xiaomi.com；会话 Cookie 24 小时过期后，
+  // 隐藏窗口重放同一链路，通行证 Cookie（passToken 等）仍在即可静默换发，
+  // 无需用户再登录（pollState 里的 recoverBrowserUsageAuth 兜底）。
+  mimo: {
+    id: 'mimo',
+    mode: 'browser-cookie',
+    timezoneOffsetSec: 8 * 60 * 60,
+    missingAuthMessage: '尚未连接 MiMo 官方账号',
+    expiredMessage: 'MiMo 官方账号登录已失效，请重新连接',
+    browser: {
+      loginUrl: 'https://platform.xiaomimimo.com/console/plan-manage',
+      loginTitle: '连接 MiMo 官方账号',
+      isAllowedLoginUrl: isAllowedMimoLoginUrl,
+      isCookieDomain: isMimoCookieDomain,
+      requiresToken: false,
+      readCredential: null,
+      validate: (_auth, sessionFetch, signal) => probeMimoSession(sessionFetch, { timeoutMs: 15_000, signal }),
+      fetchUsage: (_auth, sessionFetch, options) => fetchMimoUsage(sessionFetch, options),
     },
   },
 };
@@ -1190,6 +1224,44 @@ const mergePolledAccounts = (latestAccounts, polled, originals = []) => {
   });
 };
 
+// MiMo 额度轮询的会话续期兜底：平台会话 Cookie 官方政策 24 小时过期，轮询抛
+// reauth_required 时先用隐藏窗口静默重走登录链路（通行证 Cookie 仍在即可无感
+// 换发，见 PROVIDER_USAGE_CONFIGS.mimo），成功后带着新 Cookie 重试一次。续期
+// 失败（通行证也失效）才标记 reauth_required 交还错误，由界面提示重新连接。
+// 续期尝试按账号节流：通行证已死时避免每轮巡检都空开 15 秒隐藏窗口。
+const MIMO_SILENT_RENEWAL_INTERVAL_MS = 30 * 60 * 1000;
+const queryAccountWithSilentRenewal = async (account, provider) => {
+  const run = () => {
+    const secrets = store.getSecrets(account.id);
+    return queryAccount(account, provider, secrets.credential, net.fetch, secrets.variables, {
+      onCliAuth: ({ kind, next, previous, source }) => persistCliAuthUpdate(account.id, { kind, next, previous, source }),
+      // 网络重试时重新读凭据：上一次尝试可能已续期并轮换 refresh_token，继续用旧值会被判复用
+      getSecretVariables: () => store.getSecrets(account.id).variables,
+    });
+  };
+  try {
+    return await run();
+  } catch (error) {
+    if (error?.authStatus !== 'reauth_required' || account.providerId !== 'mimo') throw error;
+    const config = PROVIDER_USAGE_CONFIGS.mimo;
+    // 从未连接过官方账号：没有可续期的登录态，直接交还可行动的错误
+    if (!readProviderUsageAuth(account.id)) throw error;
+    const lastAttempt = Number(mimoRenewalAttempts.get(account.id) || 0);
+    if (Date.now() - lastAttempt < MIMO_SILENT_RENEWAL_INTERVAL_MS) throw error;
+    mimoRenewalAttempts.set(account.id, Date.now());
+    let renewed = null;
+    try { renewed = await recoverBrowserUsageAuth(config, account.id, providerUsageEpoch(account.id)); }
+    catch { renewed = null; }
+    if (!renewed) {
+      markProviderUsageExpired(account.id, config);
+      throw error;
+    }
+    // 续期成功：清掉节流记录，下一次过期立即续期
+    mimoRenewalAttempts.delete(account.id);
+    return await run();
+  }
+};
+
 async function pollState(accountIds = null) {
   const current = migrateState(store.loadState());
   if (!current) throw new Error('桌面状态尚未初始化');
@@ -1208,12 +1280,7 @@ async function pollState(accountIds = null) {
       continue;
     }
     try {
-      const secrets = store.getSecrets(account.id);
-      const windows = await queryAccount(account, provider, secrets.credential, net.fetch, secrets.variables, {
-        onCliAuth: ({ kind, next, previous, source }) => persistCliAuthUpdate(account.id, { kind, next, previous, source }),
-        // 网络重试时重新读凭据：上一次尝试可能已续期并轮换 refresh_token，继续用旧值会被判复用
-        getSecretVariables: () => store.getSecrets(account.id).variables,
-      });
+      const windows = await queryAccountWithSilentRenewal(account, provider);
       const checkedAt = new Date().toISOString();
       // 查询成功后刷新身份信息（续期后的最新凭据重新解析一次）
       const identityPatch = cliIdentityPatch(account, provider.requestConfig?.adapterMode, store.getSecrets(account.id));
