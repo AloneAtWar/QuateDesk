@@ -1,138 +1,210 @@
 # Quota Desk
 
-![Quota Desk logo](public/logo.png)
+<p align="center"><strong>别让 Coding Plan 的额度悄悄溜走</strong></p>
 
-**把多个 Coding Plan 的额度放在一个桌面窗口里，及时发现即将刷新的剩余额度，减少周期性浪费。**
+<p align="center">
+  <a href="https://github.com/AloneAtWar/QuateDesk/releases"><img src="https://img.shields.io/github/v/release/AloneAtWar/QuateDesk?display_name=tag&style=flat-square&label=latest" alt="最新版本"></a>
+  <a href="https://github.com/AloneAtWar/QuateDesk/releases"><img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-2e8b66?style=flat-square" alt="支持 Windows、macOS 和 Linux"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/AloneAtWar/QuateDesk?style=flat-square" alt="MIT License"></a>
+</p>
 
-[![最新版本](https://img.shields.io/github/v/release/AloneAtWar/QuateDesk?display_name=tag&style=flat-square)](https://github.com/AloneAtWar/QuateDesk/releases)
-[![License](https://img.shields.io/github/license/AloneAtWar/QuateDesk?style=flat-square)](LICENSE)
+<p align="center">
+  <img src="docs/readme/hero.webp" alt="Quota Desk：多平台、多账号、多周期的 Coding Plan 额度监控桌面应用" width="100%">
+</p>
+
+<p align="center">
+  <a href="https://github.com/AloneAtWar/QuateDesk/releases"><strong>下载最新版本</strong></a>
+  ·
+  <a href="CHANGELOG.md">查看更新记录</a>
+</p>
+
+Quota Desk 是一个本地桌面额度监控工具。它把不同 Coding Plan、不同账号和不同额度周期集中到同一个窗口，持续展示剩余额度、重置倒计时、使用趋势与周期浪费。
+
+当 5 小时、1 天、7 天、1 个月、1 年等额度在不同时间刷新时，你可以提前知道哪些额度即将重置，并决定接下来优先使用哪个账号。
 
 ## 为什么需要 Quota Desk
 
-当你同时订阅 Kimi、Z.ai、Claude、Codex、Gemini 或其他 Coding Plan 时，每个账号通常都有自己的额度周期：5 小时、7 天、1 个月，甚至按模型区分的额度桶。它们的刷新时间由订阅时间和首次使用时间决定，几乎不会完全同步。
+同时订阅多个 Coding Plan 后，每个账号的额度周期通常不会同步。某个周期快结束时仍剩下很多额度，如果没有及时注意，刷新后便会直接进入下一个周期。
 
-这会带来一个很容易忽略的问题：某个周期快结束时，额度还剩很多，但你没有及时看到；周期刷新后，未使用额度被清零。几次周额度没有用满，也会进一步影响月度额度的实际利用率。切换工具可以帮助选择服务商，但它们通常不是为“集中观察额度、提醒即将浪费”设计的。
+Quota Desk 专门处理这件事：
 
-Quota Desk 专注解决这件事：把多个服务商、多个账号、多个周期集中到一个本地桌面应用里，用统一的视图查看剩余量、刷新倒计时和需要优先使用的账号。
+- 把多个服务商和多个账号放到一个视图中。
+- 同时观察短周期、周周期、月周期和余额型额度。
+- 记录额度变化，区分真实趋势与关机造成的数据空档。
+- 归档周期结束时的剩余额度，长期观察实际浪费情况。
+- 用桌面浮窗和系统通知把即将刷新的额度保持在视线内。
+
+## 从剩余额度到使用洞察
+
+<p align="center">
+  <img src="docs/readme/insights.webp" alt="Quota Desk 的额度趋势、全年用量热力图和周期浪费统计" width="100%">
+</p>
+
+### 额度趋势
+
+每次成功刷新都会记录额度快照。趋势图支持时间范围切换、滚轮缩放、拖动平移和多窗口显隐；程序关闭或查询失败造成的数据空档不会被强行连线。
+
+### 官方用量
+
+DeepSeek、Z.ai、Codex 和 MiniMax 支持逐日用量视图，包括近一年热力图、累计消耗、峰值日、当前连续天数和最长连续天数。各厂商能够提供的统计维度可能不同。
+
+### 周期浪费
+
+固定周期结束时，Quota Desk 会归档当时未使用的额度。浪费视图提供周期柱状图、平均浪费率、累计浪费和可信度标记；长时间关机或厂商提前重置造成的不可靠周期不会计入平均。
 
 ## 核心功能
 
-- **账号总览**：每个账号一张卡片，每个额度窗口用同心圆展示，剩余比例和刷新时间一眼可见。
-- **行式明细**：按账号列出所有窗口，方便比较不同服务商的剩余量、已用量和刷新倒计时。
-- **周期明细**：按 5 小时、7 天、1 个月等周期分组，并提供重置时间轴，快速找到最近要刷新的额度。
-- **桌面浮窗**：像网速浮窗一样常驻桌面顶层，额度信息持续滚动；鼠标滚轮切换账号，双击展开主窗口，支持 80%–300% 等比缩放。
-- **防浪费提醒**：自定义“刷新前多少分钟”和“至少剩余多少百分比”，命中时标记窗口并发送桌面通知。
-- **亮色 / 暗色主题**：主窗口与桌面浮窗同步切换，下面的截图会固定展示两种主题。
-- **多账号聚合**：同一服务商可以添加多个账号、标签和不同额度窗口，统一轮询更新。
-- **cc-switch 导入**：扫描本机 cc-switch 数据，导入可识别的账号和 API Key；重复 Key 自动去重。
-- **自定义服务商**：支持标准响应映射，也支持带变量的高级脚本；内置 New API 站点模板，填写站点信息即可接入兼容中转站。
-- **自动更新与开机自启**：从 GitHub Releases 检查更新，也可以让应用随系统登录启动。
+| 功能 | 能做什么 |
+| --- | --- |
+| 多账号总览 | 每个账号一张卡片，用同心圆同时展示多个额度窗口；卡片支持拖动排序 |
+| 行式与周期明细 | 横向比较账号，或按 5 小时、1 天、7 天、1 个月、1 年等周期分组 |
+| 重置时间轴 | 把即将到来的重置点放到同一条时间轴上；悬停倒计时可看具体时间点 |
+| 优先级排序 | 分别调整短周期和长周期中“剩余额度 / 距重置时间”的权重 |
+| 桌面浮窗 | 常驻桌面顶层，滚轮切换账号，双击打开主窗口，支持大小与长度调节 |
+| 防浪费提醒 | 按“刷新前多少分钟”和“至少剩余多少”发送桌面通知 |
+| 历史、用量与浪费 | 从实时额度继续追踪趋势、官方逐日用量和周期浪费 |
+| 多账号登录快照 | 独立保存多个 CLI / OAuth 登录，不受当前激活账号切换影响 |
+| 账号停用 | 停止巡检但保留凭据、历史和浪费档案，之后可以继续启用 |
+| 自定义服务商 | 标准字段映射、高级脚本和 New API 兼容站点模板 |
+| 网络与可靠性 | 支持系统代理、手动代理、直连、账号级超时和瞬时错误重试 |
+| 桌面集成 | 亮色 / 暗色主题、系统托盘、开机启动和自动更新 |
 
-## 界面截图
+## 多种账号，一个入口
 
-每个视图都同时展示亮色和暗色版本。点击图片可以打开原图查看细节。
+<p align="center">
+  <img src="docs/readme/connections.webp" alt="Quota Desk 支持扫码、设备码、CLI、API Token、cc-switch 和自定义渠道" width="100%">
+</p>
 
-### 同心圆账号总览
+添加账号时先选择厂商，再进入对应的登录方式。订阅渠道、CLI 登录和 API / 中转账号使用同一个入口；凭据过期后，支持的渠道可以直接重新扫码、重新授权或重新导入。
 
-<table>
-  <tr>
-    <td align="center"><strong>亮色</strong><br><a href="docs/screenshot/ScreenShot_2026-08-22_205516_430.png"><img src="docs/screenshot/ScreenShot_2026-08-22_205516_430.png" alt="亮色主题的同心圆账号总览" width="100%"></a></td>
-    <td align="center"><strong>暗色</strong><br><a href="docs/screenshot/ScreenShot_2026-08-22_205617_590.png"><img src="docs/screenshot/ScreenShot_2026-08-22_205617_590.png" alt="暗色主题的同心圆账号总览" width="100%"></a></td>
-  </tr>
-</table>
+## 支持的服务商
 
-### 行式明细
-
-<table>
-  <tr>
-    <td align="center"><strong>亮色</strong><br><a href="docs/screenshot/ScreenShot_2026-08-22_205532_899.png"><img src="docs/screenshot/ScreenShot_2026-08-22_205532_899.png" alt="亮色主题的行式明细" width="100%"></a></td>
-    <td align="center"><strong>暗色</strong><br><a href="docs/screenshot/ScreenShot_2026-08-22_205624_871.png"><img src="docs/screenshot/ScreenShot_2026-08-22_205624_871.png" alt="暗色主题的行式明细" width="100%"></a></td>
-  </tr>
-</table>
-
-### 周期明细与重置时间轴
-
-<table>
-  <tr>
-    <td align="center"><strong>亮色</strong><br><a href="docs/screenshot/ScreenShot_2026-08-22_205544_888.png"><img src="docs/screenshot/ScreenShot_2026-08-22_205544_888.png" alt="亮色主题的周期明细和重置时间轴" width="100%"></a></td>
-    <td align="center"><strong>暗色</strong><br><a href="docs/screenshot/ScreenShot_2026-08-22_205632_968.png"><img src="docs/screenshot/ScreenShot_2026-08-22_205632_968.png" alt="暗色主题的周期明细和重置时间轴" width="100%"></a></td>
-  </tr>
-</table>
-
-### 桌面浮窗
-
-<table>
-  <tr>
-    <td align="center"><strong>亮色</strong><br><a href="docs/screenshot/ScreenShot_2026-08-22_205602_960.png"><img src="docs/screenshot/ScreenShot_2026-08-22_205602_960.png" alt="亮色主题的桌面浮窗" width="100%"></a></td>
-    <td align="center"><strong>暗色</strong><br><a href="docs/screenshot/ScreenShot_2026-08-22_205639_325.png"><img src="docs/screenshot/ScreenShot_2026-08-22_205639_325.png" alt="暗色主题的桌面浮窗" width="100%"></a></td>
-  </tr>
-</table>
-
-## 支持的服务商与额度来源
-
-| 服务商 | 额度窗口 | 连接方式 |
+| 服务商 | 主要额度 | 接入方式 |
 | --- | --- | --- |
-| Kimi for Coding | 5 小时、7 天 | API Token |
+| Kimi for Coding | 5 小时、7 天、1 个月 | 手机扫码登录 Kimi 订阅 |
 | Z.ai / 智谱 | 5 小时、7 天、1 个月 | API Token |
-| DeepSeek | 余额 | API Token |
+| DeepSeek | API 余额 | API Token；用量页使用浏览器登录 |
 | wlbclub | 1 天、7 天 | API Token |
-| Grok / SuperGrok | 自动识别周期窗口 | 读取本机 grok CLI 登录状态 |
-| MiniMax Coding Plan | 5 小时、7 天 | API Token |
-| Xiaomi MiMo Token Plan | 1 个月（包月）/ 1 年（包年，按套餐周期自动区分） | 浏览器登录小米账号（会话 Cookie 加密保存，过期自动续期） |
-| Claude Code | 5 小时、7 天 | 读取本机 Claude Code 登录状态 |
-| OpenAI Codex | 5 小时、7 天、1 个月 | 读取本机 Codex CLI 的 ChatGPT OAuth 登录状态 |
-| Gemini CLI | Gemini Pro、Flash、Flash Lite | 读取本机 Gemini CLI 登录状态 |
-| New API 兼容站点 | 按站点接口配置 | 自定义服务商中的 New API 模板 |
+| Grok | 7 天 | 导入本机 Grok CLI 登录 |
+| Grok Bot | 7 天 | 导入本机 Grok Bot 客户端登录 |
+| MiniMax Coding Plan | 5 小时、7 天 | API Token；用量页使用浏览器登录 |
+| Xiaomi MiMo Token Plan | 1 个月或 1 年 Credits | 浏览器登录小米账号 |
+| Claude Code | 5 小时、7 天 | 导入本机 Claude Code 登录 |
+| OpenAI Codex | 5 小时、7 天、1 个月 | 导入本机 Codex CLI 登录 |
+| Gemini CLI | Gemini Pro、Flash、Flash Lite | 导入本机 Gemini CLI 登录 |
+| GitHub Copilot | 每月 Premium requests | GitHub 设备码授权 |
+| New API 兼容站点 | 由站点接口决定 | 自定义服务商中的 New API 模板 |
 
-Claude、Codex、Gemini 和 Grok 不需要在 Quota Desk 中重复填写 Token，但使用前需要先在对应 CLI 中完成登录。New API 是兼容站点模板，不限定某一个中转站域名。
-
-### CLI 官方订阅的多账号监控
-
-CLI 服务商默认跟随本机 CLI 的当前登录（适合单账号）。要同时监控多个官方账号（例如多个 ChatGPT 账号的 Codex 订阅），在设置 → 账号与凭据点击「导入本机 CLI 登录」，把当前登录保存为独立账号快照（Windows DPAPI 加密）；之后在 CLI 或 cc-switch 里登录 / 切换到另一个账号，再回来导入一次即可，同一登录会按账号指纹自动去重。
-
-快照账号的额度查询不依赖本机当前激活的是哪个 profile——即使 cc-switch 把 `~/.codex/auth.json` 切换成中转配置也不影响；令牌会在临期或失效时用 refresh_token 自动续期并写回加密存储，若该账号恰好是本机当前激活的登录，续期结果还会安全地同步回本机 CLI 的凭据文件。设置抽屉的账号行会用「本机激活」徽标标出当前正在本机使用的账号。
-
-## 快速开始
-
-1. 从 [Releases](https://github.com/AloneAtWar/QuateDesk/releases) 下载对应平台的安装包。
-2. 打开 Quota Desk，在设置中添加账号。API 服务商填写 API Token；CLI 服务商先完成对应 CLI 登录，或直接「导入本机 CLI 登录」。
-3. 保存后应用会立即测试账号并开始轮询。根据自己的使用习惯设置轮询间隔和提醒规则。
-4. 打开桌面浮窗，让额度信息持续显示在桌面上；需要集中查看时切换到总览、行式明细或周期明细。
+CLI 和 OAuth 渠道可以保存多个独立账号快照。支持刷新令牌的渠道会在令牌临期或失效时自动续期；同一登录会按账号指纹去重。
 
 ### 从 cc-switch 导入
 
-在设置中点击“从 cc-switch 导入账号”。应用会读取本机 `~/.cc-switch/cc-switch.db`，列出可以匹配到 Quota Desk 服务商的账号供选择。导入内容包含 API Key 与 Codex 官方 OAuth 登录（导入为独立账号快照，自动续期），凭据会由 Quota Desk 重新加密保存；重复的 Key / 登录不会重复导入，cc-switch 中无法匹配的自定义服务商需要手动配置。
+Quota Desk 可以读取本机 `~/.cc-switch/cc-switch.db`，列出能够识别的账号供选择。API Key 和可识别的官方 OAuth 登录会重新加密保存；重复凭据不会重复导入。
+
+## 三步开始使用
+
+1. 从 [Releases](https://github.com/AloneAtWar/QuateDesk/releases) 下载对应平台的安装包。
+2. 打开“添加账号”，选择厂商并按照提示扫码、授权、导入 CLI 登录或填写 API Token。
+3. 设置轮询间隔与提醒规则，然后开启桌面浮窗。
+
+## 桌面浮窗与双主题
+
+浮窗会根据可用宽度逐步收起标签和倒计时，支持 80%–300% 等比缩放以及 60%–150% 长度调节。主窗口切换主题时，浮窗会同步更新。
+
+<table>
+  <tr>
+    <td align="center"><strong>亮色</strong><br><img src="docs/readme/source/screenshots/widget-light.png" alt="亮色桌面浮窗" width="100%"></td>
+    <td align="center"><strong>暗色</strong><br><img src="docs/readme/source/screenshots/widget-dark.png" alt="暗色桌面浮窗" width="100%"></td>
+  </tr>
+</table>
+
+## 隐私与本地存储
+
+- Quota Desk 没有云端账号和后端服务，额度请求由电脑直接发送到对应服务商。
+- API Token、OAuth 登录快照和网页会话等敏感凭据使用 Electron `safeStorage` 加密后保存在本机；Windows 使用系统 DPAPI。
+- 普通设置、加密凭据、额度历史和周期档案都保存在应用数据目录中。
+- 删除账号会同时删除该账号的凭据与历史；停用账号则完整保留数据。
+
+默认数据目录：
+
+| 平台 | 目录 |
+| --- | --- |
+| Windows | `%APPDATA%\Quota Desk\` |
+| macOS | `~/Library/Application Support/Quota Desk/` |
+| Linux | `~/.config/Quota Desk/` |
+
+## 完整界面截图
+
+<details>
+  <summary>展开查看账号总览、周期明细、趋势、用量、浪费和添加账号</summary>
+  <br>
+  <table>
+    <tr>
+      <td align="center"><strong>账号总览</strong><br><img src="docs/readme/source/screenshots/overview-dark.png" alt="账号总览"></td>
+      <td align="center"><strong>周期明细与重置时间轴</strong><br><img src="docs/readme/source/screenshots/timeline-dark.png" alt="周期明细与重置时间轴"></td>
+    </tr>
+    <tr>
+      <td align="center"><strong>额度趋势</strong><br><img src="docs/readme/source/screenshots/trend-dark.png" alt="额度趋势"></td>
+      <td align="center"><strong>全年用量</strong><br><img src="docs/readme/source/screenshots/usage-dark.png" alt="全年用量热力图"></td>
+    </tr>
+    <tr>
+      <td align="center"><strong>周期浪费</strong><br><img src="docs/readme/source/screenshots/waste-dark.png" alt="周期浪费统计"></td>
+      <td align="center"><strong>添加账号</strong><br><img src="docs/readme/source/screenshots/accounts-dark.png" alt="添加账号渠道选择"></td>
+    </tr>
+  </table>
+</details>
 
 ## 下载与平台
 
-每个版本的 Release 会提供：
+每个版本的 Release 提供：
 
 - **Windows**：NSIS 安装版和便携版。
 - **macOS**：Intel（x64）与 Apple Silicon（arm64）的 DMG / ZIP。
 - **Linux**：AppImage。
 
-## 隐私与数据
+应用可以定时检查 GitHub Releases。当前安装形式不支持应用内更新时，会打开发布页供手动下载。
 
-- Quota Desk 没有云端账号和后端服务，额度请求由本机直接发送到对应服务商接口。
-- API Token 和脚本中的敏感变量使用 Electron `safeStorage` 加密后保存在本机；Windows 使用系统 DPAPI。
-- 普通配置和加密凭据都保存在应用数据目录下：
-  - Windows：`%APPDATA%\Quota Desk\state.json` 和 `%APPDATA%\Quota Desk\credentials.json`
-  - macOS：`~/Library/Application Support/Quota Desk/state.json` 和 `~/Library/Application Support/Quota Desk/credentials.json`
-  - Linux：`~/.config/Quota Desk/state.json` 和 `~/.config/Quota Desk/credentials.json`
+## 自定义服务商
+
+除了内置渠道，还可以通过以下方式接入其他额度接口：
+
+- **标准映射**：配置请求地址、认证方式和响应字段路径。
+- **New API 模板**：填写站点地址、`accessToken` 和 `userId`。
+- **高级脚本**：自定义请求方法、请求头、请求体、变量和响应解析逻辑。
+
+添加或编辑账号时可以先测试连接，再决定是否保存。
 
 ## 开发
 
 ```bash
 npm install
-npm test            # 运行轮询器和额度解析测试
-npm run dev         # 启动 Vite 网页开发模式
-npm run desktop     # 构建并启动 Electron 桌面应用
-npm run dist:win    # 构建 Windows 安装版和便携版
-npm run dist:mac    # 构建 macOS 安装包
-npm run dist:linux  # 构建 Linux AppImage
+npm test
+npm run dev
+npm run desktop
+```
+
+生成安装包：
+
+```bash
+npm run dist:win
+npm run dist:mac
+npm run dist:linux
 ```
 
 项目使用 Electron、React 和 Vite 构建，额度数据只在本机处理。
+
+## 支持项目
+
+如果 Quota Desk 对你有帮助，可以请我喝杯咖啡。感谢你的支持。
+
+<details>
+  <summary>☕ 展开微信收款码</summary>
+  <br>
+  <p align="center">
+    <a href="docs/readme/wechat-pay.jpg"><img src="docs/readme/wechat-pay.jpg" alt="微信收款码：请作者喝杯咖啡" width="300"></a>
+  </p>
+  <p align="center"><sub>使用微信扫码，或点击图片查看原图</sub></p>
+</details>
 
 ## License
 
