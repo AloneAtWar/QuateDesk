@@ -217,7 +217,7 @@ test('queryMimoQuota maps plan credits to the mimo_plan window in 亿', async ()
   const windows = await __mimo.queryMimoQuota(snapshotFetcher(), meter, 1000, {
     providerUsageAuth: JSON.stringify({ cookies: [{ name: 'api-platform_serviceToken', value: 'tok', domain: '.platform.xiaomimimo.com' }] }),
   });
-  assert.equal(windows.length, 2);
+  assert.equal(windows.length, 1);
   const plan = windows[0];
   assert.equal(plan.key, 'mimo_plan');
   assert.equal(plan.unit, '%');
@@ -226,19 +226,15 @@ test('queryMimoQuota maps plan credits to the mimo_plan window in 亿', async ()
   assert.equal(plan.limitAmount, 4560);
   assert.equal(plan.amount, Number(((4.56e11 - 1.2e11) / 1e8).toFixed(2)));
   assert.equal(plan.resetAt, '2027-05-27T23:59:59.000Z');
-  const balance = windows[1];
-  assert.equal(balance.key, 'balance');
-  assert.equal(balance.unit, 'CNY');
-  assert.equal(balance.amount, 12.34);
 });
 
-test('queryMimoQuota hides a zero wallet balance and keeps the plan window', async () => {
-  const meter = (key, remaining) => ({ key, remaining });
-  const windows = await __mimo.queryMimoQuota(snapshotFetcher({ balance: balancePayload({ balance: '0' }) }), meter, 1000, {
+test('queryMimoQuota never surfaces the wallet balance as a quota window', async () => {
+  const meter = (key) => ({ key });
+  // 钱包有余额也不出 balance 窗口：额度窗口只保留套餐 Credits
+  const windows = await __mimo.queryMimoQuota(snapshotFetcher({ balance: balancePayload({ balance: '88.5' }) }), meter, 1000, {
     providerUsageAuth: JSON.stringify({ cookies: [{ name: 'api-platform_serviceToken', value: 'tok', domain: '.platform.xiaomimimo.com' }] }),
   });
-  assert.equal(windows.length, 1);
-  assert.equal(windows[0].key, 'mimo_plan');
+  assert.deepEqual(windows.map((window) => window.key), ['mimo_plan']);
 });
 
 test('queryMimoQuota requires a saved login and rejects expired sessions with reauth_required', async () => {
@@ -260,17 +256,17 @@ test('queryMimoQuota requires a saved login and rejects expired sessions with re
   );
 });
 
-test('queryMimoQuota throws a plain error when the account has no plan and no balance', async () => {
+test('queryMimoQuota throws a plain error when the account has no plan', async () => {
   const meter = () => ({});
   const fetcher = snapshotFetcher({
     usage: usagePayload([{ name: 'compensation_total_token', used: 0, limit: 0 }]),
-    balance: balancePayload({ balance: '0' }),
+    balance: balancePayload({ balance: '99' }),
   });
   await assert.rejects(
     () => __mimo.queryMimoQuota(fetcher, meter, 1000, {
       providerUsageAuth: JSON.stringify({ cookies: [{ name: 'api-platform_serviceToken', value: 'tok', domain: '.platform.xiaomimimo.com' }] }),
     }),
-    (error) => error.authStatus === undefined && /没有识别到套餐额度/.test(error.message),
+    (error) => error.authStatus === undefined && /没有识别到 Token Plan 套餐 Credits/.test(error.message),
   );
 });
 

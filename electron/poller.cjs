@@ -401,10 +401,10 @@ async function queryAccountOnce(account, provider, credential, fetcher = fetch, 
 }
 
 // ── Xiaomi MiMo Token Plan 额度专属适配 ─────────────────────────────────────
-// 额度数据来自平台控制台的内部接口（tokenPlan/usage + detail + balance），鉴权
-// 是官方账号登录保存的网页会话 Cookie（见 provider-usage.cjs 的 MiMo 段）。
-// 展示口径：套餐 Credits 原始值以“亿”为单位（cc-switch 社区惯例，Lite ≈ 492
-// 亿）；钱包余额单独一个 balance 窗口。会话过期抛 reauth_required，由主进程
+// 额度数据来自平台控制台的内部接口（tokenPlan/usage + detail），鉴权是官方账号
+// 登录保存的网页会话 Cookie（见 provider-usage.cjs 的 MiMo 段）。
+// 展示口径：只展示套餐 Credits（原始值以“亿”为单位，cc-switch 社区惯例，
+// Lite ≈ 492 亿）；钱包余额不作为额度窗口。会话过期抛 reauth_required，由主进程
 // 走隐藏窗口静默续期后重试，续期失败才提示用户重新登录。
 const MIMO_CREDITS_YI = 1e8;
 
@@ -446,15 +446,8 @@ async function queryMimoQuota(fetcher, meter, timeoutMs, variables = {}) {
       available: !(snapshot.detail?.expired),
     }));
   }
-  const balance = snapshot.balance;
-  if (balance && balance.balance !== null && balance.balance > 0) {
-    windows.push(meter('balance', 100, 100, balance.currency || 'CNY', null, {
-      amount: balance.balance,
-      limitAmount: balance.balance,
-    }));
-  }
   if (!windows.length) {
-    throw new Error('MiMo 账号没有识别到套餐额度或钱包余额（可能尚未订阅 Token Plan）');
+    throw new Error('MiMo 账号没有识别到 Token Plan 套餐 Credits（可能尚未订阅）');
   }
   return windows;
 }

@@ -68,7 +68,7 @@ const builtinConfigs = {
   // 账号会话 Cookie（加密保存，24 小时过期由主进程静默续期），无需 API Key
   mimo: {
     endpoint: 'https://platform.xiaomimimo.com',
-    windows: ['mimo_plan', 'balance'], wasteWindows: [], adapterMode: 'mimo', auth: 'none', credentialRequired: false,
+    windows: ['mimo_plan'], wasteWindows: [], adapterMode: 'mimo', auth: 'none', credentialRequired: false,
   },
   // Claude / Codex / Gemini 官方订阅：专属适配（cli-quota.cjs），复用本机 CLI 登录态
   claude: { windows: ['five_hour', 'weekly'], wasteWindows: ['weekly'], adapterMode: 'claude', auth: 'none', credentialRequired: false },

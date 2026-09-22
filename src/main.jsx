@@ -120,7 +120,7 @@ const reloginChannel = (provider) => {
   if (provider?.id === 'grok' || mode === 'grok') return { kind: 'grok', action: '重新导入', title: 'Grok 令牌已失效，点击重新导入本机 CLI 登录' };
   if (provider?.id === 'grokbot' || mode === 'grokbot') return { kind: 'grok', action: '重新导入', title: 'Grok Bot 登录已失效，点击重新导入本机客户端登录' };
   if (provider?.id === 'copilot' || mode === 'copilot') return { kind: 'copilot', action: '重新授权', title: 'GitHub 授权已失效，点击重新设备码登录' };
-  if (provider?.id === 'mimo' || mode === 'mimo') return { kind: 'mimo', action: '重新登录', title: 'MiMo 官方账号登录已失效，点击重新登录小米账号' };
+  if (provider?.id === 'mimo' || mode === 'mimo') return { kind: 'mimo', action: '重新登录', title: 'Xiaomi MiMo 登录已失效，点击重新登录小米账号' };
   return null;
 };
 const providerVariableRequired = (provider, variable) => Boolean(variable?.required
@@ -2176,8 +2176,8 @@ function MimoBrowserLoginPanel({ mode = 'import', reloginAccount = null, onExit,
   const [display, setDisplay] = useState('');
   const [importing, setImporting] = useState(false);
   const [draft, setDraft] = useState(() => mode === 'relogin'
-    ? { name: reloginAccount?.name || 'MiMo', tags: (reloginAccount?.tags || []).join(', ') }
-    : { name: 'MiMo', tags: '日常' });
+    ? { name: reloginAccount?.name || 'Xiaomi MiMo', tags: (reloginAccount?.tags || []).join(', ') }
+    : { name: 'Xiaomi MiMo', tags: '日常' });
   const draftRef = useRef(draft);
   draftRef.current = draft;
   const importingRef = useRef(false);
@@ -2239,7 +2239,7 @@ function MimoBrowserLoginPanel({ mode = 'import', reloginAccount = null, onExit,
     error: message || '出错了，请重试',
   }[status] || '';
   return <>
-    <div className="modal-head"><div><h2>{mode === 'relogin' ? '重新登录 MiMo' : '添加 MiMo 官方账号'}<TitleHelp>{mode === 'relogin'
+    <div className="modal-head"><div><h2>{mode === 'relogin' ? '重新登录 Xiaomi MiMo' : '添加 Xiaomi MiMo Token Plan'}<TitleHelp>{mode === 'relogin'
       ? 'MiMo 登录已失效：重新登录小米账号即可恢复额度巡检，账号名与标签在第二步可顺手修改。'
       : '浏览器登录小米账号：会话 Cookie 加密保存在本机并自动续期，读取 Token Plan 套餐 Credits 额度与钱包余额。'}</TitleHelp></h2></div></div>
     {phase === 'login'
@@ -2260,7 +2260,7 @@ function MimoBrowserLoginPanel({ mode = 'import', reloginAccount = null, onExit,
         {status === 'error' && <div className="adapter-note update-error"><AlertCircle size={15} /><span>{message}</span></div>}
         {importing && <div className="adapter-note"><RefreshCw size={15} className="spinning" /><span>正在导入，请稍候…</span></div>}
         <div className="form-grid">
-          <label className="field"><span>账号名 <small>留空则用渠道名</small></span><input value={draft.name} onChange={(event) => setDraft((old) => ({ ...old, name: event.target.value }))} placeholder="MiMo" disabled={importing} /></label>
+          <label className="field"><span>账号名 <small>留空则用渠道名</small></span><input value={draft.name} onChange={(event) => setDraft((old) => ({ ...old, name: event.target.value }))} placeholder="Xiaomi MiMo" disabled={importing} /></label>
           <label className="field"><span>标签 <small>逗号分隔，可留空</small></span><input value={draft.tags} onChange={(event) => setDraft((old) => ({ ...old, tags: event.target.value }))} placeholder="日常, 主力" disabled={importing} /></label>
         </div>
       </div>}
@@ -2548,7 +2548,7 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
     if (minimaxIndex >= 0) all.splice(minimaxIndex, 0, ...kimiTile);
     else all.push(...kimiTile);
     // MiMo 与 Kimi 同为「先登录后建号」渠道：浏览器登录小米账号，磁贴紧跟 MiniMax
-    const mimoTile = bridge?.startMimoLogin ? [{ kind: 'mimo', name: 'MiMo', providerId: 'mimo', mimo: true }] : [];
+    const mimoTile = bridge?.startMimoLogin ? [{ kind: 'mimo', name: 'Xiaomi MiMo', providerId: 'mimo', mimo: true }] : [];
     if (minimaxIndex >= 0) all.splice(all.findIndex((channel) => channel.kind === 'minimax') + 1, 0, ...mimoTile);
     else all.push(...mimoTile);
     // Grok Bot 默认排在 wlbclub 前面（用户指定）：从 CLI 订阅段挪出，插到 wlb 磁贴之前；
@@ -2689,7 +2689,7 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
             }
             if (channel.mimo) {
               const done = imported.mimo;
-              const title = done ? 'MiMo · 本次已导入' : 'MiMo Token Plan · 浏览器登录小米账号，读取套餐 Credits 额度，点击登录';
+              const title = done ? 'Xiaomi MiMo · 本次已导入' : 'Xiaomi MiMo Token Plan · 浏览器登录小米账号，读取套餐 Credits 额度，点击登录';
               return <button type="button" {...tileProps} className={`${tileProps.className} ${done ? 'is-disabled' : ''}`} title={title} aria-label={title} onClick={() => { if (!done && !dragMovedRef.current) { setError(''); setMimoLoginOpen(true); } }}>
                 <Logo provider={provider} interactive={false} />
               </button>;

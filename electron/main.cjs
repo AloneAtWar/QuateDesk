@@ -334,7 +334,7 @@ const builtinLogos = {
   grok: './logos/grok.png',
   grokbot: './logos/grokbot.png',
   minimax: './logos/minimax.svg',
-  mimo: './logos/mimo.svg',
+  mimo: './logos/mimo.webp',
   claude: './logos/claude.jpg',
   codex: './logos/codex.svg',
   gemini: './logos/gemini.svg',
@@ -363,7 +363,7 @@ const ensureCliProviders = (providers) => {
     { id: 'minimax', name: 'MiniMax', legalName: 'MiniMax Coding Plan', monogram: 'M', tone: 'mint', adapter: 'minimax', logo: './logos/minimax.svg' },
     // MiMo Token Plan：额度接口只认网页会话 Cookie（无 API Key 端点），账号
     // 凭据即「连接官方账号」捕获的小米账号登录，轮询与静默续期都在主进程
-    { id: 'mimo', name: 'MiMo', legalName: 'Xiaomi MiMo Token Plan', monogram: 'M', tone: 'coral', adapter: 'mimo', logo: './logos/mimo.svg' },
+    { id: 'mimo', name: 'Xiaomi MiMo', legalName: 'Xiaomi MiMo Token Plan', monogram: 'M', tone: 'coral', adapter: 'mimo', logo: './logos/mimo.webp' },
     { id: 'claude', name: 'Claude', legalName: 'Claude Code', monogram: 'C', tone: 'coral', adapter: 'claude', logo: './logos/claude.jpg' },
     { id: 'codex', name: 'Codex', legalName: 'OpenAI Codex', monogram: 'O', tone: 'mint', adapter: 'codex', logo: './logos/codex.svg' },
     { id: 'gemini', name: 'Gemini', legalName: 'Gemini CLI', monogram: 'G', tone: 'sky', adapter: 'gemini', logo: './logos/gemini.svg' },
@@ -379,7 +379,7 @@ const ensureCliProviders = (providers) => {
 const migrateProvider = (provider) => {
   if (!provider) return provider;
   // 旧版 logo 引用（含已删除的 png/旧文件名）视为 legacy，重新指向当前内置图标
-  const legacyLogo = !provider.logo || /^https?:\/\//i.test(provider.logo) || /\.\/logos\/(kimi\.(png|svg)|zai\.svg|zhipu\.svg|deepseek\.(png|svg)|grok\.svg|anthropic\.svg|openai\.svg|claude\.(png|svg))$/i.test(provider.logo);
+  const legacyLogo = !provider.logo || /^https?:\/\//i.test(provider.logo) || /\.\/logos\/(kimi\.(png|svg)|zai\.svg|zhipu\.svg|deepseek\.(png|svg)|grok\.svg|anthropic\.svg|openai\.svg|claude\.(png|svg)|mimo\.(svg|webp))$/i.test(provider.logo);
   const logo = legacyLogo && builtinLogos[provider.id] ? builtinLogos[provider.id] : provider.logo;
   const builtinConfig = builtinConfigs[provider.id];
   const needsWlbMigration = provider.id === 'wlb' && builtinConfig?.builtinMigration && provider.requestConfig?.builtinMigration !== builtinConfig.builtinMigration;
@@ -1977,7 +1977,7 @@ function registerIpc() {
       name: customName || provider.name,
       identity: display,
       tags: customTags,
-      windowKeys: provider.requestConfig?.windows?.length ? provider.requestConfig.windows : ['mimo_plan', 'balance'],
+      windowKeys: provider.requestConfig?.windows?.length ? provider.requestConfig.windows : ['mimo_plan'],
       windows: [],
       status: 'active',
       lastError: null,
