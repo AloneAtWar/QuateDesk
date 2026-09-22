@@ -32,6 +32,14 @@ const formatResetCompact = (resetAt) => {
   return `${Math.floor(minutes / (24 * 60))}d${Math.floor((minutes % (24 * 60)) / 60)}h`;
 };
 
+// 重置时间的悬停小字：正文保持倒计时（多久之后），悬停给出具体时间点（如 2026-09-22 15:38）
+const formatResetAbsolute = (resetAt) => {
+  if (!resetAt) return '不刷新';
+  const d = new Date(resetAt);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
 const formatChecked = (date) => {
   const minutes = Math.max(0, Math.floor((Date.now() - new Date(date).getTime()) / 60000));
   if (minutes < 1) return '刚刚更新';
@@ -326,7 +334,7 @@ function MeterBar({ meter, compact = false }) {
     </div>
     <div className="meter-line-foot">
       <span className="meter-state">{meter.available === false ? <><AlertCircle size={12} /> {meter.error || '不可用'}</> : meter.key === 'balance' ? '可用余额' : '剩余额度'}</span>
-      <span className="reset-meta" title={formatReset(meter.resetAt)}><Clock3 size={12} /> {formatReset(meter.resetAt)}</span>
+      <span className="reset-meta" title={formatResetAbsolute(meter.resetAt)}><Clock3 size={12} /> {formatReset(meter.resetAt)}</span>
     </div>
   </div>;
 }
@@ -362,7 +370,7 @@ function ConcentricRings({ account }) {
   const active = unavailable || meters.find((meter) => meter.key === hoveredKey) || smallest;
   return <div className="concentric-rings" aria-label={`${meters.length} 个额度窗口`}>
     {meters.map((meter, index) => <div className={`quota-ring ring-${index} ${active?.key === meter.key ? 'is-active' : ''}`} key={meter.key} style={{ '--progress': `${Math.max(0, Math.min(100, Number(meter.remaining || 0))) * 3.6}deg` }} onMouseEnter={() => setHoveredKey(meter.key)} onMouseLeave={() => setHoveredKey(null)}><span /></div>)}
-    <div className={`ring-core ${unavailable ? 'unavailable' : ''}`}><strong>{unavailable ? '不可用' : active ? formatAmount(active) : '—'}</strong><small>{active ? windowCatalog[active.key]?.label || active.key : '暂无窗口'}</small>{!unavailable && active?.resetAt && <em>{formatReset(active.resetAt)}</em>}</div>
+    <div className={`ring-core ${unavailable ? 'unavailable' : ''}`}><strong>{unavailable ? '不可用' : active ? formatAmount(active) : '—'}</strong><small>{active ? windowCatalog[active.key]?.label || active.key : '暂无窗口'}</small>{!unavailable && active?.resetAt && <em title={formatResetAbsolute(active.resetAt)}>{formatReset(active.resetAt)}</em>}</div>
   </div>;
 }
 
@@ -464,7 +472,7 @@ function PriorityRow({ account, meter, provider, reminderRules, onOpenHistory })
   return <div className="priority-row clickable" role="button" tabIndex={0} title="点击查看额度趋势" onClick={() => onOpenHistory?.(account)} onKeyDown={(event) => { if (event.key === 'Enter') onOpenHistory?.(account); }}>
     <AccountIdentity account={account} provider={provider} />
     <div className="priority-meter"><div className="meter-track"><span className="meter-fill" style={{ width: `${meter.remaining}%` }} /></div><b>{formatAmount(meter)}</b></div>
-    <div className="priority-reset"><Clock3 size={13} /><span>{formatReset(meter.resetAt)}</span><RuleMarks meter={meter} rules={reminderRules} /></div>
+    <div className="priority-reset"><Clock3 size={13} /><span title={formatResetAbsolute(meter.resetAt)}>{formatReset(meter.resetAt)}</span><RuleMarks meter={meter} rules={reminderRules} /></div>
   </div>;
 }
 
@@ -826,7 +834,7 @@ function WasteView({ account, wasteWindows }) {
     if (cycle.now) return <>
       <span className="when">{range}（进行中）</span>
       <span>剩余 <b>{cycle.remaining}%</b> 未用</span>
-      <span>{formatResetCompact(cycle.end)} 后重置 · 记录 {formatChartStamp(account.lastChecked)}</span>
+      <span><span title={formatResetAbsolute(cycle.end)}>{formatResetCompact(cycle.end)} 后重置</span> · 记录 {formatChartStamp(account.lastChecked)}</span>
     </>;
     const observed = <span>记录于 <b>{formatChartStamp(cycle.observedAt)}</b></span>;
     const amount = hasRealQuotaNumbers(cycle.amount, cycle.limit) ? <span>剩 <b>{formatChartNumber(cycle.amount)} / {formatChartNumber(cycle.limit)}</b></span> : null;
@@ -1387,7 +1395,8 @@ function OverviewCard({ account, provider, feedback, onOpenHistory, onRelogin, o
       <ConcentricRings account={account} />
       <div className="overview-meters">{[...desc].reverse().map((meter) => {
         const detail = `${formatReset(meter.resetAt)}${formatQuotaDetail(meter) ? ` · ${formatQuotaDetail(meter)}` : ''}`;
-        return <div className="overview-meter" key={meter.key}><span><i className={`ring-dot ring-dot-${desc.indexOf(meter)}`} />{windowCatalog[meter.key]?.label || meter.key}</span><b>{formatAmount(meter)}</b><small title={detail}>{detail}</small></div>;
+        const detailTitle = `${formatResetAbsolute(meter.resetAt)}${formatQuotaDetail(meter) ? ` · ${formatQuotaDetail(meter)}` : ''}`;
+        return <div className="overview-meter" key={meter.key}><span><i className={`ring-dot ring-dot-${desc.indexOf(meter)}`} />{windowCatalog[meter.key]?.label || meter.key}</span><b>{formatAmount(meter)}</b><small title={detailTitle}>{detail}</small></div>;
       })}</div>
     </div>
   </div>;
@@ -1521,7 +1530,7 @@ function WidgetRow({ account, provider, compact = false, tagLimit = 2, length = 
   const pristine = fit.smallHidden === 0 && fit.drop === 0 && fit.tagMode === fullFit.tagMode;
   const marquee = pristine && length >= 0.98;
   const classes = ['widget-row', compact && 'compact', fit.tagMode === 1 && 'tag-dot', fit.squeeze && 'squeeze', !marquee && 'ellipsis'].filter(Boolean).join(' ');
-  return <div className={classes} ref={rowRef} title={account.lastError || account.name} onDoubleClick={onDoubleClick}><Logo provider={provider} size="sm" interactive={false} /><div className="widget-account-block" style={{ minWidth: fit.squeeze ? 0 : blockFloor.name + blockFloor.tag }}><span className="widget-account-marquee" ref={marqueeRef}><span className="widget-account" ref={nameRef}>{account.name}</span></span>{fit.tagMode > 0 && <span className="widget-tags" ref={tagsRef}>{(account.tags || []).slice(0, 1).map((tag) => <em key={tag} title={tag}>{tag}</em>)}</span>}</div><div className="widget-meters" ref={metersRef}>{visibleMeters.length ? visibleMeters.map((meter) => <span className={`widget-meter ${meter.available === false ? 'off' : ''} ${smallHiddenKeys.has(meter.key) ? 'hide-reset' : ''}`} key={meter.key}><b>{windowCatalog[meter.key]?.short}</b><em>{formatAmount(meter)}</em><small>{formatResetCompact(meter.resetAt)}</small></span>) : <span className="widget-empty">等待同步</span>}</div><span className={`widget-live ${account.status === 'warning' ? 'warning' : ''}`}><i /></span></div>;
+  return <div className={classes} ref={rowRef} title={account.lastError || account.name} onDoubleClick={onDoubleClick}><Logo provider={provider} size="sm" interactive={false} /><div className="widget-account-block" style={{ minWidth: fit.squeeze ? 0 : blockFloor.name + blockFloor.tag }}><span className="widget-account-marquee" ref={marqueeRef}><span className="widget-account" ref={nameRef}>{account.name}</span></span>{fit.tagMode > 0 && <span className="widget-tags" ref={tagsRef}>{(account.tags || []).slice(0, 1).map((tag) => <em key={tag} title={tag}>{tag}</em>)}</span>}</div><div className="widget-meters" ref={metersRef}>{visibleMeters.length ? visibleMeters.map((meter) => <span className={`widget-meter ${meter.available === false ? 'off' : ''} ${smallHiddenKeys.has(meter.key) ? 'hide-reset' : ''}`} key={meter.key}><b>{windowCatalog[meter.key]?.short}</b><em>{formatAmount(meter)}</em><small title={formatResetAbsolute(meter.resetAt)}>{formatResetCompact(meter.resetAt)}</small></span>) : <span className="widget-empty">等待同步</span>}</div><span className={`widget-live ${account.status === 'warning' ? 'warning' : ''}`}><i /></span></div>;
 }
 
 function WidgetPreview({ account, provider, onClose, tagLimit = 2, scale = 1, length = 1 }) {
