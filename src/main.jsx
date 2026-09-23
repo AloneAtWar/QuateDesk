@@ -189,6 +189,8 @@ const normalizeSettings = (value = {}) => {
   return {
     alerts: true, pollMinutes: '5', widgetTagLimit: '2', reminderRules: defaultReminderRules,
     widget: true, widgetPreview: false, theme: 'dark', widgetScale: 0.9, widgetLength: 0.9, historyDays: 7,
+    // 首次引导完成标记：默认未完成，老用户因已有账号在 App 启动时自动补记
+    onboarded: false,
     ...value,
     // 轮询间隔只提供 5–30 分钟；旧配置里更大的值收敛到 30，缺失或非法时回到默认 5
     pollMinutes: [5, 10, 15, 30].includes(pollNumber) ? String(pollNumber) : (pollNumber > 30 ? '30' : '5'),
@@ -1448,7 +1450,25 @@ function Toggle({ checked, onChange, label, description }) {
   return <label className="setting-toggle"><span><b>{label}</b><small>{description}</small></span><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /><i /></label>;
 }
 
-function SettingsDrawer({ accounts, providers, settings, setSettings, onClose, openModal, onDeleteAccount, onToggleAccountDisabled, onTestAccount, testingAccountId, onEditProvider, autoLaunch, onToggleAutoLaunch, appVersion, update, onOpenUpdate, onCheckUpdate, onClearHistory, runtime }) {
+// 账号行：设置抽屉与首次引导的「接入账号」步共用，两处的信息密度与行内操作完全一致
+// （编辑 / 刷新 / 停用启用 / 删除），避免同一个账号在两个页面出现两套交互。
+function AccountRow({ account, provider, testing, onEdit, onTest, onToggleDisabled, onDelete }) {
+  const warning = !account.disabled && account.status === 'warning';
+  return <div className={`settings-account${account.disabled ? ' disabled' : ''}`}>
+    <Logo provider={provider} size="sm" />
+    <div>
+      <b title={account.name}>{account.name}</b>
+      <small className={warning ? 'warning-copy' : ''} title={account.disabled ? `停用于 ${formatDisabledDate(account.disabledAt)}，历史数据保留中` : warning ? (account.lastError || '') : ''}>{account.disabled ? `已停用 · ${formatDisabledDate(account.disabledAt)}` : warning ? account.lastError : `${provider?.name} · ${account.windows.length} 个额度窗口`}</small>
+    </div>
+    <button className="row-icon-button" title="编辑账号" aria-label={`编辑 ${account.name}`} onClick={() => onEdit(account)}><Pencil size={13} /></button>
+    {!account.disabled && <button className="row-icon-button" disabled={testing} title="刷新" aria-label={`刷新 ${account.name} 额度`} onClick={() => onTest(account)}><RefreshCw size={13} className={testing ? 'spinning' : ''} /></button>}
+    <button className={`row-icon-button ${account.disabled ? 'play' : 'stop'}`} title={account.disabled ? '启用账号：恢复巡检并接续历史' : '停用账号：停止巡检，历史保留，可随时启用'} aria-label={`${account.disabled ? '启用' : '停用'} ${account.name}`} onClick={() => onToggleDisabled(account)}>{account.disabled ? <Play size={13} /> : <Square size={13} />}</button>
+    <button className="row-icon-button danger" title="删除账号" aria-label={`删除 ${account.name}`} onClick={() => onDelete(account)}><Trash2 size={13} /></button>
+    <span className={`status-dot ${account.disabled ? 'disabled' : account.status}`} />
+  </div>;
+}
+
+function SettingsDrawer({ accounts, providers, settings, setSettings, onClose, openModal, onDeleteAccount, onToggleAccountDisabled, onTestAccount, testingAccountId, onEditProvider, autoLaunch, onToggleAutoLaunch, appVersion, update, onOpenUpdate, onCheckUpdate, onClearHistory, runtime, onReopenOnboarding }) {
   const proxyMode = ['direct', 'system', 'manual'].includes(settings.proxyMode) ? settings.proxyMode : 'system';
   return <><div className="drawer-shade" onClick={onClose} /><aside className="settings-drawer" aria-label="设置">
     <div className="drawer-scroll">
@@ -1463,10 +1483,10 @@ function SettingsDrawer({ accounts, providers, settings, setSettings, onClose, o
       <section className="drawer-section"><div className="drawer-section-title"><SunMoon size={16} /><span>主题</span></div><div className="setting-select"><span><b>界面主题</b><small>主窗口与桌面浮窗同步应用</small></span><select value={settings.theme === 'light' ? 'light' : 'dark'} onChange={(event) => setSettings((old) => ({ ...old, theme: event.target.value }))}><option value="dark">暗色</option><option value="light">亮色</option></select></div></section>
       <section className="drawer-section"><div className="drawer-section-title"><Monitor size={16} /><span>桌面浮窗</span></div><Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" description="固定在桌面顶层，双击展开主窗口" /><label className="size-slider"><span>大小</span><input type="range" min={80} max={300} step={5} value={Math.round(clampWidgetScale(settings.widgetScale) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetScale: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetScale(settings.widgetScale) * 100)}%</b></label><label className="size-slider"><span>长度</span><input type="range" min={Math.round(WIDGET_MIN_LENGTH * 100)} max={Math.round(WIDGET_MAX_LENGTH * 100)} step={5} value={Math.round(clampWidgetLength(settings.widgetLength) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetLength: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetLength(settings.widgetLength) * 100)}%</b></label><small className="drawer-help">长度只调整横向宽度（60%–150%）。浮窗会展示账号的全部额度窗口（含 1M）；空间不足时逐级收起：标签先缩成小圆点再隐藏，倒计时按周期从长到短逐个隐藏，最后才收起最长周期的额度——只有一个额度窗口的账号通常不用收起任何内容。名称放不下时显示省略号，悬停可查看完整内容。</small><button type="button" className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetScale: 0.9, widgetLength: 0.9 }))}>恢复默认大小与长度</button><div className="widget-setting-preview"><div style={{ width: Math.round(WIDGET_BASE_SIZE.width * clampWidgetLength(settings.widgetLength)), maxWidth: '100%', margin: '0 auto' }}>{(() => { const previewAccount = accounts.find((item) => !item.disabled) ?? accounts[0]; return <WidgetRow account={previewAccount} provider={providers.find((item) => item.id === previewAccount?.providerId)} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} />; })()}</div></div><button className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetPreview: true }))}><Eye size={15} /> 预览并调整</button></section>
       <section className="drawer-section"><div className="drawer-section-title"><History size={16} /><span>额度历史</span></div><div className="setting-select"><span><b>保留时长</b><small>每次成功刷新都会记录一条，用于账号卡片的趋势图</small></span><select value={settings.historyDays} onChange={(event) => setSettings((old) => ({ ...old, historyDays: Number(event.target.value) }))}><option value={3}>3 天</option><option value={7}>7 天（默认）</option><option value={15}>15 天</option><option value={30}>30 天</option><option value={60}>60 天</option><option value={90}>3 个月（最长）</option><option value={0}>永久</option></select></div><button className="outline-button full" onClick={onClearHistory}><Trash2 size={14} /> 清除全部历史记录</button><small className="drawer-help">删除账号时会一并删除该账号的额度历史；超过保留时长的记录会自动清理；永久保存时超过 30 天的记录会自动降采样为每小时一条。</small></section>
-      <section className="drawer-section"><div className="drawer-section-title"><ShieldCheck size={16} /><span>账号与凭据</span><button className="mini-add" onClick={() => openModal('account')}><Plus size={14} /> 添加账号</button></div><div className="settings-list">{accounts.length === 0 && <div className="settings-empty">还没有账号</div>}{accounts.map((account) => { const provider = providers.find((item) => item.id === account.providerId); const testing = testingAccountId === account.id; return <div className={`settings-account${account.disabled ? ' disabled' : ''}`} key={account.id}><Logo provider={provider} size="sm" /><div><b title={account.name}>{account.name}</b><small className={account.disabled ? '' : account.status === 'warning' ? 'warning-copy' : ''} title={account.disabled ? `停用于 ${formatDisabledDate(account.disabledAt)}，历史数据保留中` : account.status === 'warning' ? (account.lastError || '') : ''}>{account.disabled ? `已停用 · ${formatDisabledDate(account.disabledAt)}` : account.status === 'warning' ? account.lastError : `${provider?.name} · ${account.windows.length} 个额度窗口`}</small></div><button className="row-icon-button" title="编辑账号" aria-label={`编辑 ${account.name}`} onClick={() => openModal({ type: 'account-edit', account })}><Pencil size={13} /></button>{!account.disabled && <button className="row-icon-button" disabled={testing} title="刷新" aria-label={`刷新 ${account.name} 额度`} onClick={() => onTestAccount(account)}><RefreshCw size={13} className={testing ? 'spinning' : ''} /></button>}<button className={`row-icon-button ${account.disabled ? 'play' : 'stop'}`} title={account.disabled ? '启用账号：恢复巡检并接续历史' : '停用账号：停止巡检，历史保留，可随时启用'} aria-label={`${account.disabled ? '启用' : '停用'} ${account.name}`} onClick={() => onToggleAccountDisabled(account)}>{account.disabled ? <Play size={13} /> : <Square size={13} />}</button><button className="row-icon-button danger" title="删除账号" aria-label={`删除 ${account.name}`} onClick={() => onDeleteAccount(account)}><Trash2 size={13} /></button><span className={`status-dot ${account.disabled ? 'disabled' : account.status}`} /></div>; })}</div>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button full drawer-import-button" onClick={() => openModal('import-ccswitch')}><Download size={14} /> 从 cc-switch 导入账号</button>}</section>
+      <section className="drawer-section"><div className="drawer-section-title"><ShieldCheck size={16} /><span>账号与凭据</span><button className="mini-add" onClick={() => openModal('account')}><Plus size={14} /> 添加账号</button></div><div className="settings-list">{accounts.length === 0 && <div className="settings-empty">还没有账号</div>}{accounts.map((account) => <AccountRow key={account.id} account={account} provider={providers.find((item) => item.id === account.providerId)} testing={testingAccountId === account.id} onEdit={(item) => openModal({ type: 'account-edit', account: item })} onTest={onTestAccount} onToggleDisabled={onToggleAccountDisabled} onDelete={onDeleteAccount} />)}</div>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button full drawer-import-button" onClick={() => openModal('import-ccswitch')}><Download size={14} /> 从 cc-switch 导入账号</button>}</section>
       <section className="drawer-section"><div className="drawer-section-title"><LayoutGrid size={16} /><span>厂商适配器</span><button className="mini-add" onClick={() => openModal('provider')}><Plus size={14} /> 新增厂商</button></div><div className="settings-list providers-list">{providers.map((provider) => <div className="settings-account" key={provider.id}><Logo provider={provider} size="sm" /><div><b title={provider.name}>{provider.name}</b><small>{provider.requestConfig?.adapterMode === 'script' ? '脚本适配' : ['grok', 'grokbot'].includes(provider.requestConfig?.adapterMode) ? '专属适配' : '标准映射'}</small></div><button className="row-icon-button" title="编辑厂商" aria-label={`编辑 ${provider.name}`} onClick={() => onEditProvider(provider)}><Pencil size={13} /></button><span className="adapter-state"><Check size={13} /></span></div>)}</div></section>
       <section className="drawer-section"><div className="drawer-section-title"><Globe size={16} /><span>网络代理</span></div><div className="setting-select"><span><b>代理模式</b><small>所有账号的额度请求共用，保存后立即生效</small></span><select value={proxyMode} onChange={(event) => setSettings((old) => ({ ...old, proxyMode: event.target.value }))}><option value="system">跟随系统（默认）</option><option value="manual">手动输入</option><option value="direct">不使用代理</option></select></div>{proxyMode === 'manual' && <label className="field drawer-proxy-field"><span>代理地址 <small>留空时退回跟随系统</small></span><input value={settings.proxyUrl ?? ''} onChange={(event) => setSettings((old) => ({ ...old, proxyUrl: event.target.value }))} placeholder="http://127.0.0.1:7897 或 socks5://127.0.0.1:7898" spellCheck="false" autoComplete="off" /></label>}<small className="drawer-help">访问 Claude、Codex、Gemini、Grok 等境外厂商直连常被中断，建议配置可用代理。地址以代理工具实际监听的端口为准（Clash Verge Rev 默认 mixed-port 7897）；只填 host:port 时按 http 代理处理。切换代理模式后建议点账号行的「刷新」验证效果。</small></section>
-      <section className="drawer-section"><div className="drawer-section-title"><Power size={16} /><span>系统与更新</span></div><Toggle checked={autoLaunch} onChange={onToggleAutoLaunch} label="开机自启" description="登录 Windows 后自动启动 Quota Desk" /><Toggle checked={settings.autoUpdate !== false} onChange={(value) => setSettings((old) => ({ ...old, autoUpdate: value }))} label="自动检查更新" description="启动时及每小时自动检查 GitHub 上是否有新版本" /><div className="setting-select"><span><b>版本更新</b><small>当前版本 v{appVersion || '-'}</small></span>{update && ['available', 'downloading', 'downloaded'].includes(update.status) ? <button className="outline-button" onClick={onOpenUpdate}>v{update.version} 可用</button> : <button className="outline-button" disabled={update?.status === 'checking'} onClick={onCheckUpdate}>{update?.status === 'checking' ? '正在检查…' : '检查更新'}</button>}</div>{settings.ignoredUpdateVersion && <div className="setting-select"><span><b>已忽略 v{settings.ignoredUpdateVersion}</b><small>该版本的更新不再主动提醒，进入设置的检查更新仍可用</small></span><button className="outline-button" onClick={() => setSettings((old) => ({ ...old, ignoredUpdateVersion: null }))}>恢复提醒</button></div>}</section>
+      <section className="drawer-section"><div className="drawer-section-title"><Power size={16} /><span>系统与更新</span></div><Toggle checked={autoLaunch} onChange={onToggleAutoLaunch} label="开机自启" description="登录 Windows 后自动启动 Quota Desk" /><Toggle checked={settings.autoUpdate !== false} onChange={(value) => setSettings((old) => ({ ...old, autoUpdate: value }))} label="自动检查更新" description="启动时及每小时自动检查 GitHub 上是否有新版本" /><div className="setting-select"><span><b>版本更新</b><small>当前版本 v{appVersion || '-'}</small></span>{update && ['available', 'downloading', 'downloaded'].includes(update.status) ? <button className="outline-button" onClick={onOpenUpdate}>v{update.version} 可用</button> : <button className="outline-button" disabled={update?.status === 'checking'} onClick={onCheckUpdate}>{update?.status === 'checking' ? '正在检查…' : '检查更新'}</button>}</div>{settings.ignoredUpdateVersion && <div className="setting-select"><span><b>已忽略 v{settings.ignoredUpdateVersion}</b><small>该版本的更新不再主动提醒，进入设置的检查更新仍可用</small></span><button className="outline-button" onClick={() => setSettings((old) => ({ ...old, ignoredUpdateVersion: null }))}>恢复提醒</button></div>}<button type="button" className="outline-button full" onClick={onReopenOnboarding}><Sparkles size={14} /> 重新打开新手指引</button></section>
     </div>
   </aside></>;
 }
@@ -2752,6 +2772,214 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
 }
 
 
+// 首次使用引导向导：只在「从未完成引导 且 还没有任何账号」时全屏出现。
+// 五步：欢迎 → 选主题 → 从 cc-switch 导入（无 cc-switch 时整步省略）→ 接入账号 → 完成。
+// 导入步在前、接入步在后：先引导迁移，再在接入步回显结果并按需手动添加。
+// 完成或跳过后写入 settings.onboarded = true 永久标记；之后想再看可从设置里重开。
+const ONBOARD_STEPS = [
+  { key: 'welcome', label: '欢迎' },
+  { key: 'theme', label: '外观' },
+  { key: 'ccswitch', label: '从 cc-switch 导入' },
+  { key: 'connect', label: '接入账号' },
+  { key: 'done', label: '完成' },
+];
+
+// 网页演示模式没有 Electron 桥，用一份结构与主进程扫描结果一致的模拟数据驱动导入步：
+// 三条可导入，另有一条与已有账号重复、一条本批次内重复，外加一条厂商不支持，用于展示不可导入的分组
+const ONBOARD_CCSWITCH_MOCK = {
+  candidates: [
+    { key: 'zai:mock-1', providerId: 'zai', providerName: 'Z.ai / 智谱', name: 'Z.ai 主力', kind: 'key', keyTail: 'sk-…a1b2' },
+    { key: 'deepseek:mock-2', providerId: 'deepseek', providerName: 'DeepSeek API', name: 'DeepSeek 余额', kind: 'key', keyTail: 'sk-…c3d4' },
+    { key: 'codex:mock-3', providerId: 'codex', providerName: 'Codex', name: 'Codex 官方登录', kind: 'oauth', oauthDisplay: 'hello@northstar.dev' },
+    { key: 'kimi:mock-6', providerId: 'kimi-subscription', providerName: 'Kimi 订阅', name: 'Kimi 月订阅', kind: 'oauth', oauthDisplay: '159****8821' },
+    { key: 'minimax:mock-7', providerId: 'minimax', providerName: 'MiniMax Coding Plan', name: 'MiniMax 编程套餐', kind: 'key', keyTail: 'sk-…7c8d' },
+    { key: 'kimi:mock-4', providerId: 'kimi-subscription', providerName: 'Kimi 订阅', name: 'Kimi 中转', kind: 'key', keyTail: 'sk-…e5f6', duplicateOfExisting: true },
+    { key: 'wlb:mock-5', providerId: 'wlb', providerName: 'WLB Club', name: 'WLB 共享', kind: 'key', keyTail: 'sk-…9f0a', duplicateInBatch: true },
+  ],
+  unsupported: [{ name: 'Gemini CLI（cc-switch 中缺少凭据字段）' }, { name: '某中转站（厂商未适配）' }],
+};
+
+function OnboardingWizard({ settings, setSettings, accounts, providers, ccswitchAvailable, onOpenImport, onApplyCcswitch, onDeleteAccount, onFinish }) {
+  const [step, setStep] = useState(0);
+  const accountsCount = accounts.length;
+  const theme = settings.theme === 'light' ? 'light' : 'dark';
+  const pickTheme = (value) => setSettings((old) => ({ ...old, theme: value }));
+  // cc-switch 不可用时（纯网页模式）整步省略，进度点与前后导航都跟着少一个
+  const steps = ccswitchAvailable ? ONBOARD_STEPS : ONBOARD_STEPS.filter((item) => item.key !== 'ccswitch');
+  const stepKey = steps[step]?.key;
+  const goTo = (key) => { const index = steps.findIndex((item) => item.key === key); if (index >= 0) setStep(index); };
+  // 导入步：进入时读一次 cc-switch 扫描结果（网页演示模式用等价结构的模拟数据），
+  // 可导入项默认全选，重复 / 不支持的项只在下方作为说明列出
+  const bridge = window.quotaDesk;
+  const [scan, setScan] = useState(null);
+  const [scanError, setScanError] = useState('');
+  const [picked, setPicked] = useState({});
+  const [importing, setImporting] = useState(false);
+  useEffect(() => {
+    if (stepKey !== 'ccswitch' || scan) return undefined;
+    let active = true;
+    const load = bridge?.scanCcswitchImport ? bridge.scanCcswitchImport() : Promise.resolve(ONBOARD_CCSWITCH_MOCK);
+    load.then((result) => {
+      if (!active) return;
+      if (result?.error) { setScanError(result.error); return; }
+      setScan(result);
+      const defaults = {};
+      for (const item of result.candidates || []) if (!item.duplicateOfExisting && !item.duplicateInBatch) defaults[item.key] = true;
+      setPicked(defaults);
+    }).catch((error) => { if (active) setScanError(error.message); });
+    return () => { active = false; };
+  }, [stepKey, scan]);
+  const candidates = scan?.candidates || [];
+  const importable = candidates.filter((item) => !item.duplicateOfExisting && !item.duplicateInBatch);
+  const blocked = [
+    ...candidates.filter((item) => item.duplicateOfExisting || item.duplicateInBatch).map((item) => ({ ...item, reason: item.duplicateOfExisting ? '本机已有该凭据' : '本次重复' })),
+    ...(scan?.unsupported || []).map((item) => ({ key: `unsupported:${item.name}`, name: item.name, reason: '暂不支持' })),
+  ];
+  const pickedCount = importable.filter((item) => picked[item.key]).length;
+  const applyImport = async () => {
+    const chosen = importable.filter((item) => picked[item.key]);
+    if (!chosen.length) { goTo('connect'); return; }
+    setImporting(true);
+    setScanError('');
+    try {
+      await onApplyCcswitch(chosen.map((item) => item.key), chosen);
+      goTo('connect');
+    } catch (error) { setScanError(error.message); } finally { setImporting(false); }
+  };
+
+  // 记住进入引导时的账号数：完成步据此区分「刚接入第一个账号」与「从设置里重看引导」
+  const initialCountRef = useRef(accountsCount);
+  const justConnected = initialCountRef.current === 0 && accountsCount > 0;
+  // 引导过程中导入成功（账号 0 → 有）时自动前进：在导入步就去看接入结果，在接入步则直接收尾。
+  // 用上一次的账号数判断“刚变有”，从设置里重开引导时本来就有账号，不会一打开就被推走。
+  const prevCountRef = useRef(accountsCount);
+  useEffect(() => {
+    const was = prevCountRef.current;
+    prevCountRef.current = accountsCount;
+    if (was !== 0 || accountsCount === 0) return;
+    if (stepKey === 'ccswitch') goTo('connect');
+    else if (stepKey !== 'done') goTo('done');
+  }, [accountsCount]);
+  return <div className="onboard-shell">
+    <div className="onboard-card">
+      {/* 进度点：四 / 五步共用同一行，固定卡片顶部 */}
+      <div className="onboard-steps" aria-label="引导进度">
+        {steps.map((item, index) => <span key={item.key} className={`onboard-dot ${index < step ? 'past' : ''} ${index === step ? 'active' : ''}`} title={item.label} />)}
+      </div>
+
+      {(stepKey === 'welcome' || stepKey === 'done')
+        /* 欢迎页 / 完成页：图标、标题、副标题、按钮作为同一个 group 整体垂直居中，间距固定，
+           两页图标外框都是 80px，所以按钮落点完全一致 */
+        ? <div className="onboard-body is-hero">
+          <div className="onboard-group">
+            {stepKey === 'welcome'
+              ? <div className="onboard-hero"><img src="./quota-desk.svg" alt="Quota Desk" /></div>
+              : <div className="onboard-hero onboard-hero-done"><span><Check size={30} /></span></div>}
+            <h1>{stepKey === 'welcome' ? '欢迎使用 Quota Desk' : (justConnected ? '账号已接入，一切就绪' : '设置完成')}</h1>
+            <p className="onboard-sub">{stepKey === 'welcome'
+              ? '一个运行在桌面上的 Coding Plan 额度监控小工具'
+              : (justConnected ? '额度正在后台刷新，稍等片刻即可在总览中看到数据' : '之后可以通过设置随时添加账号')}</p>
+            <button type="button" className="primary-button onboard-cta" onClick={stepKey === 'welcome' ? () => goTo('theme') : onFinish}>{stepKey === 'welcome' ? '开始设置' : '开始使用'}</button>
+          </div>
+        </div>
+        /* 其余步骤：标题副标题固定顶部，中间内容区自适应，导航按钮固定托底 */
+        : <>
+          <div className="onboard-head">
+            {stepKey === 'theme' && <>
+              <h1>选择喜欢的外观</h1>
+              <p className="onboard-sub">主窗口与桌面浮窗会同步应用，之后可以随时在设置中更换</p>
+            </>}
+            {stepKey === 'connect' && <>
+              <h1>接入你的账号</h1>
+              <p className="onboard-sub">{accountsCount === 0 ? '还没有账号，点右上角 + 手动添加' : `已成功接入 ${accountsCount} 个账号，你可以继续添加或直接下一步`}</p>
+            </>}
+            {stepKey === 'ccswitch' && <>
+              <h1>从 cc-switch 导入</h1>
+              <p className="onboard-sub">勾选要迁移的账号，凭据仍加密保存在本机</p>
+            </>}
+          </div>
+          <div className={`onboard-body${stepKey === 'connect' ? ' is-connect' : ''}${stepKey === 'ccswitch' ? ' is-ccswitch' : ''}`}>
+            {stepKey === 'theme' && <div className="onboard-theme-grid" role="radiogroup" aria-label="界面主题">
+              <button type="button" role="radio" aria-checked={theme === 'dark'} className={`onboard-theme-card ${theme === 'dark' ? 'selected' : ''}`} onClick={() => pickTheme('dark')}>
+                <span className="onboard-theme-preview preview-dark"><i /><i /><i /></span>
+                <b>暗色</b><small>夜间编码，柔和护眼</small>
+                {theme === 'dark' && <span className="onboard-theme-check"><Check size={13} /></span>}
+              </button>
+              <button type="button" role="radio" aria-checked={theme === 'light'} className={`onboard-theme-card ${theme === 'light' ? 'selected' : ''}`} onClick={() => pickTheme('light')}>
+                <span className="onboard-theme-preview preview-light"><i /><i /><i /></span>
+                <b>亮色</b><small>白天使用，清爽通透</small>
+                {theme === 'light' && <span className="onboard-theme-check"><Check size={13} /></span>}
+              </button>
+            </div>}
+            {stepKey === 'connect' && <>
+              {/* 展示区：右上角是手动添加入口，下面是账号网格（或空态占位）；
+                  网格最高 140px，账号更多时在网格内部滚动 */}
+              <div className="onboard-slots">
+                <div className="onboard-slots-bar">
+                  <button type="button" className="onboard-slots-add" title="手动添加账号" aria-label="手动添加账号" onClick={onOpenImport}><Plus size={14} /></button>
+                </div>
+                {accountsCount === 0
+                  ? <div className="onboard-empty">
+                    <CircleGauge size={24} />
+                    <span>暂无账号</span>
+                  </div>
+                  : <div className="onboard-grid">
+                    {accounts.map((account) => {
+                      const provider = providers.find((item) => item.id === account.providerId);
+                      return <div className="onboard-cell" key={account.id}>
+                        <Logo provider={provider} size="sm" interactive={false} />
+                        <b title={account.name}>{account.name}</b>
+                        {/* 默认只露一个状态圆点；悬停整格时它平滑换成垃圾桶，点掉即删（仍走应用的确认弹窗） */}
+                        <button type="button" className="onboard-cell-remove" title={`删除 ${account.name}`} aria-label={`删除 ${account.name}`} onClick={() => onDeleteAccount(account)}>
+                          <i className={`onboard-cell-dot${account.disabled ? ' off' : ''}`} />
+                          <Trash2 size={13} />
+                        </button>
+                      </div>;
+                    })}
+                  </div>}
+              </div>
+            </>}
+            {stepKey === 'ccswitch' && <div className="onboard-import">
+              {/* 左侧：能导入的账号清单，占主要空间，可勾选、可滚动 */}
+              <div className="onboard-import-main">
+                {scanError && <div className="onboard-scan-error"><AlertCircle size={14} /><span>{scanError}</span></div>}
+                {!scan && !scanError && <div className="onboard-import-hint"><RefreshCw size={18} className="spinning" /><span>正在读取 cc-switch 数据…</span></div>}
+                {scan && importable.length === 0 && <div className="onboard-import-hint">
+                  <CircleGauge size={22} />
+                  <b>没有检测到可导入的账号</b>
+                  <span>cc-switch 未安装或其中没有已配置的账号，可以直接进入下一步手动添加</span>
+                </div>}
+                {scan && importable.length > 0 && <div className="onboard-scan-list">
+                  {importable.map((item) => <label className="onboard-scan-row" key={item.key}>
+                    <input type="checkbox" checked={Boolean(picked[item.key])} onChange={(event) => setPicked((old) => ({ ...old, [item.key]: event.target.checked }))} />
+                    <span className="onboard-scan-copy"><b title={item.name}>{item.name}</b><small>{item.providerName}{item.kind === 'oauth' ? ` · 官方登录${item.oauthDisplay ? ` · ${item.oauthDisplay}` : ''}` : item.keyTail ? ` · ${item.keyTail}` : ''}</small></span>
+                    <Check size={14} className="onboard-scan-ok" />
+                  </label>)}
+                </div>}
+              </div>
+              {/* 右侧：先列无法导入的原因（只显示前几条，完整原因悬停可见），导入按钮固定在最下方 */}
+              <div className="onboard-import-side">
+                {blocked.length > 0 && <div className="onboard-import-blocked">
+                  <span className="onboard-import-blocked-title">无法导入 {blocked.length} 条</span>
+                  {blocked.slice(0, 2).map((item) => <div className="onboard-blocked-row" key={item.key} title={`${item.name}：${item.reason}`}>
+                    <X size={11} /><b>{item.name}</b><small>{item.reason}</small>
+                  </div>)}
+                  {blocked.length > 2 && <div className="onboard-blocked-row is-more" title={blocked.slice(2).map((item) => `${item.name}：${item.reason}`).join('\n')}><Ellipsis size={11} /><b>还有 {blocked.length - 2} 条</b><small>悬停查看</small></div>}
+                </div>}
+                <button type="button" className="primary-button onboard-import-go" disabled={importing || !scan || pickedCount === 0} onClick={applyImport}>{importing ? '正在导入…' : `导入所选（${pickedCount}）`}</button>
+              </div>
+            </div>}
+          </div>
+          <div className="onboard-foot">
+            <button type="button" className="outline-button" onClick={() => setStep(step - 1)}>上一步</button>
+            {/* 导入不是必做项：不选任何条目也能直接进入下一步 */}
+            <button type="button" className="primary-button" onClick={() => setStep(step + 1)}>下一步</button>
+          </div>
+        </>}
+    </div>
+  </div>;
+}
+
 function UpdateModal({ update, version, onIgnore, onClose }) {
   const notes = update?.releaseNotes?.trim();
   const status = update?.status;
@@ -3080,13 +3308,50 @@ function App() {
   };
   const historyAccount = historyAccountId ? accounts.find((item) => item.id === historyAccountId) : null;
 
+  // 首次引导：仅在没有账号 且 未标记完成时出现；老用户升级后已有账号 → 启动时自动补记 onboarded
+  // ?onboard=1 可强制打开向导（预览 / 截图 / 调试）
+  const [onboardOpen, setOnboardOpen] = useState(() => new URLSearchParams(window.location.search).get('onboard') === '1');
+  useEffect(() => {
+    if (!hydrated.current) return;
+    if (settings.onboarded) return;
+    if (accounts.length > 0) { setSettings((old) => ({ ...old, onboarded: true })); return; }
+    setOnboardOpen(true);
+  }, [settings.onboarded, accounts.length]);
+  const finishOnboarding = () => {
+    setSettings((old) => ({ ...old, onboarded: true }));
+    setOnboardOpen(false);
+  };
+
   return <div className="app-shell">
     <header className="titlebar"><span className="titlebar-drag"><img src="./quota-desk.svg" alt="" /><b>Quota Desk</b></span><div className="titlebar-controls"><span className="last-checked" title="最后一次额度检查时间"><Clock3 size={11} />{formatChecked(lastSync)}</span>{update && ['available', 'downloading', 'downloaded', 'error'].includes(update.status) && !(update.status === 'available' && update.version && update.version === settings.ignoredUpdateVersion) && <button className={`update-badge ${update.status}`} onClick={() => setUpdateOpen(true)} title="查看版本更新"><Download size={11} />{update.status === 'available' && `v${update.version} 可更新`}{update.status === 'downloading' && `下载中 ${update.percent || 0}%`}{update.status === 'downloaded' && '重启升级'}{update.status === 'error' && '更新失败'}</button>}<button className="control-solo" onClick={refreshAll} disabled={refreshing} title="立即刷新全部账号" aria-label="立即刷新全部账号"><RefreshCw size={13} className={refreshing ? 'spinning' : ''} /></button><div className="overview-controls" aria-label="账号总览展示方式"><button className={overviewMode === 'rings' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rings'); }} title="账号总览" aria-label="账号总览"><CircleGauge size={13} /></button><button className={overviewMode === 'rows' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rows'); }} title="行式明细" aria-label="行式明细"><Rows3 size={13} /></button><button className={overviewMode === 'periods' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('periods'); }} title="周期明细" aria-label="周期明细"><Clock3 size={13} /></button></div></div><div className="titlebar-actions"><button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={13} /></button>{bridge && <><button className={pinned ? 'active' : ''} title={pinned ? '取消固定' : '固定在桌面最前面'} aria-label="固定在桌面最前面" onClick={async () => setPinned(await bridge.togglePin())}><Pin size={13} /></button><button title="关闭到托盘" aria-label="关闭到托盘" onClick={() => bridge.closeMainWindow()}><X size={14} /></button></>}</div></header>
     {toast && <div className={`toast ${toast.ok ? 'ok' : 'fail'}`} role="status">{toast.ok ? <Check size={13} /> : <AlertCircle size={13} />}<span>{toast.message}</span></div>}
     <main className="main-shell">
-      <div className="content-area">{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{accounts.length === 0 ? <section className="empty-workspace"><div className="empty-mark"><CircleGauge size={22} /></div><div><h2>把第一份 Coding Plan 接进来</h2><p>凭据将由 Windows 加密保存，额度请求只在本机发出。</p></div><button className="primary-button" onClick={() => setModal('account')}><Plus size={15} /> 添加账号</button><button className="outline-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> 设置</button>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button" onClick={() => setModal('import-ccswitch')}><Download size={15} /> 从 cc-switch 导入</button>}</section> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} onProviderUsageState={applyProviderUsageState} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} onReorderAccounts={reorderAccounts} sortWeights={{ fiveHourRemaining: settings.periodSort5hRemaining, otherRemaining: settings.periodSortLongRemaining }} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const kind = reloginChannel(provider)?.kind || 'kimi'; setModal({ type: `${kind}-relogin`, account }); }} />}</div>
+      <div className="content-area">{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{onboardOpen ? <OnboardingWizard settings={settings} setSettings={setSettings} accounts={accounts} providers={providers} ccswitchAvailable={Boolean(bridge?.scanCcswitchImport) || new URLSearchParams(window.location.search).get('onboard') === '1'} onOpenImport={() => setModal('account')} onApplyCcswitch={async (keys, chosen) => {
+        if (!bridge) {
+          // 网页演示模式：直接把选中的模拟条目变成账号，走与真实导入一致的落库形态
+          const stamp = Date.now();
+          const created = chosen.map((item, index) => ({
+            id: `mock-ccs-${stamp}-${index}`,
+            providerId: item.providerId,
+            name: item.name,
+            identity: item.oauthDisplay || '',
+            tags: [],
+            windowKeys: providers.find((entry) => entry.id === item.providerId)?.requestConfig?.windows?.length ? providers.find((entry) => entry.id === item.providerId).requestConfig.windows : ['five_hour', 'weekly', 'monthly'],
+            windows: [],
+            status: 'active',
+            lastError: null,
+            lastChecked: null,
+          }));
+          setAccounts((old) => [...old, ...created]);
+          setToast({ id: Date.now(), ok: true, message: `已从 cc-switch 导入 ${created.length} 个账号` });
+          return;
+        }
+        const result = await bridge.applyCcswitchImport(keys);
+        if (result?.state) { setAccounts(result.state.accounts || []); setProviders(result.state.providers || []); setLastSync(result.state.lastSync || new Date().toISOString()); if (result.state.runtime) setRuntime(result.state.runtime); }
+        setToast({ id: Date.now(), ok: result?.imported > 0, message: result?.imported > 0 ? `已从 cc-switch 导入 ${result.imported} 个账号` : '没有导入新账号（凭据都已存在）' });
+      }} onDeleteAccount={deleteAccount} onFinish={finishOnboarding} /> : accounts.length === 0 ? <section className="empty-workspace"><div className="empty-mark"><CircleGauge size={22} /></div><div><h2>把第一份 Coding Plan 接进来</h2><p>凭据将由 Windows 加密保存，额度请求只在本机发出。</p></div><button className="primary-button" onClick={() => setModal('account')}><Plus size={15} /> 添加账号</button><button className="outline-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> 设置</button>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button" onClick={() => setModal('import-ccswitch')}><Download size={15} /> 从 cc-switch 导入</button>}</section> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} onProviderUsageState={applyProviderUsageState} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} onReorderAccounts={reorderAccounts} sortWeights={{ fiveHourRemaining: settings.periodSort5hRemaining, otherRemaining: settings.periodSortLongRemaining }} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const kind = reloginChannel(provider)?.kind || 'kimi'; setModal({ type: `${kind}-relogin`, account }); }} />}</div>
     </main>
-    {settingsOpen && <SettingsDrawer accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)} openModal={setModal} onDeleteAccount={deleteAccount} onToggleAccountDisabled={toggleAccountDisabled} onTestAccount={testAccount} testingAccountId={testingAccountId} onEditProvider={editProvider} autoLaunch={autoLaunch} onToggleAutoLaunch={toggleAutoLaunch} appVersion={appVersion} update={update} onOpenUpdate={() => setUpdateOpen(true)} onCheckUpdate={onCheckUpdate} onClearHistory={clearHistory} runtime={runtime} />}
+    {settingsOpen && <SettingsDrawer accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)} openModal={setModal} onDeleteAccount={deleteAccount} onToggleAccountDisabled={toggleAccountDisabled} onTestAccount={testAccount} testingAccountId={testingAccountId} onEditProvider={editProvider} autoLaunch={autoLaunch} onToggleAutoLaunch={toggleAutoLaunch} appVersion={appVersion} update={update} onOpenUpdate={() => setUpdateOpen(true)} onCheckUpdate={onCheckUpdate} onClearHistory={clearHistory} runtime={runtime} onReopenOnboarding={() => { setSettingsOpen(false); setHistoryAccountId(null); setOnboardOpen(true); }} />}
     {confirmState && <ConfirmModal confirm={confirmState} onClose={() => setConfirmState(null)} />}
     {updateOpen && update && <UpdateModal update={update} version={appVersion} onIgnore={ignoreUpdate} onClose={() => setUpdateOpen(false)} />}
     {settings.widgetPreview && <WidgetPreview account={currentWidgetAccount} provider={currentWidgetProvider} tagLimit={Number(settings.widgetTagLimit ?? 2)} scale={settings.widgetScale} length={settings.widgetLength} onClose={() => setSettings((old) => ({ ...old, widgetPreview: false }))} />}

@@ -1360,7 +1360,7 @@ function createMainWindow() {
     backgroundColor: themeColors(savedTheme()).main, title: 'Quota Desk', icon: loadAppIcon(), autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: preloadPath },
   });
-  mainWindow.loadFile(distPath);
+  mainWindow.loadFile(distPath, process.argv.includes('--onboard') ? { query: { onboard: '1' } } : undefined);
   // Windows 上只有一个真正生效的置顶层，主窗口置顶后与浮窗同层、激活即会盖到浮窗上；
   // 主窗口显示/被激活时把浮窗压回自己上方，保证自家浮窗永不被主界面挡住
   mainWindow.on('show', () => {
