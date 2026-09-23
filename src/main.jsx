@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import {
-  AlertCircle, ArrowLeft, Bell, BellOff, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, CircleGauge, CircleStop, Clock3, Download, Eye, ExternalLink, Globe, HelpCircle, History, LayoutGrid,
+  AlertCircle, ArrowLeft, Bell, BellOff, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronLeft, ChevronRight, CircleGauge, CircleStop, Clock3, Download, Eye, ExternalLink, Globe, HelpCircle, History, LayoutGrid,
   Ellipsis, Flame, KeyRound, Monitor, Play, Plus, Power, RefreshCw, Rows3, Settings2, ShieldCheck, SlidersHorizontal, Square, Bot,
   Pencil, Pin, Sparkles, SunMoon, Tag, Trash2, TrendingUp, Trophy, UploadCloud, X, Zap,
 } from 'lucide-react';
@@ -11,6 +11,7 @@ import { adapterDefinitions } from './adapters';
 import { clampRemainingWeight, comparePriority } from './priority-score';
 import { newApiTemplateScript } from './newapi-template';
 import { computeUsageStreaks, formatProviderUsageCost, formatProviderUsageSummaryTokens } from './provider-usage-format';
+import LocalCliUsageView from './local-cli-usage/LocalCliUsageView';
 import qrcode from 'qrcode-generator';
 import './styles.css';
 
@@ -197,6 +198,12 @@ const normalizeSettings = (value = {}) => {
     historyDays: [0, 3, 7, 15, 30, 60, 90].includes(Number(value.historyDays)) ? Number(value.historyDays) : 7,
     widgetScale: clampWidgetScale(value.widgetScale ?? byWidth ?? (legacySize ? legacySize / WIDGET_BASE_SIZE.width : 0.9)),
     widgetLength: clampWidgetLength(value.widgetLength ?? 0.9),
+    // 本机 CLI 用量:默认不启用(首次进入页面确认后开启);合并同名模型默认开
+    localCliUsage: {
+      enabled: false,
+      mergeSameModels: true,
+      ...(value.localCliUsage && typeof value.localCliUsage === 'object' ? value.localCliUsage : {}),
+    },
     proxyMode: ['direct', 'system', 'manual'].includes(value.proxyMode) ? value.proxyMode : 'system',
     proxyUrl: String(value.proxyUrl ?? ''),
     periodSort5hRemaining: clampRemainingWeight(value.periodSort5hRemaining),
@@ -1197,7 +1204,7 @@ function ProviderUsageView({ account, provider, onState }) {
   </div>;
 }
 
-function HistoryView({ account, provider, onBack, onProviderUsageState }) {
+function HistoryView({ account, provider, onBack, onProviderUsageState, onOpenLocalUsage }) {
   const [points, setPoints] = useState(null);
   const [hiddenKeys, setHiddenKeys] = useState([]);
   const [view, setView] = useState('trend');
@@ -2826,8 +2833,12 @@ function App() {
   };
   const toggleAutoLaunch = async (value) => { if (bridge?.setAutoLaunch) setAutoLaunch(await bridge.setAutoLaunch(value)); };
   const [overviewMode, setOverviewMode] = useState('rings');
-  // 额度历史折线图视图：点账号卡片进入，返回按钮或右上角视图切换退出
+  // 额度历史折线图视图:点账号卡片进入,返回按钮或右上角视图切换退出
   const [historyAccountId, setHistoryAccountId] = useState(null);
+  // 本机用量视图:标题栏刷新按钮分流 + "最后扫描"时间 + 官方用量页跳转预选渠道
+  const localUsageApiRef = useRef(null);
+  const [localUsageMeta, setLocalUsageMeta] = useState(null);
+  const inLocalUsageView = overviewMode === 'local-usage' && !historyAccountId;
   const [accounts, setAccounts] = useState(bridge ? [] : initialAccounts);
   const [providers, setProviders] = useState(providerCatalog);
   const [settings, setSettings] = useState(() => normalizeSettings({}));
@@ -3080,11 +3091,18 @@ function App() {
   };
   const historyAccount = historyAccountId ? accounts.find((item) => item.id === historyAccountId) : null;
 
+  // 标题栏刷新按当前视图分流:本机用量页触发增量扫描并刷新页面数据,不动账号轮询
+  const handleGlobalRefresh = () => {
+    if (!inLocalUsageView) { refreshAll(); return; }
+    setRefreshing(true);
+    Promise.resolve(localUsageApiRef.current?.refresh?.()).finally(() => { setRefreshing(false); });
+  };
+
   return <div className="app-shell">
-    <header className="titlebar"><span className="titlebar-drag"><img src="./quota-desk.svg" alt="" /><b>Quota Desk</b></span><div className="titlebar-controls"><span className="last-checked" title="最后一次额度检查时间"><Clock3 size={11} />{formatChecked(lastSync)}</span>{update && ['available', 'downloading', 'downloaded', 'error'].includes(update.status) && !(update.status === 'available' && update.version && update.version === settings.ignoredUpdateVersion) && <button className={`update-badge ${update.status}`} onClick={() => setUpdateOpen(true)} title="查看版本更新"><Download size={11} />{update.status === 'available' && `v${update.version} 可更新`}{update.status === 'downloading' && `下载中 ${update.percent || 0}%`}{update.status === 'downloaded' && '重启升级'}{update.status === 'error' && '更新失败'}</button>}<button className="control-solo" onClick={refreshAll} disabled={refreshing} title="立即刷新全部账号" aria-label="立即刷新全部账号"><RefreshCw size={13} className={refreshing ? 'spinning' : ''} /></button><div className="overview-controls" aria-label="账号总览展示方式"><button className={overviewMode === 'rings' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rings'); }} title="账号总览" aria-label="账号总览"><CircleGauge size={13} /></button><button className={overviewMode === 'rows' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rows'); }} title="行式明细" aria-label="行式明细"><Rows3 size={13} /></button><button className={overviewMode === 'periods' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('periods'); }} title="周期明细" aria-label="周期明细"><Clock3 size={13} /></button></div></div><div className="titlebar-actions"><button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={13} /></button>{bridge && <><button className={pinned ? 'active' : ''} title={pinned ? '取消固定' : '固定在桌面最前面'} aria-label="固定在桌面最前面" onClick={async () => setPinned(await bridge.togglePin())}><Pin size={13} /></button><button title="关闭到托盘" aria-label="关闭到托盘" onClick={() => bridge.closeMainWindow()}><X size={14} /></button></>}</div></header>
+    <header className="titlebar"><span className="titlebar-drag"><img src="./quota-desk.svg" alt="" /><b>Quota Desk</b></span><div className="titlebar-controls"><span className="last-checked" title={inLocalUsageView ? '最后一次本机用量扫描时间' : '最后一次额度检查时间'}><Clock3 size={11} />{inLocalUsageView ? (localUsageMeta?.lastScannedAt ? formatChecked(localUsageMeta.lastScannedAt) : '未扫描') : formatChecked(lastSync)}</span>{update && ['available', 'downloading', 'downloaded', 'error'].includes(update.status) && !(update.status === 'available' && update.version && update.version === settings.ignoredUpdateVersion) && <button className={`update-badge ${update.status}`} onClick={() => setUpdateOpen(true)} title="查看版本更新"><Download size={11} />{update.status === 'available' && `v${update.version} 可更新`}{update.status === 'downloading' && `下载中 ${update.percent || 0}%`}{update.status === 'downloaded' && '重启升级'}{update.status === 'error' && '更新失败'}</button>}<button className="control-solo" onClick={handleGlobalRefresh} disabled={refreshing} title={inLocalUsageView ? '重新扫描本机用量' : '立即刷新全部账号'} aria-label={inLocalUsageView ? '重新扫描本机用量' : '立即刷新全部账号'}><RefreshCw size={13} className={refreshing || (inLocalUsageView && localUsageMeta?.scanning) ? 'spinning' : ''} /></button><div className="overview-controls" aria-label="全局视图"><button className={overviewMode === 'rings' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rings'); }} title="账号总览" aria-label="账号总览"><CircleGauge size={13} /></button><button className={overviewMode === 'rows' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rows'); }} title="行式明细" aria-label="行式明细"><Rows3 size={13} /></button><button className={overviewMode === 'periods' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('periods'); }} title="周期明细" aria-label="周期明细"><Clock3 size={13} /></button><button className={inLocalUsageView ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('local-usage'); }} title="本机用量" aria-label="本机用量"><ChartNoAxesCombined size={13} /></button></div></div><div className="titlebar-actions"><button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={13} /></button>{bridge && <><button className={pinned ? 'active' : ''} title={pinned ? '取消固定' : '固定在桌面最前面'} aria-label="固定在桌面最前面" onClick={async () => setPinned(await bridge.togglePin())}><Pin size={13} /></button><button title="关闭到托盘" aria-label="关闭到托盘" onClick={() => bridge.closeMainWindow()}><X size={14} /></button></>}</div></header>
     {toast && <div className={`toast ${toast.ok ? 'ok' : 'fail'}`} role="status">{toast.ok ? <Check size={13} /> : <AlertCircle size={13} />}<span>{toast.message}</span></div>}
-    <main className="main-shell">
-      <div className="content-area">{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{accounts.length === 0 ? <section className="empty-workspace"><div className="empty-mark"><CircleGauge size={22} /></div><div><h2>把第一份 Coding Plan 接进来</h2><p>凭据将由 Windows 加密保存，额度请求只在本机发出。</p></div><button className="primary-button" onClick={() => setModal('account')}><Plus size={15} /> 添加账号</button><button className="outline-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> 设置</button>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button" onClick={() => setModal('import-ccswitch')}><Download size={15} /> 从 cc-switch 导入</button>}</section> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} onProviderUsageState={applyProviderUsageState} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} onReorderAccounts={reorderAccounts} sortWeights={{ fiveHourRemaining: settings.periodSort5hRemaining, otherRemaining: settings.periodSortLongRemaining }} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const kind = reloginChannel(provider)?.kind || 'kimi'; setModal({ type: `${kind}-relogin`, account }); }} />}</div>
+    <main className={`main-shell${inLocalUsageView ? ' local-usage-mode' : ''}`}>
+      <div className={`content-area${inLocalUsageView ? ' local-usage-mode' : ''}`}>{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{inLocalUsageView ? <LocalCliUsageView settings={settings} setSettings={setSettings} onApi={(api) => { localUsageApiRef.current = api; }} onMetaChange={setLocalUsageMeta} /> : accounts.length === 0 ? <section className="empty-workspace"><div className="empty-mark"><CircleGauge size={22} /></div><div><h2>把第一份 Coding Plan 接进来</h2><p>凭据将由 Windows 加密保存，额度请求只在本机发出。</p></div><button className="primary-button" onClick={() => setModal('account')}><Plus size={15} /> 添加账号</button><button className="outline-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> 设置</button>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button" onClick={() => setModal('import-ccswitch')}><Download size={15} /> 从 cc-switch 导入</button>}</section> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} onProviderUsageState={applyProviderUsageState} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} onReorderAccounts={reorderAccounts} sortWeights={{ fiveHourRemaining: settings.periodSort5hRemaining, otherRemaining: settings.periodSortLongRemaining }} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const kind = reloginChannel(provider)?.kind || 'kimi'; setModal({ type: `${kind}-relogin`, account }); }} />}</div>
     </main>
     {settingsOpen && <SettingsDrawer accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)} openModal={setModal} onDeleteAccount={deleteAccount} onToggleAccountDisabled={toggleAccountDisabled} onTestAccount={testAccount} testingAccountId={testingAccountId} onEditProvider={editProvider} autoLaunch={autoLaunch} onToggleAutoLaunch={toggleAutoLaunch} appVersion={appVersion} update={update} onOpenUpdate={() => setUpdateOpen(true)} onCheckUpdate={onCheckUpdate} onClearHistory={clearHistory} runtime={runtime} />}
     {confirmState && <ConfirmModal confirm={confirmState} onClose={() => setConfirmState(null)} />}

@@ -9,6 +9,7 @@ const { resolveWasteWindows } = require('./waste.cjs');
 const { builtinConfigs } = require('./builtin-configs.cjs');
 const { scanCcswitch } = require('./ccswitch.cjs');
 const { mergeMainOwnedUsageConnections } = require('./provider-usage-state.cjs');
+const { createCliUsageService } = require('./cli-usage/index.cjs');
 const { CLI_KINDS, SNAPSHOT_KEY, readLiveAuth, cliIdentity, resolveCliAuth, authVersionMatches, writeLiveIfCurrent, fetchWithCliAuth, COPILOT_CLIENT_ID, COPILOT_DEVICE_CODE_URL, COPILOT_TOKEN_URL, COPILOT_SCOPE } = require('./cli-auth.cjs');
 const {
   fetchDeepSeekUsage,
@@ -44,6 +45,7 @@ let mainWindow;
 let widgetWindow;
 let tray;
 let store;
+let cliUsage;
 let pollTimer;
 let quitting = false;
 let nextPollAt = null;
@@ -1499,6 +1501,8 @@ function registerIpc() {
     const previous = migrateState(store.loadState());
     const autoUpdateWasDisabled = previous?.settings?.autoUpdate === false;
     const saved = store.saveState(cleanState(mergeMainOwnedUsageConnections(state, previous)));
+    // 本机用量后台增量跟随设置开关启停
+    cliUsage?.applySettings(saved?.settings);
     const savedIds = new Set((saved.accounts || []).map((account) => account.id));
     const removedIds = (previous?.accounts || []).filter((account) => !savedIds.has(account.id)).map((account) => account.id);
     // 账号被删除时连同凭据、官方网页登录分区、额度历史与周期档案一起清掉。
@@ -2141,6 +2145,8 @@ function registerIpc() {
     const y = Math.max(area.y, Math.min(area.y + area.height - size.height, bounds.y + dy));
     widgetWindow.setBounds({ x, y, width: size.width, height: size.height });
   });
+  // 本机 CLI 用量:handler 只转给 cli-usage facade,不在这里解析任何文件
+  cliUsage.registerIpc(ipcMain);
 }
 
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -2156,6 +2162,7 @@ else {
   });
   app.whenReady().then(async () => {
     store = new DesktopStore();
+    cliUsage = createCliUsageService({ dbPath: path.join(app.getPath('userData'), 'cli-usage.sqlite') });
     store.purgeAllCycles();
     await scrubLegacyProviderUsagePartitions();
     applyProxySetting();
@@ -2163,6 +2170,7 @@ else {
     registerIpc();
     createMainWindow();
     const state = store.loadState();
+    cliUsage?.applySettings(state?.settings);
     if (state?.settings?.widget !== false) createWidgetWindow();
     createTray();
     schedulePolling();
@@ -2178,6 +2186,7 @@ app.on('before-quit', () => {
   quitting = true;
   if (pollTimer) clearInterval(pollTimer);
   if (updateCheckTimer) clearInterval(updateCheckTimer);
+  cliUsage?.dispose();
   const usageAccountIds = new Set([
     ...providerUsageWindows.keys(),
     ...providerUsageSessions.keys(),

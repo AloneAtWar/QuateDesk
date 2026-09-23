@@ -855,3 +855,115 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .provider-connection-feedback.fail { color: var(--coral-deep); }
 
 .provider-heatmap-months span { position: absolute; top: 0; line-height: 11px; }
+
+/* ---- 本机 CLI 用量(.local-cli-*;与官方用量页 .provider-usage-* 完全隔离) ---- */
+/* 本机用量页需要内部滚动(热力图/模型列表),不给外层 main-shell 留整页滚动 */
+.main-shell.local-usage-mode { display: flex; flex-direction: column; overflow: hidden; }
+.main-shell.local-usage-mode > .content-area { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.main-shell.local-usage-mode > .content-area > .local-cli-page { flex: 1 1 auto; min-height: 0; }
+.local-cli-page { min-width: 0; height: 100%; display: flex; flex-direction: column; padding: 10px 12px; }
+.local-cli-page-head { flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; margin-bottom: 8px; }
+.local-cli-page-title { min-width: 0; display: grid; gap: 1px; }
+.local-cli-page-title b { font-size: 13px; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.local-cli-page-title small { color: var(--faint); font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.local-cli-page-actions { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.local-cli-view-switch { flex: 0 0 auto; }
+
+/* 状态说明卡(首次使用/空态/错误/加载/桌面限制):统一居中垂直布局 */
+.local-cli-state-card { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px 28px; border: 1px solid var(--line-inner); border-radius: 10px; background: var(--surface-2); color: var(--ink); text-align: center; }
+.local-cli-state-card > svg { flex: 0 0 auto; color: var(--cyan); }
+.local-cli-state-card.loading > svg { color: var(--ink-soft); }
+.local-cli-state-card > div { flex: 0 0 auto; min-width: 0; display: grid; gap: 5px; justify-items: center; }
+.local-cli-state-card b { font-size: 13px; letter-spacing: -.01em; }
+.local-cli-state-card small { color: var(--muted); font-size: 10px; line-height: 1.6; max-width: 42em; }
+.local-cli-state-card em { color: var(--coral-deep); font-size: 10px; font-style: normal; }
+.local-cli-state-card .outline-button, .local-cli-state-card .primary-button { margin-top: 6px; }
+.local-cli-state-icon { width: 38px; height: 38px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 10px; color: var(--green-deep); background: var(--green-bg); }
+
+/* 首次使用说明卡:同样的居中垂直结构,按钮放文字下方 */
+.local-cli-intro-card { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px 28px; border: 1px solid var(--line-inner); border-radius: 10px; background: var(--surface-2); color: var(--ink); text-align: center; }
+.local-cli-intro-copy { flex: 0 0 auto; display: grid; gap: 6px; justify-items: center; max-width: 46em; }
+.local-cli-intro-copy b { font-size: 14px; letter-spacing: -.01em; }
+.local-cli-intro-copy small { color: var(--muted); font-size: 10.5px; line-height: 1.65; }
+.local-cli-intro-card .primary-button { margin-top: 4px; }
+
+/* 统计卡:组合 provider-stat 复用官方用量页的卡片视觉 */
+.local-cli-stats { margin-bottom: 6px; }
+.local-cli-stat.tokens .stat-icon { color: var(--cyan); background: color-mix(in srgb, var(--cyan) 15%, transparent); }
+.local-cli-stat.peak .stat-icon { color: var(--sky); background: color-mix(in srgb, var(--sky) 15%, transparent); }
+.local-cli-stat.streak .stat-icon { color: var(--coral); background: var(--coral-bg); }
+.local-cli-stat.longest .stat-icon { color: var(--violet); background: color-mix(in srgb, var(--violet) 15%, transparent); }
+
+/* 热力图视图 */
+.local-cli-heatmap-view { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.local-cli-heatmap-scroll { margin-bottom: 6px; }
+
+/* 当日模型横向滚动区:外框高度固定,滚动条走预留轨道,溢出不改变页面布局 */
+.local-cli-day-models { flex: 0 0 auto; }
+.local-cli-day-models-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 1px 4px; }
+.local-cli-day-models-title { color: var(--ink-soft); font-size: 10px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.local-cli-day-models-frame { height: 88px; min-height: 88px; overflow: hidden; border: 1px solid var(--line-inner); border-radius: 8px; background: var(--surface-2); }
+.local-cli-day-models-scroll { height: 100%; display: flex; overflow-x: auto; overflow-y: hidden; scrollbar-gutter: stable; scrollbar-width: thin; }
+.local-cli-day-models-scroll::-webkit-scrollbar { height: 5px; }
+.local-cli-day-models-scroll::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--scrollbar); }
+.local-cli-day-models-scroll::-webkit-scrollbar-track { background: transparent; }
+.local-cli-day-models-scroll:focus-visible { outline: 2px solid var(--focus-border); outline-offset: -2px; }
+.local-cli-day-models-track { display: flex; align-items: stretch; gap: 6px; padding: 7px 8px; height: 100%; }
+.local-cli-day-model-card { flex: 0 0 auto; width: 118px; display: grid; gap: 2px; align-content: center; padding: 6px 9px; border: 1px solid var(--line-inner); border-radius: 8px; background: var(--surface-3); }
+.local-cli-day-model-card b { font-size: 10px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.local-cli-day-model-card small { font-size: 8px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.local-cli-day-model-card em { font-style: normal; font-size: 11px; font-weight: 700; color: var(--ink-soft); }
+.local-cli-models-hint { align-self: center; padding: 0 10px; color: var(--faint); font-size: 10px; white-space: nowrap; }
+
+/* 合并同名模型开关:热力图当日区与模型拆分页共用同一状态 */
+.local-cli-merge-toggle { order: 0; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: 7px; padding: 3px 7px 3px 4px; color: var(--muted); background: var(--control); font-size: 9px; }
+.local-cli-merge-toggle:hover { border-color: var(--hover-border); color: var(--ink-soft); }
+.local-cli-merge-toggle.on { color: var(--ink); }
+.local-cli-merge-toggle:focus-visible { outline: 2px solid var(--focus-border); outline-offset: 1px; }
+.local-cli-merge-track { position: relative; width: 20px; height: 11px; border-radius: 20px; background: var(--toggle); transition: background .15s; }
+.local-cli-merge-knob { position: absolute; top: 1.5px; left: 1.5px; width: 8px; height: 8px; border-radius: 50%; background: var(--knob); transition: transform .15s; }
+.local-cli-merge-toggle.on .local-cli-merge-track { background: var(--green); }
+.local-cli-merge-toggle.on .local-cli-merge-knob { transform: translateX(9px); }
+
+/* 模型拆分视图:无统计卡,标题下直接进入数据;控件右对齐 */
+.local-cli-models-view { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.local-cli-model-toolbar { flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-bottom: 6px; }
+.local-cli-range-switch { order: 1; flex: 0 0 auto; }
+.local-cli-model-table { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line-inner); border-radius: 8px; background: var(--surface-2); overflow: hidden; }
+.local-cli-model-header { flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) 62px 58px 44px; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line-inner); color: var(--faint); font-size: 8px; font-weight: 700; }
+.local-cli-model-header .col-total, .local-cli-model-header .col-cache, .local-cli-model-header .col-share { text-align: right; }
+.local-cli-model-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; scrollbar-width: thin; }
+.local-cli-model-list::-webkit-scrollbar { width: 5px; }
+.local-cli-model-list::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--scrollbar); }
+.local-cli-model-list::-webkit-scrollbar-track { background: transparent; }
+.local-cli-model-list:focus-visible { outline: 2px solid var(--focus-border); outline-offset: -2px; }
+.local-cli-models-hint.block { display: grid; place-items: center; height: 100%; min-height: 120px; padding: 12px; text-align: center; white-space: normal; }
+.local-cli-models-hint.block.error { color: var(--coral-deep); }
+.local-cli-model-row { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) 62px 58px 44px; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line-inner); }
+.local-cli-model-row:last-child { border-bottom: 0; }
+.local-cli-model-row .col-model { min-width: 0; display: grid; gap: 1px; }
+.local-cli-model-row .col-model b { font-size: 10px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.local-cli-model-row .col-model small { font-size: 8px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.local-cli-model-row .col-bar { min-width: 0; }
+.local-cli-total-bar { display: block; height: 10px; min-width: 2px; border-radius: 4px; background: linear-gradient(90deg, color-mix(in srgb, var(--cyan) 65%, transparent), var(--cyan)); }
+.local-cli-model-row .col-total { font-size: 10px; font-weight: 700; color: var(--ink); text-align: right; white-space: nowrap; }
+.local-cli-model-row .col-cache { font-size: 9px; color: var(--cyan); text-align: right; white-space: nowrap; }
+.local-cli-model-row .col-share { font-size: 9px; color: var(--muted); text-align: right; white-space: nowrap; }
+
+/* 渠道单选下拉:固定宽度按钮 + portal 菜单 */
+.local-cli-channel-select { width: 96px; height: 26px; flex: 0 0 96px; display: inline-flex; align-items: center; justify-content: space-between; gap: 4px; padding: 0 6px 0 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink-soft); background: var(--control); font-size: 10px; }
+.local-cli-channel-select:hover { border-color: var(--hover-border); color: var(--ink); }
+.local-cli-channel-select svg { transition: transform .15s; flex: 0 0 auto; }
+.local-cli-channel-select svg.flip { transform: rotate(180deg); }
+.local-cli-channel-value { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.local-cli-channel-menu { z-index: 70; display: flex; flex-direction: column; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--drawer-bg); box-shadow: var(--shadow-strong); overflow: hidden; }
+.local-cli-channel-search { display: flex; align-items: center; gap: 5px; padding: 6px 8px; border-bottom: 1px solid var(--line-inner); color: var(--faint); }
+.local-cli-channel-search input { flex: 1 1 auto; min-width: 0; border: 0; background: transparent; color: var(--ink); font-size: 10px; outline: none; }
+.local-cli-channel-options { max-height: 208px; overflow-y: auto; scrollbar-width: thin; padding: 4px; }
+.local-cli-channel-option { width: 100%; display: flex; align-items: center; gap: 6px; padding: 5px 7px; border: 0; border-radius: 6px; color: var(--ink-soft); background: transparent; font-size: 10px; text-align: left; }
+.local-cli-channel-option.active { background: var(--surface-3); }
+.local-cli-channel-option.selected { color: var(--ink); }
+.local-cli-channel-name { flex: 1 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.local-cli-channel-name i { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; }
+.local-cli-channel-check { color: var(--green-deep); }
+.local-cli-channel-empty { padding: 10px; color: var(--faint); font-size: 10px; text-align: center; }
