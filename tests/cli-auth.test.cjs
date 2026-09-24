@@ -584,10 +584,10 @@ test('Kimi 订阅额度查询：无订阅时只剩 5 小时 / 7 天窗口也成�
     () => queryAccount({ id: 'k1' }, kimiProvider, '', empty, { [SNAPSHOT_KEY]: JSON.stringify(kimiSnapshot()) }),
     (error) => /没有可识别的额度窗口/.test(error.message),
   );
-  // 没有快照时提示扫码登录
+  // 没有快照也没有 API Key 时提示完成登录（Kimi 双登录：API Key 模式的前置检查）
   await assert.rejects(
     () => queryAccount({ id: 'k1' }, kimiProvider, '', async () => { throw new Error('should not call'); }, {}),
-    (error) => /未检测到 Kimi 订阅登录/.test(error.message),
+    (error) => /没有 API Key，也没有扫码登录/.test(error.message),
   );
 });
 

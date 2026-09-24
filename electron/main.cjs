@@ -387,22 +387,27 @@ const migrateProvider = (provider) => {
   const seededVariables = !builtin && builtinConfig?.adapterMode === 'script' && !provider.requestConfig?.variables?.some((item) => item.key === 'endpoint')
     ? { ...provider, requestConfig: { ...provider.requestConfig, variables: builtinConfig.variables } }
     : provider;
+  // Kimi 双登录改造：给存量 kimi-subscription 渠道补上 API Key 用量端点
+  // （API Key 表单的默认接口地址 + cc-switch 导入的域名匹配）
+  const kimiEndpointSeeded = provider.id === 'kimi-subscription' && builtinConfig?.endpoint && provider.requestConfig?.endpoint !== builtinConfig.endpoint
+    ? { ...seededVariables, requestConfig: { ...seededVariables.requestConfig, endpoint: builtinConfig.endpoint } }
+    : seededVariables;
   // MiMo 窗口改版：存量 state 的 requestConfig.windows 还是旧的 ['mimo_plan'] 时，
   // 刷新为内置的周期窗口（包月 monthly「1个月」/ 包年 yearly「1年」）；旧配置的
   // wasteWindows 是空数组（当时明确不做浪费统计），一并刷新为内置预设参与浪费统计
   const mimoWindowsStale = provider.id === 'mimo' && Array.isArray(provider.requestConfig?.windows) && provider.requestConfig.windows.includes('mimo_plan');
   const refreshedWindows = mimoWindowsStale && builtinConfig?.windows
     ? {
-        ...seededVariables,
+        ...kimiEndpointSeeded,
         requestConfig: {
-          ...seededVariables.requestConfig,
+          ...kimiEndpointSeeded.requestConfig,
           windows: builtinConfig.windows,
-          ...(Array.isArray(seededVariables.requestConfig?.wasteWindows) && !seededVariables.requestConfig.wasteWindows.length
+          ...(Array.isArray(kimiEndpointSeeded.requestConfig?.wasteWindows) && !kimiEndpointSeeded.requestConfig.wasteWindows.length
             ? { wasteWindows: builtinConfig.wasteWindows }
             : {}),
         },
       }
-    : seededVariables;
+    : kimiEndpointSeeded;
   const website = provider.website === undefined ? (builtinWebsites[provider.id] ?? '') : provider.website;
   const migrated = builtin ? { ...provider, website, baseUrl: undefined, domain: undefined, requestConfig: builtin, logo } : { ...refreshedWindows, website, baseUrl: undefined, domain: undefined, logo };
   // 浪费统计预设补齐：存量 state 的 requestConfig 还没有 wasteWindows 字段时用内置预设；
@@ -1878,8 +1883,12 @@ function registerIpc() {
       const customTags = Array.isArray(options?.tags) ? options.tags.map((tag) => String(tag).trim()).filter(Boolean) : null;
       // 自动生成的标识（… 尾号）跟随新登录更新，用户手填的标识不动
       const nextIdentity = (!target.identity || target.identity.startsWith('…')) ? (identity.display || target.identity) : target.identity;
+      // API Key 账号扫码升级为订阅模式：补上月订阅窗口（API Key 保留用于 cc-switch 导入去重）
+      const upgradedWindowKeys = target.cliAuthSource !== 'snapshot' && !(target.windowKeys || []).includes('monthly')
+        ? [...(target.windowKeys?.length ? target.windowKeys : ['five_hour', 'weekly']), 'monthly']
+        : null;
       const updatedAccounts = (state.accounts || []).map((account) => account.id === reloginId
-        ? { ...account, identity: nextIdentity, ...(customName ? { name: customName } : {}), ...(customTags ? { tags: customTags } : {}), cliAuthSource: 'snapshot', cliFingerprint: identity.fingerprint, status: 'active', lastError: null }
+        ? { ...account, ...(upgradedWindowKeys ? { windowKeys: upgradedWindowKeys } : {}), identity: nextIdentity, ...(customName ? { name: customName } : {}), ...(customTags ? { tags: customTags } : {}), cliAuthSource: 'snapshot', cliFingerprint: identity.fingerprint, status: 'active', lastError: null }
         : account);
       const saved = store.saveState(cleanState({ ...state, accounts: updatedAccounts }));
       sendState(saved);
@@ -2054,6 +2063,7 @@ function registerIpc() {
     }
     const nextAccounts = [...(state.accounts || [])];
     const importedIds = [];
+    let kimiApiKeyImported = 0;
     for (const candidate of scan.candidates) {
       if (!selected.has(candidate.key)) continue;
       const provider = providers.find((item) => item.id === candidate.providerId);
@@ -2083,7 +2093,10 @@ function registerIpc() {
       }
       if (usedKeys.has(candidate.apiKey)) continue;
       usedKeys.add(candidate.apiKey);
-      const windows = provider.requestConfig?.windows?.length ? provider.requestConfig.windows : ['five_hour', 'weekly', 'monthly', 'balance'];
+      // Kimi API Key 账号：usages 接口只有 5 小时 / 7 天窗口，不给月订阅留空窗口
+      const isKimiKey = candidate.providerId === 'kimi-subscription';
+      if (isKimiKey) kimiApiKeyImported += 1;
+      const windows = isKimiKey ? ['five_hour', 'weekly'] : (provider.requestConfig?.windows?.length ? provider.requestConfig.windows : ['five_hour', 'weekly', 'monthly', 'balance']);
       store.saveCredential(id, candidate.apiKey);
       importedIds.push(id);
       nextAccounts.push({
@@ -2102,7 +2115,8 @@ function registerIpc() {
     const saved = store.saveState(cleanState({ ...state, accounts: nextAccounts }));
     sendState(saved);
     if (importedIds.length) await pollState(importedIds).catch(() => {});
-    return { imported: importedIds.length, state: migrateState(store.loadState()) };
+    // kimiApiKeyImported：本次导入的 Kimi API Key 账号数，前端据此提示「无法获取月额度」
+    return { imported: importedIds.length, kimiApiKeyImported, state: migrateState(store.loadState()) };
   });
   ipcMain.handle('update:get-status', () => updateStatus);
   ipcMain.handle('update:check', () => checkForUpdates(true));

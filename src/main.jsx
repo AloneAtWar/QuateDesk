@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom';
 import {
   AlertCircle, ArrowLeft, Bell, BellOff, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, CircleGauge, CircleStop, Clock3, Download, Eye, ExternalLink, Globe, HelpCircle, History, LayoutGrid,
   Ellipsis, Flame, KeyRound, Monitor, Play, Plus, Power, RefreshCw, Rows3, Settings2, ShieldCheck, SlidersHorizontal, Square, Bot,
-  Pencil, Pin, Sparkles, SunMoon, Tag, Trash2, TrendingUp, Trophy, UploadCloud, X, Zap,
+  Pencil, Pin, QrCode, Sparkles, SunMoon, Tag, Trash2, TrendingUp, Trophy, UploadCloud, X, Zap,
 } from 'lucide-react';
 import { initialAccounts, providerCatalog, windowCatalog } from './data';
 import { adapterDefinitions } from './adapters';
@@ -120,11 +120,22 @@ const resolveWasteWindows = (requestConfig) => {
 const CLI_ADAPTER_MODES = ['claude', 'codex', 'gemini', 'kimi', 'grok', 'copilot', 'grokbot'];
 const isCliProvider = (provider) => CLI_ADAPTER_MODES.includes(provider?.requestConfig?.adapterMode || provider?.adapter);
 const BUILTIN_API_KEY_PROVIDERS = new Set(['zai', 'deepseek', 'minimax']);
+// Kimi 渠道双登录（kimi-subscription 同一渠道）：API Key 模式的账号没有扫码快照
+// （cliAuthSource !== 'snapshot'），凭据就是 API Key，只查得到 5 小时 / 7 天窗口、
+// 拿不到月订阅额度；表单 / 编辑弹窗按此特例展示
+const isKimiApiKeyProvider = (provider) => provider?.id === 'kimi-subscription';
+const isKimiApiKeyAccount = (provider, account) => provider?.id === 'kimi-subscription' && account?.cliAuthSource !== 'snapshot';
+const KIMI_API_KEY_WINDOWS = ['five_hour', 'weekly'];
+const providerFormWindows = (provider) => (isKimiApiKeyProvider(provider) ? KIMI_API_KEY_WINDOWS : providerWindowKeys(provider));
 
-// 令牌失效后可一键重新登录的订阅渠道：返回重登弹窗类型与入口文案（Kimi 扫码 / Grok 导入 / Copilot 设备码）
-const reloginChannel = (provider) => {
+// 令牌失效后可一键重新登录的订阅渠道：返回重登弹窗类型与入口文案（Kimi 扫码 / Grok 导入 / Copilot 设备码）。
+// Kimi 渠道双登录：API Key 账号（无扫码快照）失效时入口是「扫码登录」（可顺手升级为订阅模式）
+const reloginChannel = (provider, account = null) => {
   const mode = provider?.requestConfig?.adapterMode || provider?.adapter;
-  if (provider?.id === 'kimi-subscription' || mode === 'kimi') return { kind: 'kimi', action: '重新扫码', title: 'Kimi 订阅令牌已失效，点击重新扫码登录' };
+  if (provider?.id === 'kimi-subscription' || mode === 'kimi') {
+    if (account && !account.cliAuthSource) return { kind: 'kimi', action: '扫码登录', title: 'Kimi API Key 已失效：点击扫码登录，或删除账号后重新添加' };
+    return { kind: 'kimi', action: '重新扫码', title: 'Kimi 订阅令牌已失效，点击重新扫码登录' };
+  }
   if (provider?.id === 'grok' || mode === 'grok') return { kind: 'grok', action: '重新导入', title: 'Grok 令牌已失效，点击重新导入本机 CLI 登录' };
   if (provider?.id === 'grokbot' || mode === 'grokbot') return { kind: 'grok', action: '重新导入', title: 'Grok Bot 登录已失效，点击重新导入本机客户端登录' };
   if (provider?.id === 'copilot' || mode === 'copilot') return { kind: 'copilot', action: '重新授权', title: 'GitHub 授权已失效，点击重新设备码登录' };
@@ -510,7 +521,7 @@ function WindowsView({ accounts, providers, reminderRules, embedded = false, onO
       <div className="windows-column-head"><span>账号</span><span>剩余进度</span><span>状态</span></div>
       <div className="windows-list">{sorted.map((account) => {
         const provider = providers.find((item) => item.id === account.providerId);
-        const relogin = account.authStatus === 'reauth_required' ? reloginChannel(provider) : null;
+        const relogin = account.authStatus === 'reauth_required' ? reloginChannel(provider, account) : null;
         return <div className="account-window-row clickable" key={account.id} role="button" tabIndex={0} title="点击查看额度趋势" onClick={() => onOpenHistory?.(account)} onKeyDown={(event) => { if (event.key === 'Enter') onOpenHistory?.(account); }}>
           <div className="account-side"><AccountIdentity account={account} provider={provider} /><div className={`account-status ${account.status}`}><span className="status-dot" />{account.status === 'warning' ? '需处理' : '正常'}<small>{formatChecked(account.lastChecked)}</small></div>{relogin && <button type="button" className="text-button relogin-link" title={relogin.title} onClick={(event) => { event.stopPropagation(); onRelogin?.(account); }}><RefreshCw size={11} />{relogin.action}</button>}<AccountRuleMarks account={account} rules={reminderRules} /></div>
           <div className="account-meters">{account.windows.map((meter) => <MeterBar key={meter.key} meter={meter} />)}</div>
@@ -1327,7 +1338,7 @@ function OverviewCard({ account, provider, feedback, onOpenHistory, onRelogin, o
   const cardRef = useRef(null);
   const pressRef = useRef(null);
   const liftingRef = useRef(false);
-  const relogin = account.status === 'warning' ? reloginChannel(provider) : null;
+  const relogin = account.status === 'warning' ? reloginChannel(provider, account) : null;
   const lifting = dragId === account.id;
   const clearPress = () => { pressRef.current = null; };
   const beginDrag = (pointerId) => {
@@ -1651,7 +1662,8 @@ function AccountModalV2({ providers, onClose, onSave, onTestDraft, embedded = fa
   // CLI 官方订阅不走此表单（与「导入本机 CLI 登录」避免两套入口打架），只列 API / 中转类厂商；
   // 从磁贴列表进入时厂商已选定（fixedProviderId）：表单里不再提供厂商切换，标题就是厂商名
   const selectableProviders = providers.filter((item) => !isCliProvider(item));
-  const fixedProvider = fixedProviderId ? selectableProviders.find((item) => item.id === fixedProviderId) : null;
+  // kimi-subscription 是 CLI 订阅渠道（不出现在厂商下拉里），但磁贴的「API Key 登录」固定进入它的表单
+  const fixedProvider = fixedProviderId ? providers.find((item) => item.id === fixedProviderId) : null;
   const [providerId, setProviderId] = useState(fixedProvider?.id || selectableProviders[0]?.id || '');
   const [name, setName] = useState('');
   const [identity, setIdentity] = useState('');
@@ -1660,7 +1672,7 @@ function AccountModalV2({ providers, onClose, onSave, onTestDraft, embedded = fa
   const [endpoint, setEndpoint] = useState(() => defaultEndpoint(fixedProvider || selectableProviders[0]));
   const [selected, setSelected] = useState(() => {
     const initial = fixedProvider || selectableProviders[0];
-    return initial ? providerWindowKeys(initial) : [];
+    return initial ? providerFormWindows(initial) : [];
   });
   const [variableValues, setVariableValues] = useState(() => defaultVariableValues(fixedProvider || selectableProviders[0]));
   const [timeoutSeconds, setTimeoutSeconds] = useState('15');
@@ -1668,10 +1680,12 @@ function AccountModalV2({ providers, onClose, onSave, onTestDraft, embedded = fa
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [connectUsageAfterSave, setConnectUsageAfterSave] = useState(false);
-  const provider = selectableProviders.find((item) => item.id === providerId);
-  const availableWindows = providerWindowKeys(provider);
+  const provider = providers.find((item) => item.id === providerId);
+  // Kimi API Key 模式：凭据就是 API Key（必填），额度窗口只有 5 小时 / 7 天
+  const kimiKeyMode = isKimiApiKeyProvider(provider);
+  const availableWindows = providerFormWindows(provider);
   const variableDefinitions = providerVariableDefinitions(provider);
-  const credentialRequired = provider?.requestConfig?.adapterMode === 'script' ? false : provider?.requestConfig?.auth !== 'none';
+  const credentialRequired = kimiKeyMode || (provider?.requestConfig?.adapterMode === 'script' ? false : provider?.requestConfig?.auth !== 'none');
   const missingRequiredVariables = variableDefinitions.some((item) => providerVariableRequired(provider, item) && !String(variableValues[item.key] ?? '').trim());
   // Z.ai / Codex 这类免额外操作的厂商：保存时自动连接官方用量，表单里不出开关
   const usageCopy = providerUsageCopy(provider);
@@ -1700,7 +1714,7 @@ function AccountModalV2({ providers, onClose, onSave, onTestDraft, embedded = fa
     try { await onSave({ providerId, name: name.trim() || provider?.name || '新账号', identity: identity.trim(), tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean), windowKeys: selected, credential: credential.trim(), endpoint: accountEndpoint, timeoutSeconds: clampAccountTimeout(timeoutSeconds), variables: publicVariables, secretVariables, connectUsageAfterSave: (autoConnect || (usageConnectVisible && connectUsageAfterSave)) }); }
     finally { setSaving(false); }
   };
-  const formFields = <>{!fixedProvider && <label className="field"><span>厂商</span><select value={providerId} onChange={(event) => { const next = selectableProviders.find((item) => item.id === event.target.value); setProviderId(event.target.value); setEndpoint(defaultEndpoint(next)); setSelected(providerWindowKeys(next)); setVariableValues(defaultVariableValues(next)); }}>{selectableProviders.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>}<div className="form-grid"><label className="field"><span>账号名</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder={provider?.name || '账号名称'} /></label><label className="field"><span>标识</span><input value={identity} onChange={(event) => setIdentity(event.target.value)} placeholder="邮箱、用户名或币种" /></label></div><label className="field"><span>标签 <small>用逗号分隔，可留空</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="可留空，多个用逗号分隔" /></label>{!['script', 'grok', 'grokbot', 'mimo'].includes(provider?.requestConfig?.adapterMode) && <label className="field"><span>详细额度接口路径</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder="https://api.example.com/v1/usage" /></label>}<div className="form-grid"><label className="field"><span>请求超时（秒）<small>5–120，默认 15；跨境或代理网络可调大</small></span><input type="number" min="5" max="120" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.target.value)} /></label></div><div className="field"><span>额度窗口</span><div className="window-choice">{availableWindows.map((key) => <button type="button" key={key} className={`window-choice-item ${selected.includes(key) ? 'selected' : ''}`} onClick={() => toggle(key)}><span>{selected.includes(key) ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>)}</div></div>{variableDefinitions.length > 0 && <div className="adapter-config account-variables"><span className="eyebrow">厂商变量</span><div className="form-grid">{variableDefinitions.map((item) => <label className="field" key={item.key}><span>{item.label || item.key}{item.required && <small> 必填</small>}</span><input type={item.secret ? 'password' : 'text'} required={item.required} value={variableValues[item.key] ?? ''} onChange={(event) => setVariableValues((old) => ({ ...old, [item.key]: event.target.value }))} placeholder={item.defaultValue || item.key} /></label>)}</div></div>}{!['script', 'grok', 'grokbot', 'mimo'].includes(provider?.requestConfig?.adapterMode) && <label className="field"><span>{credentialRequired ? 'API Token' : '凭据（可选）'}</span><input type="password" required={credentialRequired} value={credential} onChange={(event) => setCredential(event.target.value)} placeholder={credentialRequired ? '凭据只会加密保存在本机' : '此接口无需凭据'} /></label>}{testResult && <div className={`draft-test-result ${testResult.ok ? 'ok' : 'fail'}`}><span>{testResult.ok ? '测试通过' : '测试失败'} · {testResult.message}</span></div>}</>;
+  const formFields = <>{!fixedProvider && <label className="field"><span>厂商</span><select value={providerId} onChange={(event) => { const next = selectableProviders.find((item) => item.id === event.target.value); setProviderId(event.target.value); setEndpoint(defaultEndpoint(next)); setSelected(providerWindowKeys(next)); setVariableValues(defaultVariableValues(next)); }}>{selectableProviders.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>}<div className="form-grid"><label className="field"><span>账号名</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder={provider?.name || '账号名称'} /></label><label className="field"><span>标识</span><input value={identity} onChange={(event) => setIdentity(event.target.value)} placeholder="邮箱、用户名或币种" /></label></div><label className="field"><span>标签 <small>用逗号分隔，可留空</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="可留空，多个用逗号分隔" /></label>{!kimiKeyMode && !['script', 'grok', 'grokbot', 'mimo'].includes(provider?.requestConfig?.adapterMode) && <label className="field"><span>详细额度接口路径</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder="https://api.example.com/v1/usage" /></label>}<div className="form-grid"><label className="field"><span>请求超时（秒）<small>5–120，默认 15；跨境或代理网络可调大</small></span><input type="number" min="5" max="120" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.target.value)} /></label></div><div className="field"><span>额度窗口</span><div className="window-choice">{availableWindows.map((key) => <button type="button" key={key} className={`window-choice-item ${selected.includes(key) ? 'selected' : ''}`} onClick={() => toggle(key)}><span>{selected.includes(key) ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>)}</div></div>{variableDefinitions.length > 0 && <div className="adapter-config account-variables"><span className="eyebrow">厂商变量</span><div className="form-grid">{variableDefinitions.map((item) => <label className="field" key={item.key}><span>{item.label || item.key}{item.required && <small> 必填</small>}</span><input type={item.secret ? 'password' : 'text'} required={item.required} value={variableValues[item.key] ?? ''} onChange={(event) => setVariableValues((old) => ({ ...old, [item.key]: event.target.value }))} placeholder={item.defaultValue || item.key} /></label>)}</div></div>}{!['script', 'grok', 'grokbot', 'mimo'].includes(provider?.requestConfig?.adapterMode) && <label className="field"><span>{kimiKeyMode ? 'API Key' : credentialRequired ? 'API Token' : '凭据（可选）'}</span><input type="password" required={credentialRequired} value={credential} onChange={(event) => setCredential(event.target.value)} placeholder={kimiKeyMode ? 'API Key 只会加密保存在本机' : credentialRequired ? '凭据只会加密保存在本机' : '此接口无需凭据'} /></label>}{kimiKeyMode && <div className="adapter-note"><AlertCircle size={15} /><span>使用 API Key 登录无法获取到月额度（仅 5 小时 / 7 天窗口）；如需月订阅额度，可在添加后于「设置 → 账号与凭据」中编辑该账号并扫码登录（需与 API Key 为同一账号）。</span></div>}{testResult && <div className={`draft-test-result ${testResult.ok ? 'ok' : 'fail'}`}><span>{testResult.ok ? '测试通过' : '测试失败'} · {testResult.message}</span></div>}</>;
   const canRun = !((credentialRequired && !credential.trim()) || missingRequiredVariables || !selected.length || !accountEndpoint);
   const canSave = !(saving || (credentialRequired && !credential.trim()) || missingRequiredVariables || !selected.length || !accountEndpoint);
   const usageConnectOption = usageConnectVisible && usageCopy
@@ -1710,7 +1724,7 @@ function AccountModalV2({ providers, onClose, onSave, onTestDraft, embedded = fa
   // 嵌入模式（磁贴列表点进来的厂商表单）：表单区域滚动，标题与操作条固定，窗口尺寸与磁贴页一致；
   // 厂商已选定——标题直接显示厂商名，表单内不能再换厂商
   if (embedded) return <>
-    <div className="modal-head"><div><h2>添加 {provider?.name || '账号'}<TitleHelp>{provider?.legalName || provider?.name || 'API / 中转接口'}：手动填写额度地址与凭据，凭据只加密保存在本机。如需换厂商，返回磁贴列表重选。</TitleHelp></h2></div></div>
+    <div className="modal-head"><div><h2>添加 {provider?.name || '账号'}<TitleHelp>{kimiKeyMode ? 'Kimi API Key 登录：Key 由 Windows 加密保存在本机，额度来自 Kimi 用量接口（5 小时 / 7 天，无月订阅额度）；之后可在设置中编辑该账号扫码登录补全订阅额度（需同一账号）。' : `${provider?.legalName || provider?.name || 'API / 中转接口'}：手动填写额度地址与凭据，凭据只加密保存在本机。如需换厂商，返回磁贴列表重选。`}</TitleHelp></h2></div></div>
     <form id="custom-account-form" className="custom-account-scroll" onSubmit={submit}>{formFields}{usageConnectOption}</form>
     {actions(onBack || onClose)}
   </>;
@@ -1811,7 +1825,7 @@ function ProviderUsageConnectionCard({ account, provider, onState }) {
   </div>;
 }
 
-function AccountEditModalV2({ account, provider, onClose, onSave, onTestDraft, onProviderUsageState }) {
+function AccountEditModalV2({ account, provider, onClose, onSave, onTestDraft, onProviderUsageState, onScanLogin = null }) {
   const [name, setName] = useState(account.name || '');
   const [identity, setIdentity] = useState(account.identity || '');
   const [tags, setTags] = useState((account.tags || []).join(', '));
@@ -1823,10 +1837,12 @@ function AccountEditModalV2({ account, provider, onClose, onSave, onTestDraft, o
   const variableDefinitions = providerVariableDefinitions(provider);
   const [variableValues, setVariableValues] = useState(() => Object.fromEntries(variableDefinitions.map((item) => [item.key, item.secret ? '' : (account.variables?.[item.key] ?? item.defaultValue ?? '')])));
   const [selected, setSelected] = useState(account.windowKeys?.length ? account.windowKeys : (account.windows || []).map((item) => item.key));
-  const availableWindows = providerWindowKeys(provider);
+  const availableWindows = isKimiApiKeyAccount(provider, account) ? KIMI_API_KEY_WINDOWS : providerWindowKeys(provider);
   const toggle = (key) => setSelected((old) => old.includes(key) ? old.filter((item) => item !== key) : [...old, key]);
   // CLI 官方订阅的额度接口由专属适配器决定，账号上没有可编辑的接口路径与凭据
   const cliProvider = isCliProvider(provider);
+  // Kimi API Key 账号（无扫码快照）：可扫码登录升级为订阅模式，API Key 保留用于 cc-switch 导入去重
+  const kimiKeyAccount = isKimiApiKeyAccount(provider, account);
   const accountEndpoint = cliProvider ? (account.endpoint || '') : provider?.requestConfig?.adapterMode === 'script' ? String(variableValues.endpoint || provider.requestConfig.endpoint || '') : endpoint.trim();
   // 表单草稿连通性测试：不保存任何修改；留空的凭据/密钥由主进程回退到已存值
   const runTest = async () => {
@@ -1839,7 +1855,7 @@ function AccountEditModalV2({ account, provider, onClose, onSave, onTestDraft, o
     } finally { setTesting(false); }
   };
   const submit = async (event) => { event.preventDefault(); if (!name.trim() || (!cliProvider && !accountEndpoint) || !selected.length) return; const { publicVariables, secretVariables } = splitVariableValues(provider, variableValues); setSaving(true); try { await onSave({ account, name: name.trim(), identity: identity.trim(), tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean), endpoint: accountEndpoint, windowKeys: selected, timeoutSeconds: clampAccountTimeout(timeoutSeconds), variables: publicVariables, secretVariables }); } finally { setSaving(false); } };
-  return <div className="modal-backdrop" onClick={onClose}><form className="modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><h2>编辑 {account.name}</h2></div></div><div className="form-grid"><label className="field"><span>账号名</span><input required value={name} onChange={(event) => setName(event.target.value)} /></label><label className="field"><span>标识</span><input value={identity} onChange={(event) => setIdentity(event.target.value)} /></label></div><label className="field"><span>标签 <small>用逗号分隔，可留空</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} /></label>{!['script', 'grok', 'grokbot', 'mimo'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <label className="field"><span>详细额度接口路径</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} /></label>}<div className="form-grid"><label className="field"><span>请求超时（秒）<small>5–120，默认 15；跨境或代理网络可调大</small></span><input type="number" min="5" max="120" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.target.value)} placeholder="15" /></label></div><div className="field"><span>额度窗口</span><div className="window-choice">{availableWindows.map((key) => <button type="button" key={key} className={`window-choice-item ${selected.includes(key) ? 'selected' : ''}`} onClick={() => toggle(key)}><span>{selected.includes(key) ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>)}</div></div>{account.cliAuthSource === 'snapshot' && <div className="adapter-note"><ShieldCheck size={15} /><span>{cliProvider && (provider?.requestConfig?.adapterMode === 'kimi' || provider?.adapter === 'kimi') ? '该账号使用扫码导入的 Kimi 订阅登录快照：令牌由本应用自动续期；若登录在官方侧失效，请重新扫码「导入订阅登录」。' : cliProvider && (provider?.requestConfig?.adapterMode === 'copilot' || provider?.adapter === 'copilot') ? '该账号使用设备码授权的 GitHub 登录快照：令牌长期有效、无需续期；若授权被吊销或已改密，请重新「导入订阅登录」完成设备码授权。' : '该账号使用独立的登录快照：令牌由本应用自动续期，不依赖本机 CLI 当前激活的 profile；若登录在官方侧失效，请重新登录后再次「导入订阅登录」。'}</span></div>}{variableDefinitions.length > 0 && <div className="adapter-config account-variables"><span className="eyebrow">厂商变量</span><div className="form-grid">{variableDefinitions.map((item) => { const lockedKey = item.system && item.key === 'apiKey'; return <label className="field" key={item.key}><span>{item.label || item.key}{lockedKey ? <small> 创建后不可修改</small> : item.secret && <small> 留空保留原值</small>}</span><input type={item.secret ? 'password' : 'text'} required={item.required && !item.secret} disabled={lockedKey} value={lockedKey ? '' : (variableValues[item.key] ?? '')} onChange={(event) => setVariableValues((old) => ({ ...old, [item.key]: event.target.value }))} placeholder={lockedKey ? '如需更换请删除账号后重新添加' : item.secret ? '未修改' : (item.defaultValue || item.key)} /></label>; })}</div></div>}{!['script', 'grok', 'grokbot', 'mimo'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <div className="adapter-note"><KeyRound size={15} /><span>凭据创建后不可修改；如需更换 API Token，请删除该账号后重新添加。</span></div>}<ProviderUsageConnectionCard account={account} provider={provider} onState={onProviderUsageState} />{testResult && <div className={`draft-test-result ${testResult.ok ? 'ok' : 'fail'}`}><span>{testResult.ok ? '测试通过' : '测试失败'} · {testResult.message}</span></div>}<div className="modal-actions"><button type="button" className="outline-button" onClick={onClose}>取消</button><button type="button" className="outline-button" disabled={testing || !name.trim() || (!cliProvider && !accountEndpoint) || !selected.length} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" disabled={saving || !selected.length}>{saving ? '正在保存' : '保存'}</button></div></form></div>;
+  return <div className="modal-backdrop" onClick={onClose}><form className="modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><h2>编辑 {account.name}</h2></div></div><div className="form-grid"><label className="field"><span>账号名</span><input required value={name} onChange={(event) => setName(event.target.value)} /></label><label className="field"><span>标识</span><input value={identity} onChange={(event) => setIdentity(event.target.value)} /></label></div><label className="field"><span>标签 <small>用逗号分隔，可留空</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} /></label>{!['script', 'grok', 'grokbot', 'mimo'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <label className="field"><span>详细额度接口路径</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} /></label>}<div className="form-grid"><label className="field"><span>请求超时（秒）<small>5–120，默认 15；跨境或代理网络可调大</small></span><input type="number" min="5" max="120" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.target.value)} placeholder="15" /></label></div><div className="field"><span>额度窗口</span><div className="window-choice">{availableWindows.map((key) => <button type="button" key={key} className={`window-choice-item ${selected.includes(key) ? 'selected' : ''}`} onClick={() => toggle(key)}><span>{selected.includes(key) ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>)}</div></div>{account.cliAuthSource === 'snapshot' && <div className="adapter-note"><ShieldCheck size={15} /><span>{cliProvider && (provider?.requestConfig?.adapterMode === 'kimi' || provider?.adapter === 'kimi') ? '该账号使用扫码导入的 Kimi 订阅登录快照：令牌由本应用自动续期；若登录在官方侧失效，请重新扫码「导入订阅登录」。' : cliProvider && (provider?.requestConfig?.adapterMode === 'copilot' || provider?.adapter === 'copilot') ? '该账号使用设备码授权的 GitHub 登录快照：令牌长期有效、无需续期；若授权被吊销或已改密，请重新「导入订阅登录」完成设备码授权。' : '该账号使用独立的登录快照：令牌由本应用自动续期，不依赖本机 CLI 当前激活的 profile；若登录在官方侧失效，请重新登录后再次「导入订阅登录」。'}</span></div>}{kimiKeyAccount && onScanLogin && <div className="kimi-upgrade-card"><div className="adapter-note"><QrCode size={15} /><span>该账号当前使用 API Key 查询额度，无法获取月订阅额度。可扫码登录切换为订阅模式（5 小时 / 7 天 / 月）；<b>请确保扫码账号与 API Key 属于同一用户，否则额度数据可能错乱</b>。扫码后 API Key 会保留（便于 cc-switch 导入时去重）。</span></div><button type="button" className="outline-button kimi-upgrade-button" onClick={onScanLogin}><QrCode size={13} /> 扫码登录</button></div>}{variableDefinitions.length > 0 && <div className="adapter-config account-variables"><span className="eyebrow">厂商变量</span><div className="form-grid">{variableDefinitions.map((item) => { const lockedKey = item.system && item.key === 'apiKey'; return <label className="field" key={item.key}><span>{item.label || item.key}{lockedKey ? <small> 创建后不可修改</small> : item.secret && <small> 留空保留原值</small>}</span><input type={item.secret ? 'password' : 'text'} required={item.required && !item.secret} disabled={lockedKey} value={lockedKey ? '' : (variableValues[item.key] ?? '')} onChange={(event) => setVariableValues((old) => ({ ...old, [item.key]: event.target.value }))} placeholder={lockedKey ? '如需更换请删除账号后重新添加' : item.secret ? '未修改' : (item.defaultValue || item.key)} /></label>; })}</div></div>}{!['script', 'grok', 'grokbot', 'mimo'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <div className="adapter-note"><KeyRound size={15} /><span>凭据创建后不可修改；如需更换 API Token，请删除该账号后重新添加。</span></div>}<ProviderUsageConnectionCard account={account} provider={provider} onState={onProviderUsageState} />{testResult && <div className={`draft-test-result ${testResult.ok ? 'ok' : 'fail'}`}><span>{testResult.ok ? '测试通过' : '测试失败'} · {testResult.message}</span></div>}<div className="modal-actions"><button type="button" className="outline-button" onClick={onClose}>取消</button><button type="button" className="outline-button" disabled={testing || !name.trim() || (!cliProvider && !accountEndpoint) || !selected.length} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" disabled={saving || !selected.length}>{saving ? '正在保存' : '保存'}</button></div></form></div>;
 }
 
 function ProviderModalV2({ provider, onClose, onSave }) {
@@ -2012,6 +2028,7 @@ function ImportCcswitchModal({ onClose, onApplied }) {
     {scan && <>
       {importable.length === 0 && <div className="settings-empty">没有可导入的账号（厂商不支持或 Key 已存在）</div>}
       {importable.length > 0 && <div className="settings-list import-list">{importable.map((item) => <label className="settings-account import-row" key={item.key}><input type="checkbox" checked={Boolean(selected[item.key])} onChange={(event) => setSelected((old) => ({ ...old, [item.key]: event.target.checked }))} /><div><b title={item.name}>{item.name}</b><small>{item.providerName} · {item.kind === 'oauth' ? `官方 OAuth 登录${item.oauthDisplay ? ` · ${item.oauthDisplay}` : ''}` : item.keyTail}</small></div></label>)}</div>}
+      {candidates.some((item) => item.providerId === 'kimi-subscription') && <div className="adapter-note"><AlertCircle size={15} /><span>Kimi API Key 账号无法获取月额度；导入后可在「设置 → 账号与凭据」中编辑该账号并扫码登录补全订阅额度（请确保与 API Key 为同一账号）。</span></div>}
       {duplicates.length > 0 && <div className="adapter-note"><Check size={15} /><span>已跳过重复 Key：{duplicates.map((item) => item.name).join('、')}</span></div>}
       {(scan.unsupported || []).length > 0 && <div className="adapter-note"><AlertCircle size={15} /><span>暂不支持：{(scan.unsupported || []).map((item) => item.name).join('、')}</span></div>}
       <div className="modal-actions"><button type="button" className="outline-button" onClick={onClose}>取消</button><button type="button" className="primary-button" disabled={applying || selectedCount === 0} onClick={apply}>{applying ? '正在导入…' : `导入所选（${selectedCount}）`}</button></div>
@@ -2063,6 +2080,8 @@ function TitleHelp({ children }) {
 // 避开导入期间 state:updated 广播重渲染把完成回调判过期丢掉的问题；令牌全程只留在主进程。
 function KimiQrPanel({ mode = 'import', reloginAccount = null, onExit, onImported, onFinish, exitLabel = '退出' }) {
   const bridge = window.quotaDesk;
+  // API Key 账号的「扫码登录」升级：目标账号没有扫码快照，扫码后切换为订阅模式（Key 保留）
+  const upgradingApiKey = mode === 'relogin' && Boolean(reloginAccount) && !reloginAccount.cliAuthSource;
   const [session, setSession] = useState(null); // { code, dataUrl, step, status, message, display }
   const [draft, setDraft] = useState(() => mode === 'relogin'
     ? { name: reloginAccount?.name || 'Kimi 订阅', tags: (reloginAccount?.tags || []).join(', ') }
@@ -2140,7 +2159,9 @@ function KimiQrPanel({ mode = 'import', reloginAccount = null, onExit, onImporte
     error: session?.message || '出错了，请重试',
   }[status] || '';
   return <>
-    <div className="modal-head"><div><h2>{mode === 'relogin' ? '重新扫码登录' : '添加 Kimi 订阅'}<TitleHelp>{mode === 'relogin'
+    <div className="modal-head"><div><h2>{upgradingApiKey ? '扫码登录' : mode === 'relogin' ? '重新扫码登录' : '添加 Kimi 订阅'}<TitleHelp>{upgradingApiKey
+      ? '为 API Key 账号补充扫码登录：完成后切换为订阅模式（含月订阅额度），API Key 会保留用于 cc-switch 导入去重；请确保扫码账号与 API Key 为同一用户。'
+      : mode === 'relogin'
       ? 'Kimi 订阅令牌已失效：重新扫码即可恢复，账号名与标签在第二步可顺手修改。'
       : '扫码登录 Kimi 官方订阅：令牌加密保存在本机并自动续期，含 5 小时 / 7 天 / 月订阅额度。'}</TitleHelp></h2></div></div>
     {step === 'scan'
@@ -2160,6 +2181,7 @@ function KimiQrPanel({ mode = 'import', reloginAccount = null, onExit, onImporte
           <span className="kimi-qr-done-icon"><Check size={18} /></span>
           <div><b>扫码成功</b>{session?.display && <small>标识：{session.display}</small>}</div>
         </div>
+        {upgradingApiKey && <div className="adapter-note"><AlertCircle size={15} /><span>请确保扫码账号与该账号的 API Key 属于同一用户，否则额度数据可能错乱；完成后账号切换为订阅模式，API Key 保留用于 cc-switch 导入去重。</span></div>}
         {status === 'error' && <div className="adapter-note update-error"><AlertCircle size={15} /><span>{statusCopy}</span></div>}
         {importing && <div className="adapter-note"><RefreshCw size={15} className="spinning" /><span>正在导入，请稍候…</span></div>}
         <div className="form-grid">
@@ -2502,14 +2524,34 @@ function CopilotDevicePanel({ mode = 'import', reloginAccount = null, onExit, on
   </>;
 }
 
+// Kimi 磁贴点开后的登录方式选择：扫码登录（含月订阅额度）/ API Key 登录（无月额度）。
+// 两种方式同属 kimi-subscription 渠道：API Key 账号之后可在设置里扫码登录升级（API Key 保留）。
+function KimiEntryChooser({ onScan, onApiKey, onBack }) {
+  return <>
+    <div className="modal-head"><div><h2>添加 Kimi 订阅<TitleHelp>Kimi 渠道两种登录方式：扫码登录读取官方订阅额度（5 小时 / 7 天 / 月）；API Key 登录查用量接口（5 小时 / 7 天，无月额度）。</TitleHelp></h2></div></div>
+    <div className="cli-import-stage kimi-entry-stage">
+      <button type="button" className="kimi-entry-option" onClick={onScan}>
+        <span className="kimi-entry-icon"><QrCode size={18} /></span>
+        <span className="kimi-entry-copy"><b>扫码登录</b><small>手机 Kimi App / 微信扫码，含月订阅额度</small></span>
+      </button>
+      <button type="button" className="kimi-entry-option" onClick={onApiKey}>
+        <span className="kimi-entry-icon"><KeyRound size={18} /></span>
+        <span className="kimi-entry-copy"><b>API Key 登录</b><small>填写 API Key，无法获取月额度</small></span>
+      </button>
+      <div className="adapter-note"><AlertCircle size={15} /><span>使用 API Key 登录无法获取到月额度；如需月订阅额度请使用扫码登录（API Key 账号之后也可在「设置 → 账号与凭据」中编辑该账号并扫码登录补全，需为同一账号）。</span></div>
+    </div>
+    <div className="modal-actions"><button type="button" className="outline-button" onClick={onBack}>返回</button></div>
+  </>;
+}
+
 function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClose, onImported, onSaveAccount, onTestDraft, onToast = null, providerOrder = null, onReorderProviders = null }) {
   const bridge = window.quotaDesk;
   const [logins, setLogins] = useState(null);
   const [error, setError] = useState('');
   const [importing, setImporting] = useState(null);
   const [imported, setImported] = useState({});
-  // Kimi 订阅扫码：同一个弹窗内切换视图（列表 ↔ 扫码），窗口尺寸恒定不变
-  const [kimiQrOpen, setKimiQrOpen] = useState(false);
+  // Kimi 订阅：同一个弹窗内切换视图（列表 ↔ 登录方式选择 ↔ 扫码 / API Key 表单），窗口尺寸恒定不变
+  const [kimiEntry, setKimiEntry] = useState(null); // null | 'choose' | 'qr' | 'apikey'
   const [mimoLoginOpen, setMimoLoginOpen] = useState(false);
   // GitHub Copilot 设备码：与 Kimi 同一模式，列表只是入口，点击进入授权视图（同窗口）
   const [copilotOpen, setCopilotOpen] = useState(false);
@@ -2650,11 +2692,15 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
         setImported((old) => ({ ...old, mimo: true }));
         onImported('mimo', result);
       }} />
-      : kimiQrOpen
-      ? <KimiQrPanel mode="import" exitLabel="返回" onExit={() => setKimiQrOpen(false)} onFinish={() => setKimiQrOpen(false)} onImported={(_kind, result) => {
+      : kimiEntry === 'choose'
+      ? <KimiEntryChooser onScan={() => setKimiEntry('qr')} onApiKey={() => setKimiEntry('apikey')} onBack={() => setKimiEntry(null)} />
+      : kimiEntry === 'qr'
+      ? <KimiQrPanel mode="import" exitLabel="返回" onExit={() => setKimiEntry('choose')} onFinish={() => setKimiEntry(null)} onImported={(_kind, result) => {
         setImported((old) => ({ ...old, 'kimi-subscription': true }));
         onImported('kimi-subscription', result);
       }} />
+      : kimiEntry === 'apikey'
+      ? <AccountModalV2 providers={providers} fixedProviderId="kimi-subscription" embedded onBack={() => setKimiEntry('choose')} onClose={onClose} onSave={onSaveAccount} onTestDraft={onTestDraft} />
       : copilotOpen
         ? <CopilotDevicePanel mode="import" exitLabel="返回" onExit={() => setCopilotOpen(false)} onFinish={onClose} onToast={onToast} onImported={(_kind, result) => {
           setImported((old) => ({ ...old, copilot: true }));
@@ -2707,8 +2753,8 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
             };
             if (channel.kimi) {
               const done = imported['kimi-subscription'];
-              const title = done ? 'Kimi 订阅 · 本次已导入' : 'Kimi 订阅 · 手机扫码登录，含月订阅额度，点击导入';
-              return <button type="button" {...tileProps} className={`${tileProps.className} ${done ? 'is-disabled' : ''}`} title={title} aria-label={title} onClick={() => { if (!done && !dragMovedRef.current) setKimiQrOpen(true); }}>
+              const title = done ? 'Kimi 订阅 · 本次已导入' : 'Kimi 订阅 · 扫码登录含月订阅额度，也可 API Key 登录（无月额度），点击选择';
+              return <button type="button" {...tileProps} className={`${tileProps.className} ${done ? 'is-disabled' : ''}`} title={title} aria-label={title} onClick={() => { if (!done && !dragMovedRef.current) setKimiEntry('choose'); }}>
                 <Logo provider={provider} interactive={false} />
               </button>;
             }
@@ -3095,14 +3141,16 @@ function App() {
       lastSaved.current = '';
       setToast({ id: Date.now(), ok: !result?.duplicate, message: result?.duplicate ? `该登录已收录在账号「${result.name}」中` : `已导入「${result.name}」，正在刷新额度` });
     }} />}
-    {modal?.type === 'account-edit' && <AccountEditModalV2 account={accounts.find((item) => item.id === modal.account.id) || modal.account} provider={providers.find((item) => item.id === modal.account.providerId)} onClose={() => setModal(null)} onSave={updateAccount} onTestDraft={testDraft} onProviderUsageState={applyProviderUsageState} />}
+    {modal?.type === 'account-edit' && <AccountEditModalV2 account={accounts.find((item) => item.id === modal.account.id) || modal.account} provider={providers.find((item) => item.id === modal.account.providerId)} onClose={() => setModal(null)} onSave={updateAccount} onTestDraft={testDraft} onProviderUsageState={applyProviderUsageState} onScanLogin={() => setModal({ type: 'kimi-relogin', account: modal.account })} />}
     {modal === 'provider' && <ProviderModalV2 onClose={() => setModal(null)} onSave={saveProvider} />}
     {modal?.type === 'provider-edit' && <ProviderModalV2 provider={modal.provider} onClose={() => setModal(null)} onSave={saveProvider} />}
     {modal === 'import-ccswitch' && <ImportCcswitchModal onClose={() => setModal(null)} onApplied={(result) => {
       if (result?.state) { setAccounts(result.state.accounts || []); setProviders(result.state.providers || []); setLastSync(result.state.lastSync || new Date().toISOString()); if (result.state.runtime) setRuntime(result.state.runtime); }
       lastSaved.current = '';
       setModal(null);
-      setToast({ id: Date.now(), ok: result?.imported > 0, message: result?.imported > 0 ? `已从 cc-switch 导入 ${result.imported} 个账号` : '没有导入新账号（Key 都已存在）' });
+      setToast({ id: Date.now(), ok: result?.imported > 0, message: result?.imported > 0
+        ? `已从 cc-switch 导入 ${result.imported} 个账号${result?.kimiApiKeyImported > 0 ? '；Kimi API Key 账号无法获取月额度，可在设置中扫码登录补全' : ''}`
+        : '没有导入新账号（Key 都已存在）' });
     }} />}
     {modal?.type === 'grok-relogin' && <ImportCliLoginModal accounts={accounts} providers={providers} reloginAccount={modal.account} onSaveAccount={saveAccount} onTestDraft={testDraft} onClose={() => setModal(null)} onToast={setToast} providerOrder={settings.providerOrder} onReorderProviders={(order) => setSettings((old) => ({ ...old, providerOrder: order }))} onImported={(_kind, result) => {
       if (result?.state) { setAccounts(result.state.accounts || []); setProviders(result.state.providers || []); setLastSync(result.state.lastSync || new Date().toISOString()); if (result.state.runtime) setRuntime(result.state.runtime); }
@@ -3114,7 +3162,7 @@ function App() {
       <KimiQrPanel mode="relogin" reloginAccount={modal.account} onExit={() => setModal(null)} onFinish={() => setModal(null)} onImported={(_kind, result) => {
         if (result?.state) { setAccounts(result.state.accounts || []); setProviders(result.state.providers || []); setLastSync(result.state.lastSync || new Date().toISOString()); if (result.state.runtime) setRuntime(result.state.runtime); }
         lastSaved.current = '';
-        setToast({ id: Date.now(), ok: !result?.duplicate, message: result?.duplicate ? `该登录已收录在账号「${result.name}」中，请换一个账号扫码` : `已重新登录「${result.name}」，正在刷新额度` });
+        setToast({ id: Date.now(), ok: !result?.duplicate, message: result?.duplicate ? `该登录已收录在账号「${result.name}」中，请换一个账号扫码` : (!modal.account.cliAuthSource ? `已为「${result.name}」切换为扫码登录（API Key 已保留），正在刷新额度` : `已重新登录「${result.name}」，正在刷新额度`) });
       }} />
     </div></div>}
     {modal?.type === 'mimo-relogin' && <div className="modal-backdrop" onClick={() => setModal(null)}><div className="modal compact-modal import-modal kimi-qr-modal import-window" onClick={(event) => event.stopPropagation()}>

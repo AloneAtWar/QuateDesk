@@ -82,7 +82,7 @@ const minutesFromNow = (minutes) => new Date(Date.now() + minutes * 60_000).toIS
 const daysFromNow = (days) => minutesFromNow(days * 24 * 60);
 
 export const providerCatalog = [
-  // Kimi 只保留订阅渠道（kimi-subscription 扫码登录），独立 API Key 渠道已下线
+  // Kimi 渠道（kimi-subscription）双登录：扫码登录含月订阅额度；API Key 登录只有 5 小时 / 7 天（无月额度）
   { id: 'zai', name: 'Z.ai', legalName: 'Z.ai / 智谱', monogram: 'Z', tone: 'violet', adapter: 'zai', logo: './logos/zai.svg', website: 'https://bigmodel.cn/' },
   { id: 'deepseek', name: 'DeepSeek', legalName: 'DeepSeek API', monogram: 'D', tone: 'blue', adapter: 'deepseek', logo: './logos/deepseek.png', website: 'https://www.deepseek.com/' },
   { id: 'wlb', name: 'wlbclub', legalName: 'wlbclub', monogram: 'W', tone: 'coral', adapter: 'wlb', website: 'https://www.wlbclub.com/' },

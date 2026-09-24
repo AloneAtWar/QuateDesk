@@ -584,6 +584,17 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .kimi-qr-ok small { color: var(--muted); font-size: 11px; }
 .kimi-qr-done-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; color: var(--green); background: var(--green-bg); flex: 0 0 auto; }
 .kimi-qr-done-icon.duplicate { color: var(--coral-deep); background: var(--coral-bg); }
+/* Kimi 磁贴登录方式选择：扫码（含月额度）/ API Key（无月额度）两个大按钮 + 说明 */
+.kimi-entry-stage { gap: 9px; }
+.kimi-entry-option { display: flex; align-items: center; gap: 12px; padding: 13px 14px; border: 1px solid var(--line); border-radius: 11px; color: var(--ink); background: var(--control); text-align: left; cursor: pointer; transition: border-color .12s ease-out, transform .12s ease-out; }
+.kimi-entry-option:hover { border-color: var(--focus-border); transform: translateY(-1px); }
+.kimi-entry-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 10px; color: var(--green-deep); background: var(--green-bg); flex: 0 0 auto; }
+.kimi-entry-copy { display: grid; gap: 2px; }
+.kimi-entry-copy b { font-size: 12px; }
+.kimi-entry-copy small { color: var(--muted); font-size: 11px; }
+/* Kimi API Key 账号的扫码登录升级卡片（账号编辑弹窗内） */
+.kimi-upgrade-card { display: grid; gap: 9px; margin: 2px 0 16px; }
+.kimi-upgrade-button { justify-self: start; display: inline-flex; align-items: center; gap: 6px; }
 /* GitHub Copilot 设备码登录：大号等宽设备码卡片（点击复制）+ 打开授权页按钮，与扫码页同高 */
 .copilot-device-stage { min-height: 236px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 6px 0; }
 .copilot-code-frame { display: grid; gap: 7px; justify-items: center; padding: 20px 30px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2); cursor: pointer; transition: border-color .12s ease-out, transform .12s ease-out; }

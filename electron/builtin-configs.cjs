@@ -22,8 +22,8 @@ const scriptVariables = (endpoint) => [
 ];
 
 const builtinConfigs = {
-  // Kimi 已下线独立的 API Key 渠道（api.kimi.com/coding/v1/usages）：订阅额度统一走
-  // 「kimi-subscription」扫码登录，避免同一厂商出现两个入口
+  // Kimi 的 API Key 登录已并入「kimi-subscription」渠道（同渠道双登录），
+  // 不再是独立渠道：扫码快照走订阅接口含月额度，API Key 走 usages 端点无月额度
   zai: { endpoint: 'https://open.bigmodel.cn/api/monitor/usage/quota/limit', windows: ['five_hour', 'weekly', 'monthly'], wasteWindows: ['weekly'], adapterMode: 'script', script: scripts.zai, variables: scriptVariables('https://open.bigmodel.cn/api/monitor/usage/quota/limit') },
   deepseek: { endpoint: 'https://api.deepseek.com/user/balance', windows: ['balance'], wasteWindows: [], adapterMode: 'script', script: scripts.deepseek, variables: scriptVariables('https://api.deepseek.com/user/balance') },
   wlb: {
@@ -76,8 +76,11 @@ const builtinConfigs = {
   claude: { windows: ['five_hour', 'weekly'], wasteWindows: ['weekly'], adapterMode: 'claude', auth: 'none', credentialRequired: false },
   codex: { windows: ['five_hour', 'weekly', 'monthly'], wasteWindows: ['weekly', 'monthly'], adapterMode: 'codex', auth: 'none', credentialRequired: false },
   gemini: { windows: ['gemini_pro', 'gemini_flash', 'gemini_flash_lite'], wasteWindows: [], adapterMode: 'gemini', auth: 'none', credentialRequired: false },
-  // Kimi 官方订阅：专属适配（cli-quota.cjs），凭据来自「导入订阅登录」的扫码快照，含月订阅额度
-  'kimi-subscription': { windows: ['five_hour', 'weekly', 'monthly'], wasteWindows: ['weekly', 'monthly'], adapterMode: 'kimi', auth: 'none', credentialRequired: false },
+  // Kimi 官方订阅：同一渠道双登录方式。扫码登录（快照凭据）走专属适配
+  // （cli-quota.cjs queryKimiWebQuota），含 5 小时 / 7 天 / 月订阅额度；
+  // API Key 登录（poller.cjs queryKimiApiKeyQuota）查 api.kimi.com 用量端点，
+  // 只有 5 小时 / 7 天窗口、没有月订阅额度。endpoint 同时用于 cc-switch 导入的域名匹配。
+  'kimi-subscription': { endpoint: 'https://api.kimi.com/coding/v1/usages', windows: ['five_hour', 'weekly', 'monthly'], wasteWindows: ['weekly', 'monthly'], adapterMode: 'kimi', auth: 'none', credentialRequired: false },
   // GitHub Copilot 订阅：专属适配（cli-quota.cjs），凭据来自「导入订阅登录」的 GitHub 设备码授权快照。
   // 额度是 premium requests（补充请求）月度池，每月 1 号重置
   copilot: { windows: ['monthly'], wasteWindows: ['monthly'], adapterMode: 'copilot', auth: 'none', credentialRequired: false },

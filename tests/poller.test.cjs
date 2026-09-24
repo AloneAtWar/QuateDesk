@@ -188,14 +188,64 @@ test('按域名后缀匹配厂商（内置别名 + 自定义厂商 endpoint）',
     { id: 'zai', requestConfig: { endpoint: 'https://open.bigmodel.cn/api/monitor/usage/quota/limit' } },
     { id: 'wlb', requestConfig: { endpoint: 'https://codex.wlbclub.com/v1/usage' } },
     { id: 'custom', requestConfig: { adapterMode: 'script', variables: [{ key: 'endpoint', defaultValue: 'https://api.example.io/v1/usage' }] } },
+    { id: 'kimi-subscription', requestConfig: {} },
   ];
   assert.equal(matchProviderId('https://open.bigmodel.cn/api/', providers), 'zai');
   assert.equal(matchProviderId('https://api.z.ai/v1', providers), 'zai');
   assert.equal(matchProviderId('http://codex.wlbclub.com', providers), 'wlb');
   assert.equal(matchProviderId('https://api.example.io/v1', providers), 'custom');
   assert.equal(matchProviderId('https://api.unknown.com', providers), null);
-  // kimi 的独立 API Key 渠道已下线，域名别名移除后不再命中
-  assert.equal(matchProviderId('https://api.kimi.com/coding/', providers), null);
+  // kimi 的 API Key 条目并入 kimi-subscription 渠道（域名别名匹配，无独立渠道）
+  assert.equal(matchProviderId('https://api.kimi.com/coding/', providers), 'kimi-subscription');
+  assert.equal(matchProviderId('https://kimi.com/coding/', providers), 'kimi-subscription');
+});
+
+// Kimi 渠道双登录：无扫码快照的账号是 API Key 模式，走 usages 端点（仅 5 小时 / 7 天，无月额度）
+const kimiProvider = { id: 'kimi-subscription', name: 'Kimi 订阅', requestConfig: builtinConfigs['kimi-subscription'] };
+
+test('queries the Kimi usage endpoint with the API key when no scan snapshot exists', async () => {
+  const payload = {
+    limits: [{ detail: { limit: 500, remaining: 420, resetTime: '2026-09-24T12:00:00Z' } }],
+    usage: { limit: 6000, remaining: 5100, resetTime: '2026-09-30T00:00:00Z' },
+  };
+  const calls = [];
+  const fetcher = async (url, init) => { calls.push({ url, init }); return { ok: true, status: 200, json: async () => payload }; };
+  const windows = await queryAccount({ id: 'kimi-key' }, kimiProvider, 'sk-kimi-test', fetcher);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://api.kimi.com/coding/v1/usages');
+  assert.equal(calls[0].init.headers.Authorization, 'Bearer sk-kimi-test');
+  assert.deepEqual(windows.map((item) => item.key), ['five_hour', 'weekly']);
+  assert.equal(windows[0].remaining, 84); // 420 / 500
+  assert.equal(windows[0].amount, 420);
+  assert.equal(windows[1].remaining, 85); // 5100 / 6000
+  assert.equal(windows[1].limitAmount, 6000);
+});
+
+test('reports Kimi API Key rejection as reauth required', async () => {
+  const fetcher = async () => ({ ok: false, status: 401 });
+  await assert.rejects(() => queryAccount({ id: 'kimi-key' }, kimiProvider, 'expired-key', fetcher), /Kimi API Key 已失效/);
+});
+
+test('requires a Kimi API key when the account has neither snapshot nor credential', async () => {
+  await assert.rejects(
+    () => queryAccount({ id: 'kimi-key' }, kimiProvider, '', async () => ({ ok: true, status: 200, json: async () => ({}) })),
+    /没有 API Key/);
+});
+
+test('routes a Kimi account with a scan snapshot to the subscription endpoint instead', async () => {
+  const calls = [];
+  const fetcher = async (url, init) => { calls.push({ url, init }); return { ok: true, status: 200, json: async () => ({
+    ratelimitCode5h: { enabled: true, ratio: 0.25 },
+    ratelimitCode7d: { enabled: true, ratio: 0.5 },
+    subscriptionBalance: { amountUsedRatio: 0.1 },
+  }) }; };
+  const variables = { cliAuthTokenBundle: JSON.stringify({ accessToken: 'snapshot-atk', refreshToken: 'snapshot-rtk', userId: 'u1', authHost: 'https://auth.kimi.com' }) };
+  // 有快照时即使凭据里还留着 API Key（扫码升级账号），也优先走订阅接口
+  const windows = await queryAccount({ id: 'kimi-scan' }, kimiProvider, 'sk-kimi-kept', fetcher, variables);
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].url.includes('/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats'));
+  assert.deepEqual(windows.map((item) => item.key), ['five_hour', 'weekly', 'monthly']);
+  assert.deepEqual(windows.map((item) => item.remaining), [75, 50, 90]);
 });
 
 // ── MiniMax Coding Plan 内置适配 ────────────────────────────────
