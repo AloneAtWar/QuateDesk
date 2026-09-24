@@ -25,6 +25,7 @@
   --widget-text: #edf5f0; --widget-chip: #334647; --widget-chip-label: #9db0ab; --widget-chip-value: #dcf5e2; --widget-chip-sub: #95a6a2;
   --widget-tag-text: #a9c7b9; --widget-tag-bg: #3b5050; --widget-live: #7bd1a0; --widget-live-label: #9eafa9;
   --mint: #d8f2df; --violet: #836fe0; --cyan: #48b9c4; --sky: #4b9ddf; --amber: #e0b45c;
+  --onboard-tile: #1c1c1e; --onboard-dash: #444; --onboard-dash-hover: #6d7a7c;
 }
 :root[data-theme='light'] {
   color-scheme: light;
@@ -46,6 +47,7 @@
   --widget-text: #263236; --widget-chip: #e3eae2; --widget-chip-label: #7d8a84; --widget-chip-value: #1e5c3d; --widget-chip-sub: #98a29c;
   --widget-tag-text: #47705c; --widget-tag-bg: #d8e9de; --widget-live: #2e8b66; --widget-live-label: #7d8a84;
   --amber: #a87c24;
+  --onboard-tile: #f0f2ef; --onboard-dash: #c9d2ca; --onboard-dash-hover: #9ba69f;
 }
 
 * { box-sizing: border-box; }
@@ -866,3 +868,131 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .provider-connection-feedback.fail { color: var(--coral-deep); }
 
 .provider-heatmap-months span { position: absolute; top: 0; line-height: 11px; }
+
+/* ── 首次使用引导向导 ── */
+.onboard-shell { height: 100%; box-sizing: border-box; display: flex; align-items: center; justify-content: center; overflow: hidden; animation: fade-in .3s ease-out; }
+/* 引导页独占整块内容区：去掉主区留白，把可用高度全部让给卡片 */
+.main-shell:has(> .content-area > .onboard-shell) { padding: 4px 6px 6px; }
+.content-area:has(> .onboard-shell) { height: 100%; padding-top: 0; }
+/* 卡片尺寸锁死：宽 520、高 400–420，四步（含接入步的两个状态）完全一致，绝不随内容变化 */
+.onboard-card { width: min(520px, 100%); height: 420px; max-width: 100%; max-height: 100%; display: flex; flex-direction: column; padding: 40px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface-trans); box-shadow: var(--shadow); backdrop-filter: blur(10px); animation: rise-in .28s ease-out; box-sizing: border-box; }
+/* 顶部区域：进度条 + 标题 + 副标题，固定不浮动 */
+.onboard-head { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; padding-top: 4px; }
+.onboard-head h1, .onboard-group h1 { margin: 0; font-size: 20px; line-height: 1.3; letter-spacing: -.03em; text-align: center; }
+.onboard-head .onboard-sub { margin: 8px 0 0; }
+.onboard-sub { max-width: 440px; color: var(--muted); font-size: 13px; line-height: 1.5; text-align: center; }
+.onboard-steps { flex: 0 0 auto; display: flex; justify-content: center; align-items: center; gap: 6px; width: 100%; height: 8px; margin-bottom: 18px; }
+.onboard-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong); transition: .2s; }
+.onboard-dot.past { background: var(--green); }
+.onboard-dot.active { background: var(--green); width: 20px; border-radius: 4px; }
+/* 中间区域：自适应撑开，内容垂直水平居中 */
+.onboard-body { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; width: 100%; overflow: hidden; }
+/* 接入步：三区骨架中的中间区，纵向排布并垂直居中；卡片高度固定，底部按钮永不被顶走 */
+/* 接入步：中部区拆成「固定展示区 + 添加入口」两段，展示区吃掉剩余高度（6 格网格刚好放满） */
+.onboard-body.is-connect { flex-direction: column; align-items: stretch; justify-content: flex-start; padding-top: 2px; }
+/* 导入步：左右两栏。左侧是能导入的账号清单（占主要空间），右侧是导入按钮与无法导入的原因 */
+.onboard-body.is-ccswitch { flex-direction: row; align-items: center; justify-content: stretch; gap: 12px; min-height: 0; padding: 6px 0; }
+.onboard-import { flex: 0 1 auto; min-height: 0; max-height: 172px; display: flex; align-items: stretch; gap: 14px; width: 100%; }
+.onboard-import-main { flex: 1 1 auto; min-width: 0; min-height: 0; max-height: 172px; display: flex; }
+/* 左侧清单：可勾选、可滚动，滚动条内嵌且低调 */
+.onboard-scan-list { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 8px; width: 100%; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding-right: 2px; }
+.onboard-scan-list::-webkit-scrollbar { width: 4px; }
+.onboard-scan-list::-webkit-scrollbar-thumb { border-radius: 2px; background: rgba(150, 160, 158, .22); }
+.onboard-scan-list::-webkit-scrollbar-thumb:hover { background: rgba(150, 160, 158, .5); }
+.onboard-scan-list::-webkit-scrollbar-track { background: transparent; }
+.onboard-scan-row { display: flex; align-items: center; gap: 10px; height: 52px; min-height: 52px; padding: 0 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2); cursor: pointer; box-sizing: border-box; }
+.onboard-scan-row:hover { border-color: var(--hover-border); }
+.onboard-scan-row input { flex: 0 0 auto; width: 13px; height: 13px; margin: 0; accent-color: var(--green); }
+.onboard-scan-copy { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.onboard-scan-copy b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.onboard-scan-copy small { color: var(--faint); font-size: 10px; }
+.onboard-scan-ok { flex: 0 0 auto; color: var(--green); }
+/* 左侧空态 / 读取中：始终有内容可看，不留空白 */
+.onboard-import-hint { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 0; padding: 16px; border: 1px dashed color-mix(in srgb, var(--faint) 45%, transparent); border-radius: 10px; color: var(--muted); text-align: center; box-sizing: border-box; }
+.onboard-import-hint svg { color: var(--faint); }
+.onboard-import-hint b { font-size: 12px; font-weight: 600; color: var(--ink-soft); }
+.onboard-import-hint span { font-size: 10px; line-height: 1.5; }
+/* 右侧：导入按钮在上，无法导入的条目在下（只列前 3 条，完整原因悬停可见） */
+.onboard-import-side { flex: 0 0 auto; width: 172px; display: flex; flex-direction: column; justify-content: center; gap: 10px; min-height: 0; }
+.onboard-import-go { flex: 0 0 auto; width: 100%; padding: 9px 12px; font-size: 12px; font-weight: 700; }
+.onboard-import-blocked { flex: 0 0 auto; max-height: 96px; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.onboard-import-blocked-title { color: var(--faint); font-size: 10px; }
+.onboard-blocked-row { display: flex; align-items: center; gap: 5px; min-width: 0; color: var(--muted); font-size: 10px; }
+.onboard-blocked-row svg { flex: 0 0 auto; color: var(--coral); }
+.onboard-blocked-row b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.onboard-blocked-row small { flex: 0 0 auto; color: var(--faint); font-size: 9px; white-space: nowrap; }
+.onboard-blocked-row.is-more { cursor: help; }
+.onboard-blocked-row.is-more small { color: var(--hover-border); }
+.onboard-scan-error { flex: 1 1 auto; display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--warn-border); border-radius: 10px; color: var(--coral-deep); background: var(--coral-bg); font-size: 11px; }
+/* 图1 / 图4：图标 + 标题 + 副标题 + 按钮作为一个 group 整体居中，间距依次 24 / 8 / 32 */
+.onboard-body.is-hero { justify-content: center; padding-bottom: 26px; }
+.onboard-group { display: flex; flex-direction: column; align-items: center; width: 100%; }
+/* 两页的图标外框都是 80×80，欢迎页是圆角方图、完成页是圆形对勾 + 光环，按钮落点因此完全一致 */
+.onboard-hero { width: 80px; height: 80px; display: grid; place-items: center; margin-bottom: 24px; }
+.onboard-hero img { width: 80px; height: 80px; border-radius: 20px; box-shadow: 0 12px 28px rgba(63, 179, 132, .28); }
+.onboard-hero-done span { width: 66px; height: 66px; display: grid; place-items: center; border-radius: 50%; color: var(--green); background: var(--green-bg); box-shadow: 0 0 0 7px var(--green-bg-2); }
+.onboard-group .onboard-sub { margin: 8px 0 0; }
+.onboard-cta { margin-top: 32px; }
+/* 底部区域：按钮组，固定距底，margin-top:auto 推到底部 */
+.onboard-foot { flex: 0 0 auto; display: flex; justify-content: center; align-items: center; gap: 14px; margin-top: auto; padding-top: 8px; }
+.onboard-foot .primary-button, .onboard-foot .outline-button, .onboard-cta, .onboard-import-go { display: inline-flex; justify-content: center; align-items: center; min-width: 100px; padding: 8px 18px; font-size: 12px; border-radius: 9px; }
+.onboard-foot .primary-button, .onboard-cta, .onboard-import-go { color: #0f1a15; background: var(--green); border-color: transparent; font-weight: 700; }
+.onboard-foot .primary-button:hover, .onboard-cta:hover, .onboard-import-go:hover { filter: brightness(1.1); color: #0f1a15; }
+.onboard-theme-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; width: 100%; }
+.onboard-theme-card { position: relative; display: grid; gap: 4px; justify-items: center; padding: 13px 12px 11px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface-2); color: var(--ink); transition: border-color .16s, box-shadow .16s, transform .16s; }
+.onboard-theme-card:hover { border-color: var(--hover-border); transform: translateY(-1px); }
+.onboard-theme-card.selected { border-color: var(--focus-border); box-shadow: 0 0 0 3px var(--focus-ring); }
+.onboard-theme-card b { font-size: 12px; }
+.onboard-theme-card small { color: var(--faint); font-size: 9px; }
+.onboard-theme-preview { width: 100%; height: 52px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; padding: 7px; border-radius: 8px; margin-bottom: 3px; }
+.onboard-theme-preview i { border-radius: 5px; display: block; }
+.preview-dark { background: #141d1f; box-shadow: inset 0 0 0 1px #2c393b; }
+.preview-dark i { background: #263334; }
+.preview-dark i:first-child { background: #3fb384; opacity: .85; }
+.preview-light { background: #f3f5f1; box-shadow: inset 0 0 0 1px #dfe4df; }
+.preview-light i { background: #ffffff; box-shadow: 0 1px 3px rgba(50, 66, 61, .12); }
+.preview-light i:first-child { background: #2e8b66; opacity: .85; }
+.onboard-theme-check { position: absolute; top: 9px; right: 9px; width: 21px; height: 21px; display: grid; place-items: center; border-radius: 50%; color: #fff; background: var(--green); }
+/* ── 接入步展示区 ── 有/无账号共用的固定尺寸区域，内容垂直水平居中、永不滚动 */
+.onboard-slots { flex: 1 1 auto; min-height: 0; width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; overflow: hidden; }
+.onboard-slots-bar { flex: 0 0 auto; display: flex; justify-content: flex-end; width: 100%; }
+/* 手动添加入口：账号信息区右上角的轻量图标，风格与周边的细线一致 */
+.onboard-slots-add { width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: transparent; color: var(--muted); transition: border-color .16s, color .16s, background .16s; }
+.onboard-slots-add:hover { border-color: var(--hover-border); color: var(--ink); background: var(--surface-2); }
+/* 无账号：90px 轻量占位，虚线更浅、文字更醒目 */
+.onboard-empty { width: 100%; height: 90px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--ink-soft); border: 1px dashed var(--onboard-dash); border-radius: 10px; box-sizing: border-box; }
+.onboard-empty svg { color: var(--faint); opacity: .5; }
+.onboard-empty span { font-size: 12px; }
+/* 有账号：双列网格，每格 64px；容器最高 140px，账号更多时在内部平滑滚动，滚动条 4px 极浅 */
+.onboard-grid { display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: 64px; gap: 12px; width: 100%; max-height: 140px; overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; box-sizing: border-box; }
+.onboard-grid::-webkit-scrollbar { width: 4px; }
+.onboard-grid::-webkit-scrollbar-thumb { border-radius: 2px; background: rgba(150, 160, 158, .22); }
+.onboard-grid::-webkit-scrollbar-thumb:hover { background: rgba(150, 160, 158, .5); }
+.onboard-grid::-webkit-scrollbar-track { background: transparent; }
+.onboard-cell { display: flex; align-items: center; gap: 9px; height: 64px; min-width: 0; padding: 0 12px; border-radius: 8px; background: var(--onboard-tile); box-sizing: border-box; }
+/* 厂商图标只留 24px 图形本身，不带背景框 */
+.onboard-cell .provider-logo, .onboard-cell .provider-logo.sm { width: 24px; height: 24px; border-radius: 6px; font-size: 11px; background: none; box-shadow: none; }
+.onboard-cell b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
+/* 右侧：默认是状态圆点，悬停整格时平滑换成垃圾桶（淡灰 → 悬停变红） */
+.onboard-cell-remove { flex: 0 0 auto; width: 22px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; }
+.onboard-cell-remove .onboard-cell-dot, .onboard-cell-remove svg { grid-area: 1 / 1; transition: opacity .16s, color .16s; }
+.onboard-cell-remove svg { opacity: 0; color: var(--faint); }
+.onboard-cell-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+.onboard-cell-dot.off { background: var(--faint); }
+.onboard-cell:hover .onboard-cell-dot { opacity: 0; }
+.onboard-cell:hover .onboard-cell-remove svg { opacity: 1; }
+.onboard-cell-remove:hover svg { color: var(--coral-deep); }
+.onboard-cell-remove:hover { background: var(--coral-bg); }
+/* 中下部：接入步只留一个图标式手动添加入口（cc-switch 已在上一步单独引导） */
+
+/* cc-switch 引导步：三条说明 + 开始导入 */
+.onboard-body.is-ccswitch { flex-direction: column; align-items: stretch; justify-content: center; gap: 14px; }
+
+@media (max-width: 620px) {
+  .onboard-theme-preview { height: 44px; }
+}
+/* 极窄窗口才收水平留白，正常 520 主窗口保持 40px 四边内边距 */
+@media (max-width: 470px) {
+  .onboard-card { padding: 40px 18px; }
+  .onboard-theme-grid { grid-template-columns: 1fr; }
+}
