@@ -31,6 +31,8 @@ class DesktopStore {
   // 额度历史：{ accountId: [{ at, windows: { key: { remaining, amount, unit } } }] }
   loadHistory() { return readJson(this.historyPath, {}); }
 
+  saveHistory(history) { writeJson(this.historyPath, history || {}); return history || {}; }
+
   appendHistory(accountId, windows, retentionDays) {
     writeJson(this.historyPath, appendHistoryPoint(this.loadHistory(), accountId, windows, Date.now(), retentionDays));
   }
@@ -46,6 +48,8 @@ class DesktopStore {
   // 周期浪费档案：{ accountId: [{ window, from, end, kind, observedAt, remaining, amount, limit, gapMs, reliable }] }
   // 永久保留，不受历史保留时长影响；每次全量扫描该账号历史提取，靠 mergeCycles 去重，天然支持回填
   loadCycles() { return readJson(this.cyclesPath, {}); }
+
+  saveCycles(cycles) { writeJson(this.cyclesPath, cycles || {}); return cycles || {}; }
 
   archiveCycles(accountId, windowKeys) {
     if (!accountId || !Array.isArray(windowKeys) || !windowKeys.length) return;

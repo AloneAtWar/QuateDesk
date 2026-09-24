@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, nativeImage, net, Notification, screen, session, shell, Tray } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, screen, session, shell, Tray } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
@@ -9,6 +9,7 @@ const { resolveWasteWindows } = require('./waste.cjs');
 const { builtinConfigs } = require('./builtin-configs.cjs');
 const { scanCcswitch } = require('./ccswitch.cjs');
 const { mergeMainOwnedUsageConnections } = require('./provider-usage-state.cjs');
+const { buildExportPackage, validateExportPackage, mergeImportPackage } = require('./import-export.cjs');
 const { CLI_KINDS, SNAPSHOT_KEY, readLiveAuth, cliIdentity, resolveCliAuth, authVersionMatches, writeLiveIfCurrent, fetchWithCliAuth, COPILOT_CLIENT_ID, COPILOT_DEVICE_CODE_URL, COPILOT_TOKEN_URL, COPILOT_SCOPE } = require('./cli-auth.cjs');
 const {
   fetchDeepSeekUsage,
@@ -1493,6 +1494,42 @@ const formatWindowSummary = (windows) => (windows || [])
   .map((item) => `${windowSummaryLabels[item.key] || item.key} ${item.unit === '%' ? `${Math.round(Number(item.remaining) || 0)}%` : `${item.amount ?? item.remaining}${item.unit ? ` ${item.unit}` : ''}`}`)
   .join(' · ') || '没有可用额度窗口';
 
+// 数据备份只把用户新增的厂商写入文件；内置厂商会由当前版本迁移逻辑自动补齐。
+const builtinProviderIds = new Set([...Object.keys(builtinConfigs), ...Object.keys(builtinLogos), 'wlb']);
+const exportFileStamp = () => new Date().toISOString().replace(/[:.]/g, '-').replace(/Z$/, '');
+const dataDialogOwner = () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined);
+const accountSecretMap = (accounts) => {
+  const stored = store.loadCredentials();
+  return Object.fromEntries((accounts || [])
+    .filter((account) => Object.prototype.hasOwnProperty.call(stored, account.id))
+    .map((account) => [account.id, store.getSecrets(account.id)]));
+};
+const restoredUsageConnections = (accounts, importedIds) => (accounts || []).map((account) => {
+  if (!importedIds.has(account.id) || account.usageConnection || !PROVIDER_USAGE_CONFIGS[account.providerId]) return account;
+  const auth = readProviderUsageAuth(account.id);
+  if (!auth) return account;
+  return {
+    ...account,
+    usageConnection: {
+      provider: account.providerId,
+      mode: 'official-account',
+      status: 'connected',
+      connectedAt: auth.connectedAt || new Date().toISOString(),
+      checkedAt: null,
+      lastError: null,
+      revision: 1,
+    },
+  };
+});
+const importStatsText = (stats = {}) => [
+  `新增账号 ${Number(stats.importedAccounts ?? stats.accounts ?? 0)} 个`,
+  `跳过重复账号 ${Number(stats.duplicateAccounts || 0)} 个`,
+  `新增厂商 ${Number(stats.importedProviders ?? stats.providers ?? 0)} 个`,
+  `跳过重复厂商 ${Number(stats.duplicateProviders || 0)} 个`,
+  `合并历史点 ${Number(stats.importedHistory ?? stats.history ?? 0)} 条`,
+  `合并周期档案 ${Number(stats.importedCycles ?? stats.cycles ?? 0)} 条`,
+].join('，');
+
 function registerIpc() {
   ipcMain.handle('state:load', () => {
     const state = migrateState(store.loadState());
@@ -1529,6 +1566,101 @@ function registerIpc() {
   ipcMain.handle('quota:poll-all', () => pollState());
   ipcMain.handle('quota:poll-account', (_event, accountId) => pollState([accountId]));
   ipcMain.handle('history:get', (_event, accountId) => store.getHistory(String(accountId || ''), historyRetentionDays()));
+  ipcMain.handle('data:export', async (_event, options = {}) => {
+    const state = migrateState(store.loadState());
+    if (!state) throw new Error('桌面状态尚未初始化');
+    const includeCredentials = options?.includeCredentials !== false;
+    const pkg = buildExportPackage(
+      cleanState(state),
+      store.loadHistory(),
+      store.loadCycles(),
+      includeCredentials ? accountSecretMap(state.accounts) : null,
+      { includeCredentials, builtinProviderIds },
+    );
+    const result = await dialog.showSaveDialog(dataDialogOwner(), {
+      title: '导出 Quota Desk 数据',
+      defaultPath: path.join(app.getPath('documents'), `Quota-Desk-backup-${exportFileStamp()}.json`),
+      filters: [{ name: 'Quota Desk 数据', extensions: ['json'] }, { name: '所有文件', extensions: ['*'] }],
+    });
+    if (result.canceled || !result.filePath) return { canceled: true };
+    try {
+      const tempPath = `${result.filePath}.tmp`;
+      fs.writeFileSync(tempPath, JSON.stringify(pkg, null, 2), 'utf8');
+      fs.renameSync(tempPath, result.filePath);
+    } catch (error) {
+      try { fs.rmSync(`${result.filePath}.tmp`, { force: true }); } catch {}
+      throw new Error(`导出数据失败：${error.message}`);
+    }
+    const accounts = (pkg.state?.accounts || []).length;
+    const providers = (pkg.state?.providers || []).length;
+    const historyPoints = Object.values(pkg.history || {}).reduce((sum, points) => sum + (Array.isArray(points) ? points.length : 0), 0);
+    return { ok: true, path: result.filePath, counts: { accounts, providers, historyPoints, includesCredentials: Boolean(pkg.credentials) } };
+  });
+  ipcMain.handle('data:import', async () => {
+    const result = await dialog.showOpenDialog(dataDialogOwner(), {
+      title: '导入 Quota Desk 数据',
+      properties: ['openFile'],
+      filters: [{ name: 'Quota Desk 数据', extensions: ['json'] }, { name: '所有文件', extensions: ['*'] }],
+    });
+    if (result.canceled || !result.filePaths?.[0]) return { canceled: true };
+    let payload;
+    try {
+      payload = JSON.parse(fs.readFileSync(result.filePaths[0], 'utf8'));
+    } catch (error) {
+      throw new Error(`无法读取数据文件：${error.message}`);
+    }
+    const validation = validateExportPackage(payload, { builtinProviderIds });
+    if (!validation.ok) throw new Error(`数据文件无效：${validation.errors.join('；')}`);
+    const current = migrateState(store.loadState()) || { accounts: [], providers: [], settings: {}, lastSync: new Date().toISOString() };
+    const merged = mergeImportPackage(
+      cleanState(current),
+      store.loadHistory(),
+      store.loadCycles(),
+      payload,
+      { builtinProviderIds, currentCredentials: accountSecretMap(current.accounts) },
+    );
+    const credentialIdsBeforeImport = new Set(Object.keys(store.loadCredentials()));
+    const stats = merged.stats || {};
+    const confirm = await dialog.showMessageBox(dataDialogOwner(), {
+      type: 'question',
+      title: '确认导入数据',
+      message: '将合并 Quota Desk 数据',
+      detail: `${importStatsText(stats)}。当前数据会保留，重复项目不会覆盖。${payload.credentials ? '\n文件包含账号凭据，请确认文件来源可信。' : ''}`,
+      buttons: ['导入', '取消'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (confirm.response !== 0) return { canceled: true, stats };
+    const importedCredentials = payload.credentials || {};
+    let credentialsFailed = 0;
+    for (const [sourceId, secret] of Object.entries(importedCredentials)) {
+      const accountId = merged.accountIdMap?.[sourceId];
+      if (!accountId || credentialIdsBeforeImport.has(accountId)) continue;
+      if (!secret || (!String(secret.credential || '').trim() && !Object.values(secret.variables || {}).some((value) => String(value || '').trim()))) continue;
+      try { store.saveCredential(accountId, secret.credential || '', secret.variables || {}); credentialIdsBeforeImport.add(accountId); }
+      catch (error) { credentialsFailed += 1; console.warn('[Quota Desk] 导入账号凭据失败', accountId, error.message); }
+    }
+    store.saveHistory(merged.history);
+    store.saveCycles(merged.cycles);
+    const importedIds = new Set((payload.state?.accounts || []).map((account) => merged.accountIdMap?.[account.id]).filter(Boolean));
+    const saved = store.saveState(cleanState({
+      ...merged.state,
+      accounts: restoredUsageConnections(merged.state.accounts, importedIds).map((account) => importedIds.has(account.id) && !current.accounts.some((item) => item.id === account.id)
+        ? { ...account, status: 'warning', lastError: '等待首次刷新', lastChecked: null }
+        : account),
+      settings: current.settings,
+      lastSync: new Date().toISOString(),
+    }));
+    const savedIds = new Set((saved.accounts || []).map((account) => account.id));
+    store.pruneCyclesAccounts([...savedIds]);
+    applyProxySetting();
+    schedulePolling();
+    refreshLiveIdentities();
+    sendState(saved);
+    refreshTray();
+    return { ok: true, path: result.filePaths[0], stats: { ...stats, credentialsFailed }, state: { ...saved, runtime: runtimeStatus() } };
+  });
   ipcMain.handle('usage:get', async (_event, accountId, options = {}) => queryProviderUsage(String(accountId || ''), options));
   ipcMain.handle('usage:connect', async (_event, accountId) => connectProviderUsage(String(accountId || '')));
   ipcMain.handle('usage:disconnect', (_event, accountId) => {

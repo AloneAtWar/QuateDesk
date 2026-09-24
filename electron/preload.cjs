@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('quotaDesk', {
   connectProviderUsage: (accountId) => ipcRenderer.invoke('usage:connect', accountId),
   disconnectProviderUsage: (accountId) => ipcRenderer.invoke('usage:disconnect', accountId),
   clearHistory: () => ipcRenderer.invoke('history:clear'),
+  exportData: (options) => ipcRenderer.invoke('data:export', options),
+  importData: () => ipcRenderer.invoke('data:import'),
   getCycles: (accountId) => ipcRenderer.invoke('cycles:get', accountId),
   testAccount: (accountId) => ipcRenderer.invoke('quota:test-account', accountId),
   testDraft: (draft) => ipcRenderer.invoke('quota:test-draft', draft),
