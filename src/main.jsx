@@ -11,6 +11,7 @@ import { adapterDefinitions } from './adapters';
 import { clampRemainingWeight, comparePriority } from './priority-score';
 import { newApiTemplateScript } from './newapi-template';
 import { computeUsageStreaks, formatProviderUsageCost, formatProviderUsageSummaryTokens } from './provider-usage-format';
+import { ConcentricRings, durationOrder } from './quota-rings';
 import qrcode from 'qrcode-generator';
 import './styles.css';
 
@@ -351,19 +352,6 @@ function AccountRuleMarks({ account, rules = [] }) {
 function RuleMarks({ meter, rules = [] }) {
   const matched = rules.filter((rule) => ruleMatches(meter, rule));
   return matched.length ? <span className="rule-marks">{matched.map((rule) => { const text = rule.label || `${rule.beforeMinutes} 分钟内刷新 · ≥${rule.minRemaining}%`; return <TagPill key={rule.id} tone="warm" title={text}>{text}</TagPill>; })}</span> : null;
-}
-
-const durationOrder = { five_hour: 1, daily: 2, weekly: 3, monthly: 4, balance: 5 };
-function ConcentricRings({ account }) {
-  const meters = [...(account.windows || [])].sort((a, b) => (durationOrder[b.key] || 9) - (durationOrder[a.key] || 9)).slice(0, 4);
-  const smallest = meters.reduce((current, meter) => !current || (durationOrder[meter.key] || 9) < (durationOrder[current.key] || 9) ? meter : current, null);
-  const [hoveredKey, setHoveredKey] = useState(null);
-  const unavailable = meters.find((meter) => meter.available === false);
-  const active = unavailable || meters.find((meter) => meter.key === hoveredKey) || smallest;
-  return <div className="concentric-rings" aria-label={`${meters.length} 个额度窗口`}>
-    {meters.map((meter, index) => <div className={`quota-ring ring-${index} ${active?.key === meter.key ? 'is-active' : ''}`} key={meter.key} style={{ '--progress': `${Math.max(0, Math.min(100, Number(meter.remaining || 0))) * 3.6}deg` }} onMouseEnter={() => setHoveredKey(meter.key)} onMouseLeave={() => setHoveredKey(null)}><span /></div>)}
-    <div className={`ring-core ${unavailable ? 'unavailable' : ''}`}><strong>{unavailable ? '不可用' : active ? formatAmount(active) : '—'}</strong><small>{active ? windowCatalog[active.key]?.label || active.key : '暂无窗口'}</small>{!unavailable && active?.resetAt && <em>{formatReset(active.resetAt)}</em>}</div>
-  </div>;
 }
 
 function ResetTimeline({ accounts, providers }) {
@@ -1384,7 +1372,7 @@ function OverviewCard({ account, provider, feedback, onOpenHistory, onRelogin, o
       </div>
     </div>
     <div className="overview-body">
-      <ConcentricRings account={account} />
+      <ConcentricRings account={account} formatAmount={formatAmount} formatReset={formatReset} />
       <div className="overview-meters">{[...desc].reverse().map((meter) => {
         const detail = `${formatReset(meter.resetAt)}${formatQuotaDetail(meter) ? ` · ${formatQuotaDetail(meter)}` : ''}`;
         return <div className="overview-meter" key={meter.key}><span><i className={`ring-dot ring-dot-${desc.indexOf(meter)}`} />{windowCatalog[meter.key]?.label || meter.key}</span><b>{formatAmount(meter)}</b><small title={detail}>{detail}</small></div>;
@@ -1431,6 +1419,62 @@ function Toggle({ checked, onChange, label, description }) {
   return <label className="setting-toggle"><span><b>{label}</b><small>{description}</small></span><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /><i /></label>;
 }
 
+function RemoteViewSettings() {
+  const bridge = window.quotaDesk;
+  const [status, setStatus] = useState(null);
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+  const [copied, setCopied] = useState('');
+  const [confirmRotate, setConfirmRotate] = useState(false);
+  useEffect(() => { if (bridge?.getRemoteViewStatus) bridge.getRemoteViewStatus().then(setStatus).catch((reason) => setError(reason.message)); }, [bridge]);
+  const action = async (name, operation) => {
+    setBusy(name); setError('');
+    try { setStatus(await operation()); }
+    catch (reason) { setError(reason.message || '操作失败'); }
+    finally { setBusy(''); }
+  };
+  const copy = async (label, value) => {
+    try { await navigator.clipboard.writeText(value); setCopied(label); setTimeout(() => setCopied(''), 2500); }
+    catch { setError('复制失败，请检查系统剪贴板权限'); }
+  };
+  const tailnetLink = status?.tailscale?.served && status?.tailscale?.url && status?.token
+    ? `${status.tailscale.url}#access=${encodeURIComponent(status.token)}` : '';
+  const localLink = status?.running && status?.token ? `${status.localUrl}#access=${encodeURIComponent(status.token)}` : '';
+  const qrImage = useMemo(() => {
+    if (!tailnetLink) return '';
+    try { const qr = qrcode(0, 'M'); qr.addData(tailnetLink); qr.make(); return qr.createDataURL(4, 6); }
+    catch { return ''; }
+  }, [tailnetLink]);
+  if (!bridge?.getRemoteViewStatus) return <small className="drawer-help">远程查看设置仅在桌面应用中可用。</small>;
+  return <div className="remote-setting">
+    <Toggle checked={Boolean(status?.enabled)} onChange={(enabled) => action('toggle', () => bridge.setRemoteViewEnabled(enabled))} label="启用只读查看" description="只在本机启动服务，默认关闭" />
+    {!status && !error && <small className="drawer-help">正在读取远程查看状态…</small>}
+    {status?.enabled && <>
+      <div className={`remote-setting-status ${status.running ? 'ok' : 'fail'}`}><i />{status.running ? `本机服务运行中 · 端口 ${status.port}` : '本机服务未启动'}</div>
+      {status.error && <small className="remote-setting-error">{status.error}</small>}
+      {localLink && <button type="button" className="outline-button full" onClick={() => bridge.openExternal(localLink)}>在这台电脑的浏览器中预览</button>}
+      <div className="remote-setting-divider" />
+      <div className="remote-setting-title"><b>Tailscale 私有访问</b><small>手机和另一台电脑都加入同一个 tailnet</small></div>
+      {status.tailscale?.state === 'missing' && <div className="remote-setting-hint">电脑还没有安装 Tailscale。安装并登录后，重新打开此设置即可配置远程地址。</div>}
+      {status.tailscale?.state === 'offline' && <div className="remote-setting-hint">电脑上的 Tailscale 尚未连接。请先登录并打开连接。</div>}
+      {status.tailscale?.state === 'unavailable' && <div className="remote-setting-hint">暂时读不到 Tailscale 状态。请确认它已运行。</div>}
+      {status.tailscale?.state === 'online' && !status.tailscale.served && <button type="button" className="primary-button full" disabled={Boolean(busy) || !status.running || status.tailscale.occupied} onClick={() => action('tailscale', () => bridge.configureTailscaleServe())}>{busy === 'tailscale' ? '正在配置…' : '配置 Tailscale Serve'}</button>}
+      {status.tailscale?.occupied && <div className="remote-setting-hint">Tailscale 的 8443 端口已有其他服务，请先调整该端口的配置。</div>}
+      {tailnetLink && <div className="remote-setting-share">
+        <div className="remote-setting-qr">{qrImage && <img src={qrImage} alt="手机配对二维码" />}</div>
+        <b>手机扫码，即可配对</b>
+        <small>另一台电脑可复制配对链接，在浏览器打开。</small>
+        <div className="remote-setting-address" title={status.tailscale.url}>{status.tailscale.url}</div>
+        <button type="button" className="primary-button full" onClick={() => copy('link', tailnetLink)}>{copied === 'link' ? <><Check size={13} /> 已复制链接</> : '复制配对链接'}</button>
+      </div>}
+      <button type="button" className="outline-button full" onClick={() => copy('key', status.token || '')}>{copied === 'key' ? '密钥已复制' : '复制配对密钥'}</button>
+      {confirmRotate ? <div className="remote-setting-confirm"><span>旧设备需要重新配对。</span><button type="button" onClick={() => { setConfirmRotate(false); action('rotate', () => bridge.rotateRemoteViewToken()); }}>确认重置</button><button type="button" onClick={() => setConfirmRotate(false)}>取消</button></div> : <button type="button" className="remote-setting-link" onClick={() => setConfirmRotate(true)}>重置配对密钥</button>}
+      <small className="drawer-help">额度仍由这台电脑采集。电脑睡眠、退出 Quota Desk 或断开 Tailscale 时，远程页面无法更新。关闭此开关会停止本机服务。</small>
+    </>}
+    {error && <div className="remote-setting-error" role="alert">{error}</div>}
+  </div>;
+}
+
 function SettingsDrawer({ accounts, providers, settings, setSettings, onClose, openModal, onDeleteAccount, onToggleAccountDisabled, onTestAccount, testingAccountId, onEditProvider, autoLaunch, onToggleAutoLaunch, appVersion, update, onOpenUpdate, onCheckUpdate, onClearHistory, runtime }) {
   const proxyMode = ['direct', 'system', 'manual'].includes(settings.proxyMode) ? settings.proxyMode : 'system';
   return <><div className="drawer-shade" onClick={onClose} /><aside className="settings-drawer" aria-label="设置">
@@ -1446,6 +1490,7 @@ function SettingsDrawer({ accounts, providers, settings, setSettings, onClose, o
       <section className="drawer-section"><div className="drawer-section-title"><SunMoon size={16} /><span>主题</span></div><div className="setting-select"><span><b>界面主题</b><small>主窗口与桌面浮窗同步应用</small></span><select value={settings.theme === 'light' ? 'light' : 'dark'} onChange={(event) => setSettings((old) => ({ ...old, theme: event.target.value }))}><option value="dark">暗色</option><option value="light">亮色</option></select></div></section>
       <section className="drawer-section"><div className="drawer-section-title"><Monitor size={16} /><span>桌面浮窗</span></div><Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" description="固定在桌面顶层，双击展开主窗口" /><label className="size-slider"><span>大小</span><input type="range" min={80} max={300} step={5} value={Math.round(clampWidgetScale(settings.widgetScale) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetScale: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetScale(settings.widgetScale) * 100)}%</b></label><label className="size-slider"><span>长度</span><input type="range" min={Math.round(WIDGET_MIN_LENGTH * 100)} max={Math.round(WIDGET_MAX_LENGTH * 100)} step={5} value={Math.round(clampWidgetLength(settings.widgetLength) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetLength: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetLength(settings.widgetLength) * 100)}%</b></label><small className="drawer-help">长度只调整横向宽度（60%–150%）。浮窗会展示账号的全部额度窗口（含 1M）；空间不足时逐级收起：标签先缩成小圆点再隐藏，倒计时按周期从长到短逐个隐藏，最后才收起最长周期的额度——只有一个额度窗口的账号通常不用收起任何内容。名称放不下时显示省略号，悬停可查看完整内容。</small><button type="button" className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetScale: 0.9, widgetLength: 0.9 }))}>恢复默认大小与长度</button><div className="widget-setting-preview"><div style={{ width: Math.round(WIDGET_BASE_SIZE.width * clampWidgetLength(settings.widgetLength)), maxWidth: '100%', margin: '0 auto' }}>{(() => { const previewAccount = accounts.find((item) => !item.disabled) ?? accounts[0]; return <WidgetRow account={previewAccount} provider={providers.find((item) => item.id === previewAccount?.providerId)} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} />; })()}</div></div><button className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetPreview: true }))}><Eye size={15} /> 预览并调整</button></section>
       <section className="drawer-section"><div className="drawer-section-title"><History size={16} /><span>额度历史</span></div><div className="setting-select"><span><b>保留时长</b><small>每次成功刷新都会记录一条，用于账号卡片的趋势图</small></span><select value={settings.historyDays} onChange={(event) => setSettings((old) => ({ ...old, historyDays: Number(event.target.value) }))}><option value={3}>3 天</option><option value={7}>7 天（默认）</option><option value={15}>15 天</option><option value={30}>30 天</option><option value={60}>60 天</option><option value={90}>3 个月（最长）</option><option value={0}>永久</option></select></div><button className="outline-button full" onClick={onClearHistory}><Trash2 size={14} /> 清除全部历史记录</button><small className="drawer-help">删除账号时会一并删除该账号的额度历史；超过保留时长的记录会自动清理；永久保存时超过 30 天的记录会自动降采样为每小时一条。</small></section>
+      <section className="drawer-section"><div className="drawer-section-title"><Globe size={16} /><span>远程查看</span></div><RemoteViewSettings /></section>
       <section className="drawer-section"><div className="drawer-section-title"><ShieldCheck size={16} /><span>账号与凭据</span><button className="mini-add" onClick={() => openModal('account')}><Plus size={14} /> 添加账号</button></div><div className="settings-list">{accounts.length === 0 && <div className="settings-empty">还没有账号</div>}{accounts.map((account) => { const provider = providers.find((item) => item.id === account.providerId); const testing = testingAccountId === account.id; return <div className={`settings-account${account.disabled ? ' disabled' : ''}`} key={account.id}><Logo provider={provider} size="sm" /><div><b title={account.name}>{account.name}</b><small className={account.disabled ? '' : account.status === 'warning' ? 'warning-copy' : ''} title={account.disabled ? `停用于 ${formatDisabledDate(account.disabledAt)}，历史数据保留中` : account.status === 'warning' ? (account.lastError || '') : ''}>{account.disabled ? `已停用 · ${formatDisabledDate(account.disabledAt)}` : account.status === 'warning' ? account.lastError : `${provider?.name} · ${account.windows.length} 个额度窗口`}</small></div><button className="row-icon-button" title="编辑账号" aria-label={`编辑 ${account.name}`} onClick={() => openModal({ type: 'account-edit', account })}><Pencil size={13} /></button>{!account.disabled && <button className="row-icon-button" disabled={testing} title="刷新" aria-label={`刷新 ${account.name} 额度`} onClick={() => onTestAccount(account)}><RefreshCw size={13} className={testing ? 'spinning' : ''} /></button>}<button className={`row-icon-button ${account.disabled ? 'play' : 'stop'}`} title={account.disabled ? '启用账号：恢复巡检并接续历史' : '停用账号：停止巡检，历史保留，可随时启用'} aria-label={`${account.disabled ? '启用' : '停用'} ${account.name}`} onClick={() => onToggleAccountDisabled(account)}>{account.disabled ? <Play size={13} /> : <Square size={13} />}</button><button className="row-icon-button danger" title="删除账号" aria-label={`删除 ${account.name}`} onClick={() => onDeleteAccount(account)}><Trash2 size={13} /></button><span className={`status-dot ${account.disabled ? 'disabled' : account.status}`} /></div>; })}</div>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button full drawer-import-button" onClick={() => openModal('import-ccswitch')}><Download size={14} /> 从 cc-switch 导入账号</button>}</section>
       <section className="drawer-section"><div className="drawer-section-title"><LayoutGrid size={16} /><span>厂商适配器</span><button className="mini-add" onClick={() => openModal('provider')}><Plus size={14} /> 新增厂商</button></div><div className="settings-list providers-list">{providers.map((provider) => <div className="settings-account" key={provider.id}><Logo provider={provider} size="sm" /><div><b title={provider.name}>{provider.name}</b><small>{provider.requestConfig?.adapterMode === 'script' ? '脚本适配' : ['grok', 'grokbot'].includes(provider.requestConfig?.adapterMode) ? '专属适配' : '标准映射'}</small></div><button className="row-icon-button" title="编辑厂商" aria-label={`编辑 ${provider.name}`} onClick={() => onEditProvider(provider)}><Pencil size={13} /></button><span className="adapter-state"><Check size={13} /></span></div>)}</div></section>
       <section className="drawer-section"><div className="drawer-section-title"><Globe size={16} /><span>网络代理</span></div><div className="setting-select"><span><b>代理模式</b><small>所有账号的额度请求共用，保存后立即生效</small></span><select value={proxyMode} onChange={(event) => setSettings((old) => ({ ...old, proxyMode: event.target.value }))}><option value="system">跟随系统（默认）</option><option value="manual">手动输入</option><option value="direct">不使用代理</option></select></div>{proxyMode === 'manual' && <label className="field drawer-proxy-field"><span>代理地址 <small>留空时退回跟随系统</small></span><input value={settings.proxyUrl ?? ''} onChange={(event) => setSettings((old) => ({ ...old, proxyUrl: event.target.value }))} placeholder="http://127.0.0.1:7897 或 socks5://127.0.0.1:7898" spellCheck="false" autoComplete="off" /></label>}<small className="drawer-help">访问 Claude、Codex、Gemini、Grok 等境外厂商直连常被中断，建议配置可用代理。地址以代理工具实际监听的端口为准（Clash Verge Rev 默认 mixed-port 7897）；只填 host:port 时按 http 代理处理。切换代理模式后建议点账号行的「刷新」验证效果。</small></section>

@@ -2,7 +2,10 @@ const { app, BrowserWindow, ipcMain, Menu, nativeImage, net, Notification, scree
 const path = require('node:path');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
 const { DesktopStore } = require('./storage.cjs');
+const { REMOTE_PORT, createRemoteViewServer } = require('./remote-view.cjs');
 const { queryAccount, authStatusForPollError } = require('./poller.cjs');
 const { clampRetentionDays } = require('./history.cjs');
 const { resolveWasteWindows } = require('./waste.cjs');
@@ -42,6 +45,8 @@ let quitting = false;
 let nextPollAt = null;
 let pollStartedAt = null;
 let pollInProgress = false;
+let remoteViewServer = null;
+let remoteViewError = '';
 const sentReminders = new Set();
 const providerUsageLoginFlows = new Map();
 const providerUsageRecoveryFlows = new Map();
@@ -94,6 +99,62 @@ const distPath = path.join(__dirname, '..', 'dist', 'index.html');
 const preloadPath = path.join(__dirname, 'preload.cjs');
 const appIconPngPath = path.join(__dirname, '..', 'dist', 'logo.png');
 const appIconSvgPath = path.join(__dirname, '..', 'dist', 'quota-desk.svg');
+const execFileAsync = promisify(execFile);
+const TAILSCALE_HTTPS_PORT = 8443;
+const remoteLocalUrl = `http://127.0.0.1:${REMOTE_PORT}/remote.html`;
+const tailscaleCommand = () => {
+  const windowsPath = path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Tailscale', 'tailscale.exe');
+  return process.platform === 'win32' && fs.existsSync(windowsPath) ? windowsPath : 'tailscale';
+};
+const runTailscale = async (args) => {
+  const { stdout } = await execFileAsync(tailscaleCommand(), args, { windowsHide: true, timeout: 12_000, maxBuffer: 256 * 1024 });
+  return stdout;
+};
+const tailscaleServeTarget = `http://127.0.0.1:${REMOTE_PORT}`;
+const serveHandlersForPort = (config) => Object.entries(config?.Web || {}).filter(([host]) => host.endsWith(`:${TAILSCALE_HTTPS_PORT}`))
+  .flatMap(([, web]) => Object.entries(web?.Handlers || {}));
+
+async function tailscaleInfo() {
+  try {
+    const status = JSON.parse(await runTailscale(['status', '--json']));
+    if (status.BackendState !== 'Running' || !status.Self?.DNSName) return { state: 'offline', url: null, served: false };
+    const dns = String(status.Self.DNSName).replace(/\.$/, '');
+    let serve = {};
+    try { serve = JSON.parse(await runTailscale(['serve', 'status', '--json'])); }
+    catch { /* No Serve configuration yet, or an older client cannot report it. */ }
+    const handlers = serveHandlersForPort(serve);
+    const served = handlers.some(([mount, handler]) => mount === '/' && handler?.Proxy?.replace(/\/$/, '') === tailscaleServeTarget);
+    return { state: 'online', url: `https://${dns}:${TAILSCALE_HTTPS_PORT}/remote.html`, served, occupied: handlers.length > 0 && !served, managed: served && handlers.length === 1 };
+  } catch (error) {
+    return { state: error.code === 'ENOENT' ? 'missing' : 'unavailable', url: null, served: false, detail: String(error.message || '').slice(0, 180) };
+  }
+}
+
+async function startRemoteView() {
+  if (remoteViewServer) return;
+  const config = store.loadRemoteAccess();
+  if (!config.enabled || !config.token) return;
+  try {
+    remoteViewServer = await createRemoteViewServer({
+      store,
+      distDir: path.join(__dirname, '..', 'dist'),
+      getToken: () => store.loadRemoteAccess().token,
+      getHistory: (accountId) => {
+        const points = store.loadHistory()[accountId] || [];
+        const days = historyRetentionDays();
+        return days === 0 ? points : points.filter((point) => Date.parse(point.at) >= Date.now() - days * 86_400_000);
+      },
+    });
+    remoteViewError = '';
+  } catch (error) {
+    remoteViewError = `本地服务启动失败：${error.message}`;
+  }
+}
+
+async function remoteViewStatus() {
+  const config = store.loadRemoteAccess();
+  return { enabled: config.enabled, running: Boolean(remoteViewServer), error: remoteViewError, token: config.token, localUrl: remoteLocalUrl, port: REMOTE_PORT, tailscale: await tailscaleInfo() };
+}
 
 // 开机自启由操作系统的登录项管理,作为唯一事实来源,不写入应用状态
 const getAutoLaunch = () => app.getLoginItemSettings().openAtLogin;
@@ -1434,6 +1495,39 @@ function registerIpc() {
   ipcMain.handle('quota:poll-all', () => pollState());
   ipcMain.handle('quota:poll-account', (_event, accountId) => pollState([accountId]));
   ipcMain.handle('history:get', (_event, accountId) => store.getHistory(String(accountId || ''), historyRetentionDays()));
+  ipcMain.handle('remote:get-status', () => remoteViewStatus());
+  ipcMain.handle('remote:set-enabled', async (_event, enabled) => {
+    const previous = store.loadRemoteAccess();
+    const token = previous.token || crypto.randomBytes(32).toString('base64url');
+    store.saveRemoteAccess({ enabled: Boolean(enabled), token });
+    if (enabled) await startRemoteView();
+    else {
+      if (remoteViewServer) await new Promise((resolve) => remoteViewServer.close(resolve));
+      remoteViewServer = null;
+      remoteViewError = '';
+      const info = await tailscaleInfo();
+      if (info.managed) {
+        try { await runTailscale(['serve', `--https=${TAILSCALE_HTTPS_PORT}`, 'off']); }
+        catch (error) { remoteViewError = `Tailscale 转发未能自动关闭：${String(error.message || '').slice(0, 120)}`; }
+      }
+    }
+    return remoteViewStatus();
+  });
+  ipcMain.handle('remote:rotate-token', async () => {
+    const previous = store.loadRemoteAccess();
+    store.saveRemoteAccess({ enabled: previous.enabled, token: crypto.randomBytes(32).toString('base64url') });
+    return remoteViewStatus();
+  });
+  ipcMain.handle('remote:configure-tailscale', async () => {
+    if (!remoteViewServer) throw new Error('请先启用远程查看');
+    const before = await tailscaleInfo();
+    if (before.state !== 'online') throw new Error(before.state === 'missing' ? '电脑尚未安装 Tailscale' : '请先在电脑上登录并连接 Tailscale');
+    if (before.occupied) throw new Error(`Tailscale 的 HTTPS ${TAILSCALE_HTTPS_PORT} 端口已有其他服务，请先调整该端口的 Serve 配置`);
+    if (!before.served) await runTailscale(['serve', '--bg', `--https=${TAILSCALE_HTTPS_PORT}`, String(REMOTE_PORT)]);
+    const after = await tailscaleInfo();
+    if (!after.served) throw new Error('Tailscale Serve 尚未生效，请检查 Tailscale 的 HTTPS 授权与服务状态');
+    return remoteViewStatus();
+  });
   ipcMain.handle('usage:get', async (_event, accountId, options = {}) => queryProviderUsage(String(accountId || ''), options));
   ipcMain.handle('usage:connect', async (_event, accountId) => connectProviderUsage(String(accountId || '')));
   ipcMain.handle('usage:disconnect', (_event, accountId) => {
@@ -1978,6 +2072,7 @@ else {
     if (state?.settings?.widget !== false) createWidgetWindow();
     createTray();
     schedulePolling();
+    await startRemoteView();
     setupAutoUpdater();
     if (state?.settings?.autoUpdate !== false) checkForUpdates();
     scheduleUpdateChecks();
@@ -1988,6 +2083,7 @@ else {
 
 app.on('before-quit', () => {
   quitting = true;
+  remoteViewServer?.close();
   if (pollTimer) clearInterval(pollTimer);
   if (updateCheckTimer) clearInterval(updateCheckTimer);
   const usageAccountIds = new Set([

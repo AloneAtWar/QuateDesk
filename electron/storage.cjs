@@ -23,6 +23,7 @@ class DesktopStore {
     this.credentialsPath = path.join(root, 'credentials.json');
     this.historyPath = path.join(root, 'history.json');
     this.cyclesPath = path.join(root, 'cycles.json');
+    this.remoteAccessPath = path.join(root, 'remote-access.json');
   }
 
   loadState() { return readJson(this.statePath, null); }
@@ -42,6 +43,24 @@ class DesktopStore {
   }
 
   clearHistory() { writeJson(this.historyPath, {}); return true; }
+
+  loadRemoteAccess() {
+    const saved = readJson(this.remoteAccessPath, {});
+    let token = '';
+    if (saved.token && safeStorage.isEncryptionAvailable()) {
+      try { token = safeStorage.decryptString(Buffer.from(saved.token, 'base64')); }
+      catch { token = ''; }
+    }
+    return { enabled: Boolean(saved.enabled), token };
+  }
+
+  saveRemoteAccess({ enabled, token }) {
+    if (!safeStorage.isEncryptionAvailable()) throw new Error('系统凭据加密不可用，无法启用远程查看');
+    writeJson(this.remoteAccessPath, {
+      enabled: Boolean(enabled),
+      token: safeStorage.encryptString(String(token || '')).toString('base64'),
+    });
+  }
 
   // 周期浪费档案：{ accountId: [{ window, from, end, kind, observedAt, remaining, amount, limit, gapMs, reliable }] }
   // 永久保留，不受历史保留时长影响；每次全量扫描该账号历史提取，靠 mergeCycles 去重，天然支持回填
