@@ -1471,7 +1471,26 @@ function RemoteViewSettings() {
   const [qrOpen, setQrOpen] = useState(false);
   const [selectedLanUrl, setSelectedLanUrl] = useState('');
   const [portDraft, setPortDraft] = useState('');
-  useEffect(() => { if (bridge?.getRemoteViewStatus) bridge.getRemoteViewStatus().then(setStatus).catch((reason) => setError(reason.message)); }, [bridge]);
+  useEffect(() => {
+    if (!bridge?.getRemoteViewStatus) return undefined;
+    let active = true;
+    const refreshStatus = () => bridge.getRemoteViewStatus().then((nextStatus) => {
+      if (!active) return;
+      setStatus(nextStatus);
+      setError('');
+    }).catch((reason) => {
+      if (active) setError(reason.message || '读取远程查看状态失败');
+    });
+    refreshStatus();
+    const timer = setInterval(refreshStatus, qrOpen ? 1_500 : 5_000);
+    const onVisible = () => { if (document.visibilityState === 'visible') refreshStatus(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      active = false;
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [bridge, qrOpen]);
   useEffect(() => { if (status?.port) setPortDraft(String(status.port)); }, [status?.port]);
   const lanUrls = Array.isArray(status?.lanUrls) ? status.lanUrls : [];
   const activeLanUrl = lanUrls.includes(selectedLanUrl) ? selectedLanUrl : lanUrls[0] || '';
@@ -1583,6 +1602,27 @@ function SharedSettingsPanel({ variant = 'desktop', settings = {}, setSettings, 
     } catch (error) { setFeedback(error.message || '保存失败'); }
     finally { setSaving(false); }
   };
+  if (!remote) return <>
+    <section className="drawer-section">
+      <div className="drawer-section-title"><Bell size={16} /><span>刷新提醒规则</span><button className="mini-add" onClick={() => update((old) => ({ ...old, reminderRules: [...(old.reminderRules || []), { id: `rule-${Date.now()}`, beforeMinutes: 120, minRemaining: 50 }] }))}><Plus size={14} /> 新增规则</button></div>
+      <Toggle checked={values.alerts !== false} onChange={(value) => update((old) => ({ ...old, alerts: value }))} label="启用提醒" description="关闭后不发送桌面通知，也不标记命中规则" />
+      {rules.length === 0 ? <div className="settings-empty">当前没有运行规则</div> : rules.map((rule, index) => <div className="rule-editor" key={rule.id}>
+        <label><span>刷新前多久（分钟）<small>窗口重置倒计时小于该值才提醒</small></span><input type="number" min="1" value={rule.beforeMinutes} onChange={(event) => update((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, beforeMinutes: event.target.value } : item) }))} /></label>
+        <label><span>剩余至少（百分比）<small>剩余额度不低于该值才提醒</small></span><input type="number" min="0" max="100" value={rule.minRemaining} onChange={(event) => update((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, minRemaining: event.target.value } : item) }))} /></label>
+        <button className="icon-button danger rule-delete" title="删除规则" aria-label={`删除 ${rule.label || '规则'}`} onClick={() => update((old) => ({ ...old, reminderRules: old.reminderRules.filter((item) => item.id !== rule.id) }))}><Trash2 size={13} /></button>
+      </div>)}
+      <small className="drawer-help">满足“刷新前多久”且“剩余至少”时，额度窗口会标记该规则。可以一条规则都没有。</small>
+      <div className="setting-select"><span><b>轮询间隔</b><small>所有账号统一检查频率</small></span><select value={values.pollMinutes} onChange={(event) => update((old) => ({ ...old, pollMinutes: event.target.value }))}><option value="5">5 分钟</option><option value="10">10 分钟</option><option value="15">15 分钟</option><option value="30">30 分钟</option></select></div>
+    </section>
+    <section className="drawer-section"><div className="drawer-section-title"><SlidersHorizontal size={16} /><span>周期明细排序</span></div>
+      {[{ key: 'periodSort5hRemaining', label: '5 小时' }, { key: 'periodSortLongRemaining', label: '7 天 / 1 个月' }].map((item) => {
+        const remaining = clampRemainingWeight(values[item.key]);
+        return <label className="period-sort-row" key={item.key}><span><b>{item.label}</b><small>剩余 {remaining}% · 重置 {100 - remaining}%</small></span><input type="range" min={0} max={100} step={5} value={remaining} onChange={(event) => update((old) => ({ ...old, [item.key]: Number(event.target.value) }))} /></label>;
+      })}
+      <small className="drawer-help">默认剩余 0%、重置 100%，只按距重置时间从近到远排（与原来一致）。拉高剩余占比后，额度多的账号更靠前。「全部」视图里 5 小时与 7 天/1 个月仍各用各的比例。</small>
+    </section>
+    <section className="drawer-section"><div className="drawer-section-title"><SunMoon size={16} /><span>主题</span></div><div className="setting-select"><span><b>界面主题</b><small>主窗口与桌面浮窗同步应用</small></span><select value={values.theme === 'light' ? 'light' : 'dark'} onChange={(event) => update((old) => ({ ...old, theme: event.target.value }))}><option value="dark">暗色</option><option value="light">亮色</option></select></div></section>
+  </>;
   return <div className="shared-settings-page">
     {remote && <section className="remote-settings-card">
       <div className="remote-settings-card-head"><b>当前设备显示</b><small>只影响当前手机或浏览器</small></div>

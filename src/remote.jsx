@@ -15,6 +15,14 @@ const DEVICE_ID_KEY = 'quota-desk-remote-device-id-v1';
 const DEVICE_NAME_KEY = 'quota-desk-remote-device-name-v1';
 const THEME_KEY = 'quota-desk-remote-theme-v1';
 const MODE_KEY = 'quota-desk-remote-mode-v1';
+const SNAPSHOT_REFRESH_MS = 15_000;
+
+function defaultDeviceName() {
+  const userAgent = navigator.userAgent || '';
+  if (/Android/i.test(userAgent)) return 'Android 手机';
+  if (/iPhone|iPad|iPod/i.test(userAgent)) return 'iOS 设备';
+  return '浏览器设备';
+}
 
 function readInitialConnection() {
   const params = new URLSearchParams(location.hash.slice(1));
@@ -160,10 +168,17 @@ function App() {
       } finally { if (active) setLoading(false); }
     };
     load();
-    const timer = setInterval(load, 60_000);
+    const timer = setInterval(load, SNAPSHOT_REFRESH_MS);
     const onVisible = () => { if (document.visibilityState === 'visible') load(); };
+    const onOnline = () => load();
     document.addEventListener('visibilitychange', onVisible);
-    return () => { active = false; clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
+    window.addEventListener('online', onOnline);
+    return () => {
+      active = false;
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('online', onOnline);
+    };
   }, [token]);
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 60_000); return () => clearInterval(timer); }, []);
 
