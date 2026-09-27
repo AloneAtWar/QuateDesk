@@ -122,14 +122,20 @@ const remoteLanUrls = (port) => {
 async function startRemoteView() {
   if (remoteViewServer) return;
   const config = store.loadRemoteAccess();
-  if (!config.enabled || !config.token) return;
+  if (!config.enabled) return;
+  // Existing installs used the shared access token as their only credential.
+  // Create the new-device invitation key while retaining that token for compatibility.
+  if (!config.pairingKey) {
+    config.pairingKey = crypto.randomBytes(32).toString('base64url');
+    store.saveRemoteAccess(config);
+  }
   try {
     remoteViewServer = await createRemoteViewServer({
       store,
       distDir: path.join(__dirname, '..', 'dist'),
       port: config.port,
-      getToken: () => store.loadRemoteAccess().token,
-      getReadOnly: () => store.loadRemoteAccess().readOnly,
+      authorizeToken: (token) => store.isRemoteTokenAuthorized(token),
+      pairDevice: (request) => store.pairRemoteDevice(request),
       getHistory: (accountId) => {
         const points = store.loadHistory()[accountId] || [];
         const days = historyRetentionDays();
@@ -146,7 +152,7 @@ async function startRemoteView() {
 
 async function remoteViewStatus() {
   const config = store.loadRemoteAccess();
-  return { enabled: config.enabled, running: Boolean(remoteViewServer), error: remoteViewError, token: config.token, readOnly: config.readOnly, localUrl: remoteLocalUrl(config.port), lanUrls: remoteLanUrls(config.port), port: config.port };
+  return { enabled: config.enabled, running: Boolean(remoteViewServer), error: remoteViewError, pairingKey: config.pairingKey, devices: store.listRemoteDevices(), readOnly: true, localUrl: remoteLocalUrl(config.port), lanUrls: remoteLanUrls(config.port), port: config.port };
 }
 
 // 开机自启由操作系统的登录项管理,作为唯一事实来源,不写入应用状态
@@ -1615,8 +1621,8 @@ function registerIpc() {
   ipcMain.handle('remote:get-status', () => remoteViewStatus());
   ipcMain.handle('remote:set-enabled', async (_event, enabled) => {
     const previous = store.loadRemoteAccess();
-    const token = previous.token || crypto.randomBytes(32).toString('base64url');
-    const next = { ...previous, enabled: Boolean(enabled), token };
+    const pairingKey = previous.pairingKey || crypto.randomBytes(32).toString('base64url');
+    const next = { ...previous, enabled: Boolean(enabled), pairingKey };
     store.saveRemoteAccess(next);
     if (next.enabled) {
       await startRemoteView();
@@ -1654,14 +1660,14 @@ function registerIpc() {
     }
     return remoteViewStatus();
   });
-  ipcMain.handle('remote:set-read-only', (_event, readOnly) => {
+  ipcMain.handle('remote:rotate-pairing-key', async () => {
     const previous = store.loadRemoteAccess();
-    store.saveRemoteAccess({ ...previous, readOnly: Boolean(readOnly) });
+    store.saveRemoteAccess({ ...previous, pairingKey: crypto.randomBytes(32).toString('base64url') });
     return remoteViewStatus();
   });
-  ipcMain.handle('remote:rotate-token', async () => {
-    const previous = store.loadRemoteAccess();
-    store.saveRemoteAccess({ ...previous, token: crypto.randomBytes(32).toString('base64url') });
+  ipcMain.handle('remote:remove-device', (_event, deviceId) => {
+    if (typeof deviceId !== 'string' || !deviceId) throw new Error('缺少设备标识');
+    store.removeRemoteDevice(deviceId);
     return remoteViewStatus();
   });
   ipcMain.handle('data:export', async (_event, options = {}) => {

@@ -1,4 +1,5 @@
 #remote-root { min-height: 100dvh; }
+html.remote-page, body.remote-page { width: 100%; min-width: 0; overflow-x: hidden; }
 .remote-app { min-height: 100dvh; display: flex; flex-direction: column; overflow-x: clip; color: var(--ink); background: radial-gradient(circle at 50% -25%, var(--bg-grad) 0, var(--bg) 58%); }
 .remote-titlebar { position: sticky; top: 0; z-index: 15; flex: 0 0 40px; height: 40px; padding: 0 12px; }
 .remote-titlebar .titlebar-drag { min-width: 95px; }
@@ -7,6 +8,20 @@
 .remote-titlebar button { -webkit-app-region: no-drag; }
 .remote-title-theme { width: 25px; height: 23px; display: grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 6px; color: var(--ink-soft); background: var(--control); }
 .remote-title-theme:hover { color: var(--ink); border-color: var(--hover-border); }
+.remote-title-action { width: 25px; height: 23px; display: grid; place-items: center; flex: 0 0 auto; padding: 0; border: 1px solid var(--line); border-radius: 6px; color: var(--ink-soft); background: var(--control); }
+.remote-title-action:hover, .remote-title-action.active { color: var(--green-deep); border-color: var(--hover-border); background: var(--green-bg); }
+.remote-settings-page { width: min(100%, 760px); margin: 0 auto; }
+.remote-settings-card { display: grid; gap: 13px; padding: 15px; margin: 0 0 11px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); box-shadow: var(--shadow); }
+.remote-settings-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.remote-settings-card-head > b { font-size: 13px; }
+.remote-settings-card-head > small { color: var(--faint); font-size: 10px; }
+.remote-settings-section { display: grid; grid-template-columns: 88px minmax(0, 1fr); align-items: center; gap: 10px; }
+.remote-settings-section > span { color: var(--muted); font-size: 11px; }
+.remote-setting-options { display: flex; flex-wrap: wrap; gap: 7px; }
+.remote-setting-options button { min-height: 34px; display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink-soft); background: var(--control); font-size: 10px; }
+.remote-setting-options button.active { border-color: var(--focus-border); color: var(--green-deep); background: var(--green-bg); }
+.remote-settings-access p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.remote-interactive-badge { padding: 4px 7px; border-radius: 5px; color: var(--green-deep); background: var(--green-bg); font-size: 9px; white-space: nowrap; }
 .remote-main { width: 100%; max-width: none; min-height: calc(100dvh - 40px); padding: 8px 14px 20px; flex: 1 0 auto; overflow: visible; }
 .remote-view-title { margin-bottom: 9px; }
 .remote-view-title .health-summary { color: var(--muted); font-size: 10px; }
@@ -52,8 +67,9 @@
   .remote-titlebar .overview-controls { gap: 1px; padding: 2px; }
   .remote-titlebar .overview-controls button { width: 28px; height: 28px; }
   .remote-titlebar .control-solo, .remote-title-theme { width: 30px; height: 30px; }
+  .remote-title-action { width: 30px; height: 30px; }
   .remote-main { min-height: calc(100dvh - 46px); padding: 7px 8px 18px; }
-  .remote-main .overview-grid { gap: 7px; }
+  #remote-root .remote-main .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 7px; }
   .remote-main .overview-card { height: 190px; padding: 6px; border-radius: 9px; }
   .remote-main .overview-head { gap: 4px; }
   .remote-main .account-identity { gap: 5px; }
@@ -82,18 +98,148 @@
   .remote-main > .view-stack { gap: 12px; }
   .remote-main > .history-view { width: 100%; }
   .remote-pair-card { padding: 25px 21px; }
+  .remote-settings-card { padding: 13px; }
+  .remote-settings-section { grid-template-columns: 1fr; gap: 6px; }
 }
 
 @media (max-width: 390px) {
   .remote-titlebar .last-checked { display: none; }
-  .remote-main .overview-grid { gap: 5px; }
-  .remote-main .overview-card { padding: 5px; }
-  .remote-main .overview-body { gap: 2px; }
-  .remote-main .concentric-rings { width: 51px; height: 51px; }
-  .remote-main .quota-ring { inset: calc(var(--ring-index, 0) * 4.5px); }
-  .remote-main .ring-core { inset: 15px; }
-  .remote-main .overview-meter span { font-size: 7px; }
-  .remote-main .overview-meter b { font-size: 8px; }
+  .remote-titlebar .titlebar-drag { min-width: 18px; flex: 0 0 18px; }
+  .remote-titlebar .titlebar-drag b { display: none; }
+  #remote-root .remote-main .overview-grid { grid-template-columns: 1fr !important; gap: 8px; }
+  .remote-main .overview-card { height: 152px; padding: 9px; }
+  .remote-main .overview-body { gap: 10px; }
+  .remote-main .concentric-rings { width: 69px; height: 69px; }
+  .remote-main .quota-ring { inset: calc(var(--ring-index, 0) * 6px); }
+  .remote-main .ring-core { inset: 21px; }
+  .remote-main .ring-core strong { max-width: 43px; font-size: 9px; }
+  .remote-main .ring-core small { font-size: 7px; }
+  .remote-main .overview-meter span { font-size: 9px; }
+  .remote-main .overview-meter b { font-size: 10px; }
+  .remote-main .overview-meter small { font-size: 8px; }
+  .remote-main .account-title-line strong { font-size: 11px; }
+  .remote-main .account-copy > span { font-size: 9px; }
+  .remote-qr-modal .remote-setting-qr { width: clamp(96px, 24vh, 138px); height: clamp(96px, 24vh, 138px); }
+}
+
+@media (max-height: 560px) {
+  .remote-qr-modal { gap: 5px; padding: 10px; }
+  .remote-qr-modal .remote-setting-qr { width: 96px; height: 96px; }
+  .remote-qr-modal .modal-head small, .remote-qr-modal > .drawer-help { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) { .remote-app *, .remote-pair-page * { scroll-behavior: auto !important; } }
+
+/* The view selector already identifies the active layout; keep a single quiet shell on every view. */
+.remote-main > .remote-view-title { display: none; }
+.remote-main > .view-stack, .remote-main .surface-section, .remote-main .windows-list { min-width: 0; width: 100%; }
+
+.remote-settings-heading { display: flex; align-items: center; justify-content: space-between; margin: 1px 1px 12px; }
+.remote-settings-heading h1 { margin: 0; font-size: 19px; letter-spacing: -.035em; }
+.remote-settings-heading p { margin: 4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.remote-settings-card-head > b { display: inline-flex; align-items: center; gap: 7px; }
+.remote-settings-card-head > b svg { color: var(--coral); }
+.remote-settings-toggle, .remote-settings-field, .remote-settings-range { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-width: 0; padding: 8px 0; }
+.remote-settings-toggle > span, .remote-settings-field > span, .remote-settings-range > span, .remote-settings-rule-heading > span { display: grid; gap: 4px; min-width: 0; }
+.remote-settings-toggle b, .remote-settings-field b, .remote-settings-range b, .remote-settings-rule-heading b { color: var(--ink-soft); font-size: 11px; font-weight: 600; }
+.remote-settings-toggle small, .remote-settings-field small, .remote-settings-range small, .remote-settings-rule-heading small { color: var(--faint); font-size: 9px; line-height: 1.45; }
+.remote-settings-toggle input { width: 18px; height: 18px; flex: 0 0 auto; accent-color: var(--green); }
+.remote-settings-field select { min-width: 115px; height: 34px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink-soft); background: var(--control); font-size: 10px; }
+.remote-settings-rule-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line-inner); }
+.remote-settings-rule { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 28px; align-items: end; gap: 8px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
+.remote-settings-rule label { display: grid; gap: 5px; min-width: 0; color: var(--faint); font-size: 9px; }
+.remote-settings-rule input { width: 100%; min-width: 0; height: 32px; padding: 0 7px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: var(--control); font-size: 11px; }
+.remote-settings-rule .icon-button { width: 28px; height: 28px; }
+.remote-settings-empty { padding: 12px 8px; border-radius: 7px; color: var(--faint); background: var(--surface-2); text-align: center; font-size: 10px; }
+.remote-settings-range input { width: min(45%, 240px); accent-color: var(--green); }
+.remote-settings-access p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.65; }
+.remote-settings-savebar { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 8px -2px 0; padding: 9px 2px max(9px, env(safe-area-inset-bottom)); background: linear-gradient(180deg, transparent, var(--bg) 18%); }
+.remote-settings-savebar > span { color: var(--faint); font-size: 9px; }
+.remote-settings-savebar > span.saved { color: var(--green-deep); }
+.remote-settings-savebar > span.error { color: var(--coral-deep); }
+.remote-settings-savebar .primary-button { min-height: 36px; padding: 8px 13px; white-space: nowrap; }
+
+@media (max-width: 620px) {
+  .remote-main > .view-stack { gap: 10px; }
+  .remote-main .windows-section { overflow: hidden; }
+  .remote-main .account-window-row {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    align-items: stretch;
+    gap: 10px;
+    width: 100%;
+    height: auto !important;
+    min-height: 0;
+    overflow: visible !important;
+    padding: 12px !important;
+  }
+  .remote-main .account-side { display: grid; gap: 7px; min-width: 0; }
+  .remote-main .account-side .account-status { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 0; }
+  .remote-main .account-side .account-status small { margin-left: 2px; }
+  .remote-main .account-meters {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 9px;
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+    overflow: visible;
+  }
+  .remote-main .meter-line {
+    display: grid;
+    grid-template-columns: minmax(34px, auto) minmax(30px, 1fr) auto auto !important;
+    grid-template-rows: 22px;
+    align-items: center;
+    gap: 4px 6px;
+    width: 100%;
+    min-width: 0;
+  }
+  .remote-main .meter-line-head, .remote-main .meter-line-foot { display: contents; }
+  .remote-main .meter-name { grid-column: 1; grid-row: 1; overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+  .remote-main .meter-line .meter-track { grid-column: 2; grid-row: 1; width: 100%; min-width: 20px; }
+  .remote-main .meter-reading { grid-column: 3; grid-row: 1; font-size: 10px; }
+  .remote-main .meter-reading small { display: none; }
+  .remote-main .meter-state { display: none; }
+  .remote-main .reset-meta { grid-column: 4; grid-row: 1; max-width: 92px; min-width: 0; font-size: 8px; }
+  .remote-main .reset-meta svg { width: 10px; height: 10px; }
+  .remote-main .priority-row {
+    grid-template-columns: minmax(92px, 1.1fr) minmax(62px, 1fr) minmax(72px, auto) !important;
+    gap: 6px;
+    width: 100%;
+    height: auto !important;
+    min-height: 54px;
+    padding: 8px 9px !important;
+    overflow: hidden;
+  }
+  .remote-main .priority-row .account-identity { gap: 6px; }
+  .remote-main .priority-row .provider-logo { width: 26px; height: 26px; flex: 0 0 26px; border-radius: 8px; font-size: 10px; }
+  .remote-main .priority-row .account-title-line strong { font-size: 9px; }
+  .remote-main .priority-row .account-copy > span { font-size: 8px; }
+  .remote-main .priority-meter { min-width: 0; gap: 5px; }
+  .remote-main .priority-meter b { width: 36px; min-width: 36px; flex: 0 0 36px; font-size: 10px; }
+  .remote-main .priority-reset { min-width: 0; gap: 3px; font-size: 8px; }
+  .remote-main .priority-reset svg { width: 11px; height: 11px; flex: 0 0 11px; }
+  .remote-main .priority-reset > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .remote-main .priority-reset .rule-marks { display: none; }
+  .remote-main .section-heading { min-width: 0; gap: 7px; padding: 11px 12px; }
+  .remote-main .section-heading h2 { font-size: 12px; }
+  .remote-main .section-count { font-size: 9px; }
+  .remote-main .timeline-section .section-heading { flex-wrap: wrap; }
+  .remote-main .reset-timeline { width: 100%; max-width: 100%; padding-right: 10px; padding-left: 10px; }
+  .remote-settings-card { gap: 10px; padding: 12px; }
+  .remote-settings-card-head > small { font-size: 8px; text-align: right; }
+  .remote-settings-toggle, .remote-settings-field, .remote-settings-range { gap: 8px; }
+  .remote-settings-rule { gap: 6px; padding: 7px; }
+  .remote-settings-rule input { font-size: 10px; }
+  .remote-settings-savebar { margin-right: 0; margin-left: 0; }
+}
+
+@media (max-width: 360px) {
+  .remote-main .priority-row { grid-template-columns: minmax(82px, 1fr) minmax(56px, .9fr) minmax(66px, auto) !important; gap: 4px; padding-right: 7px !important; padding-left: 7px !important; }
+  .remote-main .priority-meter b { width: 32px; min-width: 32px; flex-basis: 32px; font-size: 9px; }
+  .remote-main .priority-reset { font-size: 7px; }
+  .remote-main .meter-line { grid-template-columns: minmax(30px, auto) minmax(18px, 1fr) auto auto !important; gap: 3px 4px; }
+  .remote-main .reset-meta { max-width: 78px; }
+  .remote-settings-card-head { align-items: flex-start; }
+  .remote-settings-card-head > small { max-width: 45%; }
+}

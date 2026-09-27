@@ -12,6 +12,7 @@ import { clampRemainingWeight, comparePriority } from './priority-score';
 import { newApiTemplateScript } from './newapi-template';
 import { computeUsageStreaks, formatProviderUsageCost, formatProviderUsageSummaryTokens } from './provider-usage-format';
 import qrcode from 'qrcode-generator';
+import { AppShell } from './app-shell';
 import './styles.css';
 
 const formatReset = (resetAt) => {
@@ -1466,7 +1467,6 @@ function RemoteViewSettings() {
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
-  const [copied, setCopied] = useState('');
   const [confirmRotate, setConfirmRotate] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
   const [selectedLanUrl, setSelectedLanUrl] = useState('');
@@ -1483,16 +1483,30 @@ function RemoteViewSettings() {
     catch (reason) { setError(reason.message || '操作失败'); }
     finally { setBusy(''); }
   };
-  const copy = async (label, value) => {
-    try { await navigator.clipboard.writeText(value); setCopied(label); setTimeout(() => setCopied(''), 2500); }
-    catch { setError('复制失败，请检查系统剪贴板权限'); }
-  };
-  const lanLink = status?.running && activeLanUrl && status?.token ? `${activeLanUrl}#access=${encodeURIComponent(status.token)}` : '';
+  const pairingLink = status?.running && activeLanUrl && status?.pairingKey ? `${activeLanUrl}#pair=${encodeURIComponent(status.pairingKey)}` : '';
+  const previewLink = status?.running && status?.localUrl && status?.pairingKey ? `${status.localUrl}#pair=${encodeURIComponent(status.pairingKey)}` : '';
   const qrImage = useMemo(() => {
-    if (!lanLink) return '';
-    try { const qr = qrcode(0, 'M'); qr.addData(lanLink); qr.make(); return qr.createDataURL(4, 6); }
+    if (!pairingLink) return '';
+    try { const qr = qrcode(0, 'M'); qr.addData(pairingLink); qr.make(); return qr.createDataURL(4, 6); }
     catch { return ''; }
-  }, [lanLink]);
+  }, [pairingLink]);
+  useEffect(() => {
+    if (!qrOpen) return undefined;
+    const onKeyDown = (event) => { if (event.key === 'Escape') setQrOpen(false); };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [qrOpen]);
+  const resetPairingKey = async () => {
+    setBusy('rotate'); setError('');
+    try { setStatus(await bridge.rotateRemotePairingKey()); setConfirmRotate(false); setQrOpen(false); }
+    catch (reason) { setError(reason.message || '重置配对密钥失败'); }
+    finally { setBusy(''); }
+  };
+  const removeDevice = async (device) => {
+    const detail = device.legacy ? '删除后，所有仍在使用旧版共用密钥的设备都会断开。' : `删除后「${device.name}」将无法继续访问电脑。`;
+    if (!window.confirm(`${detail}\n\n确定删除此配对设备吗？`)) return;
+    await action(`remove:${device.id}`, () => bridge.removeRemoteViewDevice(device.id));
+  };
   if (!bridge?.getRemoteViewStatus) return <small className="drawer-help">远程查看设置仅在桌面应用中可用。</small>;
   return <div className="remote-setting">
     <Toggle checked={Boolean(status?.enabled)} onChange={(enabled) => action('toggle', () => bridge.setRemoteViewEnabled(enabled))} label="启用局域网访问" description="允许其他设备连接这台电脑，默认关闭" />
@@ -1501,29 +1515,97 @@ function RemoteViewSettings() {
       <label className="remote-setting-port"><span><b>访问端口</b><small>修改后服务会重启</small></span><input type="number" min="1024" max="65535" step="1" value={portDraft} onChange={(event) => setPortDraft(event.target.value)} aria-label="局域网访问端口" /></label>
       <button type="button" className="outline-button remote-port-save" disabled={!canSavePort || Boolean(busy)} onClick={() => action('port', () => bridge.setRemoteViewPort(portNumber))}>{busy === 'port' ? '保存中…' : '保存'}</button>
     </div>
-    <Toggle checked={status?.readOnly !== false} onChange={(readOnly) => action('read-only', () => bridge.setRemoteViewReadOnly(readOnly))} label="只读访问" description="关闭后开放网页目前已有的操作" />
+    <small className="drawer-help">远程网页固定为只读，只能查看额度与历史，不能修改账号信息或电脑设置。</small>
     {status?.enabled && <>
       <div className={`remote-setting-status ${status.running ? 'ok' : 'fail'}`}><i />{status.running ? `运行中 · 端口 ${status.port}` : '局域网服务未启动'}</div>
       {status.error && <small className="remote-setting-error">{status.error}</small>}
-      {lanLink && <button type="button" className="primary-button full remote-qr-button" onClick={() => setQrOpen(true)}><QrCode size={15} />显示配对二维码</button>}
-      {status.running && !lanLink && <div className="remote-setting-hint">暂未发现局域网地址，请确认电脑已连接 Wi-Fi 或以太网。</div>}
-      {confirmRotate ? <div className="remote-setting-confirm"><span>旧设备需要重新配对。</span><button type="button" onClick={() => { setConfirmRotate(false); action('rotate', () => bridge.rotateRemoteViewToken()); }}>确认重置</button><button type="button" onClick={() => setConfirmRotate(false)}>取消</button></div> : <button type="button" className="remote-setting-link" onClick={() => setConfirmRotate(true)}>重置配对密钥</button>}
+      {pairingLink && <div className="remote-setting-actions"><button type="button" className="primary-button remote-qr-button" onClick={() => setQrOpen(true)}><QrCode size={15} />配对信息</button><button type="button" className="outline-button remote-qr-button" disabled={!previewLink} onClick={() => bridge.openExternal(previewLink)}><Eye size={15} />预览</button></div>}
+      {status.running && !pairingLink && <div className="remote-setting-hint">暂未发现局域网地址，请确认电脑已连接 Wi-Fi 或以太网。</div>}
       <small className="drawer-help">电脑需保持运行。跨网络访问由你使用的 VPN 或内网穿透提供。</small>
     </>}
-    {error && <div className="remote-setting-error" role="alert">{error}</div>}
-    {qrOpen && lanLink && <div className="modal-backdrop remote-qr-backdrop" onClick={() => setQrOpen(false)}><section className="modal compact-modal remote-qr-modal" role="dialog" aria-modal="true" aria-labelledby="remote-qr-title" onClick={(event) => event.stopPropagation()}>
-      <div className="modal-head"><div><h2 id="remote-qr-title">配对设备</h2><small>使用手机或其他电脑扫描</small></div><button type="button" className="icon-button" aria-label="关闭" onClick={() => setQrOpen(false)}><X size={16} /></button></div>
-      {lanUrls.length > 1 && <label className="field remote-qr-address-field"><span>连接地址</span><select value={activeLanUrl} onChange={(event) => setSelectedLanUrl(event.target.value)}>{lanUrls.map((url) => <option key={url} value={url}>{url.replace('/remote.html', '')}</option>)}</select></label>}
-      <div className="remote-setting-qr">{qrImage && <img src={qrImage} alt="配对二维码" />}</div>
-      <div className="remote-setting-address" title={activeLanUrl}>{activeLanUrl}</div>
-      <button type="button" className="primary-button full" onClick={() => copy('link', lanLink)}>{copied === 'link' ? <><Check size={13} />已复制链接</> : '复制配对链接'}</button>
-      <small className="drawer-help">手机和电脑需能访问上面的地址。</small>
+    <button type="button" className="outline-button full" onClick={() => bridge.openExternal('https://github.com/AloneAtWar/QuotaDesk-Android/releases/latest')}><ExternalLink size={14} />手机版</button>
+    {status && <section className="remote-paired-devices">
+      <div className="remote-paired-devices-head"><span><b>已配对设备</b><small>重置配对密钥不会移除这些设备</small></span><span>{(status.devices || []).length} 台</span></div>
+      {(status.devices || []).length === 0 ? <div className="remote-settings-empty">还没有配对设备</div> : (status.devices || []).map((device) => <div className="remote-paired-device" key={device.id}>
+        <span><b title={device.name}>{device.name}</b><small>{device.legacy ? '兼容旧版共用密钥' : device.pairedAt ? `配对于 ${new Date(device.pairedAt).toLocaleString('zh-CN')}` : '旧版设备'}</small></span>
+        <button type="button" className="icon-button danger" disabled={Boolean(busy)} title="删除配对设备" aria-label={`删除配对设备 ${device.name}`} onClick={() => removeDevice(device)}><Trash2 size={14} /></button>
+      </div>)}
+    </section>}
+    {error && !qrOpen && <div className="remote-setting-error" role="alert">{error}</div>}
+    {qrOpen && pairingLink && <div className="modal-backdrop remote-qr-backdrop" onClick={() => setQrOpen(false)}><section className="modal compact-modal remote-qr-modal" role="dialog" aria-modal="true" aria-labelledby="remote-qr-title" onClick={(event) => event.stopPropagation()}>
+      <div className="modal-head"><div><h2 id="remote-qr-title">配对信息</h2><small>使用 Quota Desk 手机 App 或其他设备扫描</small></div></div>
+      {lanUrls.length > 1 && <label className="field remote-qr-address-field"><span>访问设备</span><select value={activeLanUrl} onChange={(event) => setSelectedLanUrl(event.target.value)}>{lanUrls.map((url) => <option key={url} value={url}>{new URL(url).host}</option>)}</select></label>}
+      <div className="remote-setting-qr">{qrImage && <img src={qrImage} alt="配对信息二维码" />}</div>
+      <div className="remote-setting-address" title={activeLanUrl}>{activeLanUrl ? new URL(activeLanUrl).host : ''}</div>
+      {error && <small className="remote-setting-error" role="alert">{error}</small>}
+      {confirmRotate ? <div className="remote-qr-reset-confirm"><span>只影响之后添加的设备。已配对设备仍可访问。</span><div><button type="button" className="remote-qr-reset-danger" disabled={Boolean(busy)} onClick={resetPairingKey}>{busy === 'rotate' ? '正在重置…' : '确认重置'}</button><button type="button" className="remote-qr-reset-cancel" onClick={() => setConfirmRotate(false)}>取消</button></div></div> : <button type="button" className="remote-setting-link remote-qr-reset" onClick={() => setConfirmRotate(true)}>重置配对密钥</button>}
+      <small className="drawer-help">配对链接只保存在二维码中；二维码会包含本次配对密钥。</small>
     </section></div>}
   </div>;
 }
 
 // 账号行：设置抽屉与首次引导的「接入账号」步共用，两处的信息密度与行内操作完全一致
 // （编辑 / 刷新 / 停用启用 / 删除），避免同一个账号在两个页面出现两套交互。
+const normalizeSharedSettings = (settings = {}) => ({
+  alerts: settings.alerts !== false,
+  pollMinutes: String([5, 10, 15, 30].includes(Number(settings.pollMinutes)) ? Number(settings.pollMinutes) : 5),
+  reminderRules: (Array.isArray(settings.reminderRules) ? settings.reminderRules : []).slice(0, 20).map((rule, index) => ({
+    id: String(rule.id || `rule-${index + 1}`), label: String(rule.label || ''),
+    beforeMinutes: String(rule.beforeMinutes ?? 120), minRemaining: String(rule.minRemaining ?? 50),
+  })),
+  periodSort5hRemaining: clampRemainingWeight(settings.periodSort5hRemaining),
+  periodSortLongRemaining: clampRemainingWeight(settings.periodSortLongRemaining),
+});
+
+function SharedSettingsPanel({ variant = 'desktop', settings = {}, setSettings, onSave, theme, setTheme, mode, setMode }) {
+  const remote = variant === 'remote';
+  const [draft, setDraft] = useState(() => normalizeSharedSettings(settings));
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState('');
+  const values = remote ? draft : settings;
+  const update = remote ? setDraft : setSettings;
+  const rules = Array.isArray(values.reminderRules) ? values.reminderRules : [];
+  const submit = async () => {
+    setSaving(true); setFeedback('');
+    try {
+      const result = await onSave({ ...draft, pollMinutes: Number(draft.pollMinutes), reminderRules: draft.reminderRules.map((rule) => ({ ...rule, beforeMinutes: Number(rule.beforeMinutes), minRemaining: Number(rule.minRemaining) })) });
+      setDraft(normalizeSharedSettings(result?.settings || result));
+      setFeedback(result?.demo ? '演示模式已更新' : '已保存到电脑');
+    } catch (error) { setFeedback(error.message || '保存失败'); }
+    finally { setSaving(false); }
+  };
+  return <div className="shared-settings-page">
+    {remote && <section className="remote-settings-card">
+      <div className="remote-settings-card-head"><b>当前设备显示</b><small>只影响当前手机或浏览器</small></div>
+      <label className="remote-settings-field"><span><b>主题</b></span><select value={theme} onChange={(event) => setTheme(event.target.value)}><option value="light">亮色</option><option value="dark">暗色</option></select></label>
+      <label className="remote-settings-field"><span><b>默认视图</b></span><select value={mode} onChange={(event) => setMode(event.target.value)}><option value="rings">账号总览</option><option value="rows">行式明细</option><option value="periods">周期明细</option></select></label>
+    </section>}
+    <section className="remote-settings-card">
+      <div className="remote-settings-card-head"><b><Bell size={15} /> 刷新提醒与轮询</b><small>应用于电脑上的账号巡检</small></div>
+      <label className="remote-settings-toggle"><span><b>启用刷新提醒</b><small>关闭后不标记命中规则，也不发送桌面提醒</small></span><input type="checkbox" checked={values.alerts !== false} onChange={(event) => update((old) => ({ ...old, alerts: event.target.checked }))} /></label>
+      <label className="remote-settings-field"><span><b>轮询间隔</b><small>电脑统一检查账号额度的频率</small></span><select value={String(values.pollMinutes ?? 5)} onChange={(event) => update((old) => ({ ...old, pollMinutes: event.target.value }))}><option value="5">每 5 分钟</option><option value="10">每 10 分钟</option><option value="15">每 15 分钟</option><option value="30">每 30 分钟</option></select></label>
+      <div className="remote-settings-rule-heading"><span><b>提醒条件</b><small>重置时间和剩余额度同时满足时标记</small></span><button type="button" className="mini-add" disabled={rules.length >= 20} onClick={() => update((old) => ({ ...old, reminderRules: [...(old.reminderRules || []), { id: `rule-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, label: '', beforeMinutes: '120', minRemaining: '50' }] }))}><Plus size={13} />新增</button></div>
+      {rules.length === 0 ? <div className="remote-settings-empty">还没有提醒规则</div> : rules.map((rule, index) => <div className="remote-settings-rule" key={rule.id}>
+        <label><span>重置前（分钟）</span><input type="number" min="1" max="10080" value={rule.beforeMinutes} onChange={(event) => update((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, beforeMinutes: event.target.value } : item) }))} /></label>
+        <label><span>剩余至少（%）</span><input type="number" min="0" max="100" value={rule.minRemaining} onChange={(event) => update((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, minRemaining: event.target.value } : item) }))} /></label>
+        <button type="button" className="icon-button danger" title="删除规则" aria-label="删除提醒规则" onClick={() => update((old) => ({ ...old, reminderRules: old.reminderRules.filter((_item, itemIndex) => itemIndex !== index) }))}><Trash2 size={14} /></button>
+      </div>)}
+    </section>
+    <section className="remote-settings-card">
+      <div className="remote-settings-card-head"><b><SlidersHorizontal size={15} /> 周期明细排序</b><small>剩余额度和重置紧迫度的排序权重</small></div>
+      {[['periodSort5hRemaining', '5 小时额度'], ['periodSortLongRemaining', '7 天 / 1 个月额度']].map(([key, label]) => {
+        const remaining = clampRemainingWeight(values[key]);
+        return <label className="remote-settings-range" key={key}><span><b>{label}</b><small>剩余 {remaining}% · 重置紧迫度 {100 - remaining}%</small></span><input type="range" min="0" max="100" step="5" value={remaining} onChange={(event) => update((old) => ({ ...old, [key]: Number(event.target.value) }))} /></label>;
+      })}
+    </section>
+    {remote && <>
+      <section className="remote-settings-card remote-settings-access"><div className="remote-settings-card-head"><b>电脑端设置</b><span className="remote-interactive-badge">交互访问</span></div><p>电脑端网络访问、配对设备、账号凭据、厂商适配、代理和数据管理仍由电脑应用管理。</p></section>
+      <div className="remote-settings-savebar"><span className={feedback.startsWith('已保存') || feedback.startsWith('演示模式') ? 'saved' : feedback ? 'error' : ''} role="status">{feedback || '电脑设置尚未保存'}</span><button type="button" className="primary-button" disabled={saving} onClick={submit}>{saving ? '保存中…' : '保存电脑设置'}</button></div>
+    </>}
+    {!remote && <section className="remote-settings-card"><div className="remote-settings-card-head"><b><SunMoon size={15} /> 主题</b></div><label className="remote-settings-field"><span><b>界面主题</b><small>主窗口与桌面浮窗同步应用</small></span><select value={settings.theme === 'light' ? 'light' : 'dark'} onChange={(event) => setSettings((old) => ({ ...old, theme: event.target.value }))}><option value="dark">暗色</option><option value="light">亮色</option></select></label></section>}
+  </div>;
+}
+
 function AccountRow({ account, provider, testing, onEdit, onTest, onToggleDisabled, onDelete }) {
   const warning = !account.disabled && account.status === 'warning';
   return <div className={`settings-account${account.disabled ? ' disabled' : ''}`}>
@@ -1540,18 +1622,12 @@ function AccountRow({ account, provider, testing, onEdit, onTest, onToggleDisabl
   </div>;
 }
 
-function SettingsDrawer({ accounts, providers, settings, setSettings, onClose, openModal, onDeleteAccount, onToggleAccountDisabled, onTestAccount, testingAccountId, onEditProvider, autoLaunch, onToggleAutoLaunch, appVersion, update, onOpenUpdate, onCheckUpdate, onClearHistory, runtime, onReopenOnboarding, onExportData, onImportData, dataBusy }) {
+function SettingsDrawer({ variant = 'desktop', accounts, providers, settings, setSettings, onClose, openModal, onDeleteAccount, onToggleAccountDisabled, onTestAccount, testingAccountId, onEditProvider, autoLaunch, onToggleAutoLaunch, appVersion, update, onOpenUpdate, onCheckUpdate, onClearHistory, runtime, onReopenOnboarding, onExportData, onImportData, dataBusy, onSaveRemoteSettings, theme, setTheme, mode, setMode }) {
+  if (variant === 'remote') return <SharedSettingsPanel variant="remote" settings={settings} onSave={onSaveRemoteSettings} theme={theme} setTheme={setTheme} mode={mode} setMode={setMode} />;
   const proxyMode = ['direct', 'system', 'manual'].includes(settings.proxyMode) ? settings.proxyMode : 'system';
   return <><div className="drawer-shade" onClick={onClose} /><aside className="settings-drawer" aria-label="设置">
     <div className="drawer-scroll">
-      <section className="drawer-section"><div className="drawer-section-title"><Bell size={16} /><span>刷新提醒规则</span><TitleHelp>满足“刷新前多久”且“剩余至少”时，额度窗口会标记该规则；可以一条规则都没有。提醒关闭后不会发送桌面通知，也不会标记命中规则。</TitleHelp><button className="mini-add" onClick={() => setSettings((old) => ({ ...old, reminderRules: [...(old.reminderRules || []), { id: `rule-${Date.now()}`, beforeMinutes: 120, minRemaining: 50 }] }))}><Plus size={14} /> 新增规则</button></div><Toggle checked={settings.alerts !== false} onChange={(value) => setSettings((old) => ({ ...old, alerts: value }))} label="启用提醒" description="关闭后不发送桌面通知，也不标记命中规则" />{(settings.reminderRules || []).length === 0 ? <div className="settings-empty">当前没有运行规则</div> : (settings.reminderRules || []).map((rule, index) => <div className="rule-editor" key={rule.id}><label><span>刷新前多久（分钟）<small>窗口重置倒计时小于该值才提醒</small></span><input type="number" min="1" value={rule.beforeMinutes} onChange={(event) => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, beforeMinutes: event.target.value } : item) }))} /></label><label><span>剩余至少（百分比）<small>剩余额度不低于该值才提醒</small></span><input type="number" min="0" max="100" value={rule.minRemaining} onChange={(event) => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, minRemaining: event.target.value } : item) }))} /></label><button className="icon-button danger rule-delete" title="删除规则" aria-label={`删除 ${rule.label || '规则'}`} onClick={() => setSettings((old) => ({ ...old, reminderRules: old.reminderRules.filter((item) => item.id !== rule.id) }))}><Trash2 size={13} /></button></div>)}<div className="setting-select"><span><b>轮询间隔</b><small>所有账号统一检查频率</small></span><select value={settings.pollMinutes} onChange={(event) => setSettings((old) => ({ ...old, pollMinutes: event.target.value }))}><option value="5">5 分钟</option><option value="10">10 分钟</option><option value="15">15 分钟</option><option value="30">30 分钟</option></select></div></section>
-      <section className="drawer-section"><div className="drawer-section-title"><SlidersHorizontal size={16} /><span>周期明细排序</span><TitleHelp>默认剩余 0%、重置 100%，只按距重置时间从近到远排序（与原来一致）。提高剩余占比后，额度更多的账号会更靠前。“全部”视图里，5 小时与 7 天 / 1 个月仍各用各的比例。</TitleHelp></div>
-        {[{ key: 'periodSort5hRemaining', label: '5 小时' }, { key: 'periodSortLongRemaining', label: '7 天 / 1 个月' }].map((item) => {
-          const remaining = clampRemainingWeight(settings[item.key]);
-          return <label className="period-sort-row" key={item.key}><span><b>{item.label}</b><small>剩余 {remaining}% · 重置 {100 - remaining}%</small></span><input type="range" min={0} max={100} step={5} value={remaining} onChange={(event) => setSettings((old) => ({ ...old, [item.key]: Number(event.target.value) }))} /></label>;
-         })}
-       </section>
-       <section className="drawer-section"><div className="drawer-section-title"><SunMoon size={16} /><span>主题</span></div><div className="setting-select"><span><b>界面主题</b><small>主窗口与桌面浮窗同步应用</small></span><select value={settings.theme === 'light' ? 'light' : 'dark'} onChange={(event) => setSettings((old) => ({ ...old, theme: event.target.value }))}><option value="dark">暗色</option><option value="light">亮色</option></select></div></section>
+      <SharedSettingsPanel settings={settings} setSettings={setSettings} />
        <section className="drawer-section"><div className="drawer-section-title"><Globe size={16} /><span>远程查看</span></div><RemoteViewSettings /></section>
       <section className="drawer-section"><div className="drawer-section-title"><Monitor size={16} /><span>桌面浮窗</span><TitleHelp>长度只调整横向宽度（60%–150%）。浮窗会展示账号的全部额度窗口（含 1M）；空间不足时会逐级收起：标签先缩成小圆点再隐藏，倒计时按周期从长到短逐个隐藏，最后才收起最长周期的额度。只有一个额度窗口的账号通常不用收起任何内容；名称放不下时会显示省略号，悬停可查看完整内容。</TitleHelp></div><Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" description="固定在桌面顶层，双击展开主窗口" /><label className="size-slider"><span>大小</span><input type="range" min={80} max={300} step={5} value={Math.round(clampWidgetScale(settings.widgetScale) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetScale: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetScale(settings.widgetScale) * 100)}%</b></label><label className="size-slider"><span>长度</span><input type="range" min={Math.round(WIDGET_MIN_LENGTH * 100)} max={Math.round(WIDGET_MAX_LENGTH * 100)} step={5} value={Math.round(clampWidgetLength(settings.widgetLength) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetLength: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetLength(settings.widgetLength) * 100)}%</b></label><button type="button" className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetScale: 0.9, widgetLength: 0.9 }))}>恢复默认大小与长度</button><div className="widget-setting-preview"><div style={{ width: Math.round(WIDGET_BASE_SIZE.width * clampWidgetLength(settings.widgetLength)), maxWidth: '100%', margin: '0 auto' }}>{(() => { const previewAccount = accounts.find((item) => !item.disabled) ?? accounts[0]; return <WidgetRow account={previewAccount} provider={providers.find((item) => item.id === previewAccount?.providerId)} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} />; })()}</div></div><button className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetPreview: true }))}><Eye size={15} /> 预览并调整</button></section>
        <section className="drawer-section"><div className="drawer-section-title"><Database size={16} /><span>数据管理</span><TitleHelp><span>额度历史：每次成功刷新后记录一条；超过保留时长的记录会自动清理；选择“永久”时，超过 30 天的记录会自动降采样为每小时一条，删除账号也会一并删除该账号的历史。</span><br /><span>数据导入与导出：导出包含账号信息、账号凭据、自定义厂商、额度历史和周期档案；导入会合并数据并跳过重复账号与厂商。导出文件含敏感凭据，请妥善保管。</span></TitleHelp></div><div className="setting-select"><span><b>保留时长</b><small>每次成功刷新后记录一条，用于账号卡片的趋势图</small></span><select value={settings.historyDays} onChange={(event) => setSettings((old) => ({ ...old, historyDays: Number(event.target.value) }))}><option value={3}>3 天</option><option value={7}>7 天（默认）</option><option value={15}>15 天</option><option value={30}>30 天</option><option value={60}>60 天</option><option value={90}>3 个月（最长）</option><option value={0}>永久</option></select></div><button className="outline-button full" onClick={onClearHistory}><Trash2 size={14} /> 清除全部历史记录</button><div className="data-transfer-actions"><button type="button" className="outline-button" disabled={Boolean(dataBusy)} onClick={onExportData}><Download size={14} /> {dataBusy === 'export' ? '正在导出…' : '导出数据'}</button><button type="button" className="outline-button" disabled={Boolean(dataBusy)} onClick={onImportData}><UploadCloud size={14} /> {dataBusy === 'import' ? '正在导入…' : '导入数据'}</button></div></section>
@@ -3474,8 +3550,22 @@ function App() {
     setOnboardOpen(false);
   };
 
-  return <div className="app-shell">
-    <header className="titlebar"><span className="titlebar-drag"><img src="./quota-desk.svg" alt="" /><b>Quota Desk</b></span><div className="titlebar-controls"><span className="last-checked" title="最后一次额度检查时间"><Clock3 size={11} />{formatChecked(lastSync)}</span>{update && ['available', 'downloading', 'downloaded', 'error'].includes(update.status) && !(update.status === 'available' && update.version && update.version === settings.ignoredUpdateVersion) && <button className={`update-badge ${update.status}`} onClick={() => setUpdateOpen(true)} title="查看版本更新"><Download size={11} />{update.status === 'available' && `v${update.version} 可更新`}{update.status === 'downloading' && `下载中 ${update.percent || 0}%`}{update.status === 'downloaded' && '重启升级'}{update.status === 'error' && '更新失败'}</button>}<button className="control-solo" onClick={refreshAll} disabled={refreshing} title="立即刷新全部账号" aria-label="立即刷新全部账号"><RefreshCw size={13} className={refreshing ? 'spinning' : ''} /></button><div className="overview-controls" aria-label="账号总览展示方式"><button className={overviewMode === 'rings' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rings'); }} title="账号总览" aria-label="账号总览"><CircleGauge size={13} /></button><button className={overviewMode === 'rows' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rows'); }} title="行式明细" aria-label="行式明细"><Rows3 size={13} /></button><button className={overviewMode === 'periods' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('periods'); }} title="周期明细" aria-label="周期明细"><Clock3 size={13} /></button></div></div><div className="titlebar-actions"><button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={13} /></button>{bridge && <><button className={pinned ? 'active' : ''} title={pinned ? '取消固定' : '固定在桌面最前面'} aria-label="固定在桌面最前面" onClick={async () => setPinned(await bridge.togglePin())}><Pin size={13} /></button><button title="关闭到托盘" aria-label="关闭到托盘" onClick={() => bridge.closeMainWindow()}><X size={14} /></button></>}</div></header>
+  const appShellControls = <>
+    <span className="last-checked" title="最后一次额度检查时间"><Clock3 size={11} />{formatChecked(lastSync)}</span>
+    {update && ['available', 'downloading', 'downloaded', 'error'].includes(update.status) && !(update.status === 'available' && update.version && update.version === settings.ignoredUpdateVersion) && <button className={`update-badge ${update.status}`} onClick={() => setUpdateOpen(true)} title="查看版本更新"><Download size={11} />{update.status === 'available' && `v${update.version} 可更新`}{update.status === 'downloading' && `下载中 ${update.percent || 0}%`}{update.status === 'downloaded' && '重启升级'}{update.status === 'error' && '更新失败'}</button>}
+    <button className="control-solo" onClick={refreshAll} disabled={refreshing} title="立即刷新全部账号" aria-label="立即刷新全部账号"><RefreshCw size={13} className={refreshing ? 'spinning' : ''} /></button>
+    <div className="overview-controls" aria-label="账号总览展示方式">
+      <button className={overviewMode === 'rings' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rings'); }} title="账号总览" aria-label="账号总览"><CircleGauge size={13} /></button>
+      <button className={overviewMode === 'rows' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rows'); }} title="行式明细" aria-label="行式明细"><Rows3 size={13} /></button>
+      <button className={overviewMode === 'periods' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('periods'); }} title="周期明细" aria-label="周期明细"><Clock3 size={13} /></button>
+    </div>
+  </>;
+  const appShellActions = <>
+    <button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={13} /></button>
+    {bridge && <><button className={pinned ? 'active' : ''} title={pinned ? '取消固定' : '固定在桌面最前面'} aria-label="固定在桌面最前面" onClick={async () => setPinned(await bridge.togglePin())}><Pin size={13} /></button><button title="关闭到托盘" aria-label="关闭到托盘" onClick={() => bridge.closeMainWindow()}><X size={14} /></button></>}
+  </>;
+
+  return <AppShell controls={appShellControls} actions={appShellActions}>
     {toast && <div className={`toast ${toast.ok ? 'ok' : 'fail'}`} role="status">{toast.ok ? <Check size={13} /> : <AlertCircle size={13} />}<span>{toast.message}</span></div>}
     <main className="main-shell">
       <div className="content-area">{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{onboardOpen ? <OnboardingWizard settings={settings} setSettings={setSettings} accounts={accounts} providers={providers} ccswitchAvailable={Boolean(bridge?.scanCcswitchImport) || new URLSearchParams(window.location.search).get('onboard') === '1'} onOpenImport={() => setModal('account')} onApplyCcswitch={async (keys, chosen) => {
@@ -3550,11 +3640,11 @@ function App() {
         setToast({ id: Date.now(), ok: !result?.duplicate, message: result?.duplicate ? `该 GitHub 账号已收录在账号「${result.name}」中，请换一个账号授权` : `已重新授权「${result.name}」，正在刷新额度` });
       }} />
     </div></div>}
-  </div>;
+  </AppShell>;
 }
 
 export default App;
-export { HistoryView, ProviderUsageView, StatusView };
+export { HistoryView, ProviderUsageView, SettingsDrawer, SharedSettingsPanel, StatusView };
 
 const widgetMode = new URLSearchParams(window.location.search).get('widget') === '1';
 const rootElement = document.getElementById('root');

@@ -1,7 +1,6 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const crypto = require('node:crypto');
 const { resolveWasteWindows } = require('./waste.cjs');
 
 const REMOTE_PORT = 43187;
@@ -12,6 +11,40 @@ const CONTENT_TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javasc
 const pick = (source, fields) => Object.fromEntries(fields.filter((field) => source?.[field] !== undefined).map((field) => [field, source[field]]));
 const safeText = (value, max = 120) => String(value ?? '').slice(0, max);
 const safeNumber = (value) => value == null || !Number.isFinite(Number(value)) ? null : Number(value);
+const safeInteger = (value, min, max, fallback) => {
+  const number = Number(value);
+  return Number.isInteger(number) ? Math.min(max, Math.max(min, number)) : fallback;
+};
+
+const publicRemoteSettings = (settings = {}) => ({
+  alerts: settings.alerts !== false,
+  pollMinutes: [5, 10, 15, 30].includes(Number(settings.pollMinutes)) ? Number(settings.pollMinutes) : 5,
+  reminderRules: (Array.isArray(settings.reminderRules) ? settings.reminderRules : []).slice(0, 20).map((rule, index) => ({
+    id: safeText(rule?.id || `rule-${index + 1}`, 80),
+    label: safeText(rule?.label, 80),
+    beforeMinutes: safeInteger(rule?.beforeMinutes, 1, 10080, 120),
+    minRemaining: safeInteger(rule?.minRemaining, 0, 100, 50),
+  })),
+  periodSort5hRemaining: safeInteger(settings.periodSort5hRemaining, 0, 100, 0),
+  periodSortLongRemaining: safeInteger(settings.periodSortLongRemaining, 0, 100, 0),
+});
+
+const readJsonBody = (request, limit = 16 * 1024) => new Promise((resolve, reject) => {
+  let size = 0;
+  let tooLarge = false;
+  const chunks = [];
+  request.on('data', (chunk) => {
+    size += chunk.length;
+    if (size > limit) { tooLarge = true; chunks.length = 0; }
+    else if (!tooLarge) chunks.push(chunk);
+  });
+  request.on('error', reject);
+  request.on('end', () => {
+    if (tooLarge) return reject(new Error('body_too_large'));
+    try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
+    catch { reject(new Error('invalid_json')); }
+  });
+});
 
 const publicWindow = (meter) => ({
   ...pick(meter, WINDOW_FIELDS.filter((field) => ['key', 'unit', 'resetAt', 'available'].includes(field))),
@@ -28,6 +61,7 @@ const publicSnapshot = (state) => {
   return {
     lastSync: state?.lastSync || null,
     pollMinutes: Math.min(30, Math.max(1, Number(state?.settings?.pollMinutes) || 5)),
+    settings: publicRemoteSettings(state?.settings),
     providers: (state?.providers || []).map((provider) => ({
       id: safeText(provider.id, 80),
       name: safeText(provider.name),
@@ -98,13 +132,6 @@ const publicHistory = (points, days) => {
   }));
 };
 
-const isAuthorized = (header, token) => {
-  const provided = /^Bearer (\S+)$/.exec(String(header || ''))?.[1] || '';
-  const a = Buffer.from(provided);
-  const b = Buffer.from(String(token || ''));
-  return a.length > 0 && a.length === b.length && crypto.timingSafeEqual(a, b);
-};
-
 const setHeaders = (response) => {
   response.setHeader('X-Content-Type-Options', 'nosniff');
   response.setHeader('X-Frame-Options', 'DENY');
@@ -118,13 +145,10 @@ const json = (response, status, body) => {
   response.end(JSON.stringify(body));
 };
 
-function createRemoteViewServer({ store, distDir, getToken, getReadOnly = () => true, getHistory, getCycles, getUsage, port = REMOTE_PORT }) {
+function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, getHistory, getCycles, getUsage, port = REMOTE_PORT }) {
   const server = http.createServer((request, response) => {
     setHeaders(response);
-    if (request.method !== 'GET' && request.method !== 'HEAD') {
-      if (getReadOnly() !== false) return json(response, 403, { error: 'read_only' });
-      return json(response, 405, { error: 'method_not_supported' });
-    }
+    if (!['GET', 'HEAD', 'PATCH', 'POST'].includes(request.method)) return json(response, 405, { error: 'method_not_supported' });
     let pathname;
     let url;
     try {
@@ -133,8 +157,27 @@ function createRemoteViewServer({ store, distDir, getToken, getReadOnly = () => 
     } catch { return json(response, 400, { error: 'bad_request' }); }
 
     if (pathname.startsWith('/api/')) {
-      if (!isAuthorized(request.headers.authorization, getToken())) return json(response, 401, { error: 'unauthorized' });
-      if (pathname === '/api/snapshot') return json(response, 200, { ...publicSnapshot(store.loadState()), readOnly: getReadOnly() !== false });
+      if (pathname === '/api/pair' && request.method === 'POST') {
+        if (typeof pairDevice !== 'function') return json(response, 503, { error: 'pairing_unavailable' });
+        if (!/^application\/json(?:;|$)/i.test(String(request.headers['content-type'] || ''))) return json(response, 415, { error: 'json_required' });
+        readJsonBody(request, 4096).then((body) => {
+          try { return json(response, 200, pairDevice(body)); }
+          catch (error) {
+            const invalidPayload = /设备标识|设备名称/.test(error.message || '');
+            return json(response, invalidPayload ? 400 : 403, { error: invalidPayload ? 'invalid_pairing_request' : 'pairing_key_invalid', message: error.message || '配对失败' });
+          }
+        }).catch((error) => json(response, error.message === 'body_too_large' ? 413 : error.message === 'invalid_json' ? 400 : 500, { error: error.message || 'pairing_failed' }));
+        return;
+      }
+      if (request.method === 'POST') return json(response, 405, { error: 'method_not_supported' });
+      const providedToken = /^Bearer (\S+)$/.exec(String(request.headers.authorization || ''))?.[1] || '';
+      if (typeof authorizeToken !== 'function' || !authorizeToken(providedToken)) return json(response, 401, { error: 'unauthorized' });
+      if (request.method === 'PATCH') {
+        return pathname === '/api/settings'
+          ? json(response, 403, { error: 'read_only' })
+          : json(response, 405, { error: 'method_not_supported' });
+      }
+      if (pathname === '/api/snapshot') return json(response, 200, { ...publicSnapshot(store.loadState()), readOnly: true });
       if (pathname === '/api/history') {
         const accountId = url.searchParams.get('accountId') || '';
         const accounts = store.loadState()?.accounts || [];
@@ -167,6 +210,8 @@ function createRemoteViewServer({ store, distDir, getToken, getReadOnly = () => 
       return json(response, 404, { error: 'not_found' });
     }
 
+    if (request.method !== 'GET' && request.method !== 'HEAD') return json(response, 405, { error: 'method_not_supported' });
+
     const resource = pathname === '/' ? '/remote.html' : pathname;
     if (resource !== '/remote.html' && resource !== '/quota-desk.svg' && !/^\/(assets|logos)\/[\w.-]+$/.test(resource)) {
       return json(response, 404, { error: 'not_found' });
@@ -188,4 +233,4 @@ function createRemoteViewServer({ store, distDir, getToken, getReadOnly = () => 
   });
 }
 
-module.exports = { REMOTE_PORT, createRemoteViewServer, publicSnapshot, publicHistory };
+module.exports = { REMOTE_PORT, createRemoteViewServer, publicSnapshot, publicHistory, publicRemoteSettings, sanitizeRemoteSettingsPatch };

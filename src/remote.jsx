@@ -2,42 +2,58 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AlertCircle, ArrowUpRight, CircleGauge, Clock3, KeyRound, LockKeyhole, Moon, RefreshCw, Rows3, ShieldCheck, Sun, WifiOff } from 'lucide-react';
 import { HistoryView, StatusView } from './main.jsx';
+import { AppShell } from './app-shell';
 import { initialAccounts, providerCatalog } from './data';
 import './styles.css';
 import './remote.css';
 
-const TOKEN_KEY = 'quota-desk-remote-token-v1';
-const THEME_KEY = 'quota-desk-remote-theme-v1';
+document.documentElement.classList.add('remote-page');
+document.body.classList.add('remote-page');
 
-function initialToken() {
-  const fromLink = new URLSearchParams(location.hash.slice(1)).get('access');
-  if (fromLink) {
-    localStorage.setItem(TOKEN_KEY, fromLink);
-    history.replaceState(null, '', location.pathname + location.search);
-    return fromLink;
-  }
-  return localStorage.getItem(TOKEN_KEY) || (import.meta.env.DEV ? 'demo' : '');
+const TOKEN_KEY = 'quota-desk-remote-token-v1';
+const DEVICE_ID_KEY = 'quota-desk-remote-device-id-v1';
+const DEVICE_NAME_KEY = 'quota-desk-remote-device-name-v1';
+const THEME_KEY = 'quota-desk-remote-theme-v1';
+const MODE_KEY = 'quota-desk-remote-mode-v1';
+
+function readInitialConnection() {
+  const params = new URLSearchParams(location.hash.slice(1));
+  const pairingKey = params.get('pair') || '';
+  const legacyToken = params.get('access') || '';
+  if (pairingKey || legacyToken) history.replaceState(null, '', location.pathname + location.search);
+  if (legacyToken) localStorage.setItem(TOKEN_KEY, legacyToken);
+  return {
+    pairingKey,
+    token: pairingKey ? '' : (legacyToken || localStorage.getItem(TOKEN_KEY) || (import.meta.env.DEV ? 'demo' : '')),
+  };
 }
 
-async function requestJson(url, token) {
-  const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
-  if (response.status === 401) throw Object.assign(new Error('配对密钥已失效，请从电脑重新配对'), { unauthorized: true });
-  if (!response.ok) throw new Error(`读取失败（HTTP ${response.status}）`);
+const initialConnection = readInitialConnection();
+
+async function requestJson(url, token, options = {}) {
+  const response = await fetch(url, {
+    ...options,
+    headers: { ...options.headers, Authorization: `Bearer ${token}` },
+    cache: 'no-store',
+  });
+  if (response.status === 401) throw Object.assign(new Error('此设备的配对已失效或已被电脑移除，请重新扫描电脑端的配对信息'), { unauthorized: true });
+  if (!response.ok) {
+    let body = {};
+    try { body = await response.json(); } catch { /* The HTTP status still identifies the failure. */ }
+    const message = body.error === 'read_only' ? '远程查看固定为只读，无法保存这些设置'
+      : body.error === 'invalid_settings' ? '设置格式不正确，请检查后重试'
+        : body.error === 'settings_unavailable' ? '电脑端暂不支持远程保存设置'
+          : `读取失败（HTTP ${response.status}）`;
+    throw new Error(message);
+  }
   return response.json();
 }
 
-function accessKey(value) {
-  try {
-    const link = new URL(value);
-    const key = new URLSearchParams(link.hash.slice(1)).get('access');
-    if (key) return key;
-  } catch { /* Plain pairing keys are valid input too. */ }
-  return value;
-}
-
 const demoSnapshot = {
+  readOnly: true,
   lastSync: new Date().toISOString(),
   pollMinutes: 5,
+  settings: { alerts: true, pollMinutes: 5, reminderRules: [{ id: 'soon', label: '即将刷新且额度充足', beforeMinutes: 120, minRemaining: 50 }], periodSort5hRemaining: 0, periodSortLongRemaining: 0 },
   providers: providerCatalog,
   accounts: initialAccounts.map((account) => ({
     ...account,
@@ -77,39 +93,43 @@ const demoUsage = (account) => {
   };
 };
 
-function Pairing({ onConnect, message, theme, setTheme }) {
+function Pairing({ onConnect, pairingKey, message, theme, setTheme }) {
   const [input, setInput] = useState('');
+  const [deviceName, setDeviceName] = useState(() => localStorage.getItem(DEVICE_NAME_KEY) || defaultDeviceName());
   return <main className="remote-pair-page">
     <div className="remote-pair-card">
       <div className="remote-pair-top"><div className="remote-pair-icon"><LockKeyhole size={26} strokeWidth={1.7} /></div><button type="button" className="remote-pair-theme" onClick={() => setTheme((old) => old === 'dark' ? 'light' : 'dark')} aria-label={theme === 'dark' ? '切换亮色主题' : '切换暗色主题'}>{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</button></div>
       <div className="remote-eyebrow">QUOTA DESK · 额度查看</div>
       <h1>在这里查看你的额度</h1>
-      <p>在电脑端开启局域网访问并扫描配对二维码。另一台电脑也可以粘贴配对链接。</p>
-      <form onSubmit={(event) => { event.preventDefault(); if (input.trim()) onConnect(accessKey(input.trim())); }}>
-        <label htmlFor="pair-token">配对链接或密钥</label>
-        <div className="remote-pair-input"><KeyRound size={17} /><input id="pair-token" value={input} onChange={(event) => setInput(event.target.value)} placeholder="粘贴电脑端的配对链接或密钥" autoComplete="off" spellCheck="false" /></div>
+      <p>{pairingKey ? '已读取电脑端配对信息。给这台设备起个名称，然后完成配对。' : '在电脑端打开「设置 → 远程查看 → 配对信息」，扫描二维码；也可以粘贴配对信息。'}</p>
+      <form onSubmit={(event) => { event.preventDefault(); const value = pairingKey || input.trim(); if (value) onConnect(value, deviceName.trim()); }}>
+        {!pairingKey && <><label htmlFor="pair-token">配对信息</label><div className="remote-pair-input"><KeyRound size={17} /><input id="pair-token" value={input} onChange={(event) => setInput(event.target.value)} placeholder="粘贴电脑端二维码内容或配对密钥" autoComplete="off" spellCheck="false" /></div></>}
+        <label htmlFor="pair-device-name">设备名称</label>
+        <div className="remote-pair-input"><input id="pair-device-name" value={deviceName} onChange={(event) => setDeviceName(event.target.value)} maxLength={60} placeholder="例如：我的手机" autoComplete="off" /></div>
         {message && <div className="remote-inline-error" role="alert"><AlertCircle size={15} />{message}</div>}
-        <button type="submit" className="remote-primary-button" disabled={!input.trim()}>连接电脑 <ArrowUpRight size={16} /></button>
+        <button type="submit" className="remote-primary-button" disabled={(!pairingKey && !input.trim()) || !deviceName.trim()}>配对并连接 <ArrowUpRight size={16} /></button>
       </form>
-      <div className="remote-pair-foot"><ShieldCheck size={15} />额度由电脑采集 · 网页只读查看</div>
+      <div className="remote-pair-foot"><ShieldCheck size={15} />电脑授权后，此设备会获得独立的只读访问权限</div>
     </div>
   </main>;
 }
 
 function App() {
-  const [token, setToken] = useState(initialToken);
+  const [token, setToken] = useState(initialConnection.token);
+  const [pairingKey, setPairingKey] = useState(initialConnection.pairingKey);
   const [pairError, setPairError] = useState('');
   const [snapshot, setSnapshot] = useState(null);
-  const [loading, setLoading] = useState(Boolean(token));
+  const [loading, setLoading] = useState(Boolean(initialConnection.token));
   const [connectionError, setConnectionError] = useState('');
   const [selectedAccountId, setSelectedAccountId] = useState(null);
-  const [mode, setMode] = useState('rings');
+  const [mode, setMode] = useState(() => localStorage.getItem(MODE_KEY) || 'rings');
   const [now, setNow] = useState(Date.now());
   const [theme, setTheme] = useState(() => localStorage.getItem(THEME_KEY) || 'dark');
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
 
   useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem(THEME_KEY, theme); }, [theme]);
+  useEffect(() => { localStorage.setItem(MODE_KEY, mode); }, [mode]);
   useEffect(() => {
     if (!token) return undefined;
     let active = true;
@@ -149,7 +169,25 @@ function App() {
   }), [token]);
   window.quotaDesk = bridge;
 
-  const connect = (value) => { localStorage.setItem(TOKEN_KEY, value); setPairError(''); setLoading(true); setToken(value); };
+  const connect = async (value, deviceName) => {
+    const parsed = parsePairingInput(value);
+    setPairError('');
+    if (parsed.legacy) {
+      localStorage.setItem(TOKEN_KEY, parsed.pairingKey);
+      setPairingKey(''); setLoading(true); setToken(parsed.pairingKey);
+      return;
+    }
+    try {
+      const deviceId = localStorage.getItem(DEVICE_ID_KEY) || (crypto.randomUUID ? crypto.randomUUID() : `device-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      const response = await fetch('/api/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', body: JSON.stringify({ pairingKey: parsed.pairingKey, id: deviceId, name: deviceName }) });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.message || (result.error === 'pairing_key_invalid' ? '配对信息已重置或失效，请重新扫描电脑端当前的配对信息' : `配对失败（HTTP ${response.status}）`));
+      localStorage.setItem(TOKEN_KEY, result.token);
+      localStorage.setItem(DEVICE_ID_KEY, result.deviceId);
+      localStorage.setItem(DEVICE_NAME_KEY, result.deviceName || deviceName);
+      setPairingKey(''); setLoading(true); setToken(result.token);
+    } catch (error) { setPairError(error.message || '配对失败，请确认电脑端服务正在运行'); }
+  };
   const lastSync = snapshot?.lastSync;
   const accounts = (snapshot?.accounts || []).map((account) => ({
     ...account,
@@ -162,22 +200,25 @@ function App() {
   const providers = snapshot?.providers || providerCatalog;
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
   const selectedProvider = providers.find((provider) => provider.id === selectedAccount?.providerId);
-  const activeCount = accounts.filter((account) => !account.disabled).length;
-  const readOnly = snapshot?.readOnly !== false;
+  const readOnly = true;
 
-  if (!token) return <Pairing onConnect={connect} message={pairError} theme={theme} setTheme={setTheme} />;
-  return <div className="remote-app remote-shell">
-    <header className="titlebar remote-titlebar"><span className="titlebar-drag"><img src="/quota-desk.svg" alt="" /><b>Quota Desk</b></span><div className="titlebar-controls"><span className="last-checked" title="最后一次额度检查时间"><Clock3 size={11} />{lastSync ? new Date(lastSync).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '尚未检查'}</span><button type="button" className="control-solo" onClick={() => location.reload()} title="重新读取电脑数据" aria-label="重新读取电脑数据"><RefreshCw size={13} /></button><div className="overview-controls" aria-label="额度展示方式">{[['rings', '账号总览', CircleGauge], ['rows', '行式明细', Rows3], ['periods', '周期明细', Clock3]].map(([key, label, Icon]) => <button type="button" key={key} className={mode === key && !selectedAccountId ? 'active' : ''} onClick={() => { setSelectedAccountId(null); setMode(key); }} title={label} aria-label={label}><Icon size={13} /></button>)}</div><button type="button" className="remote-title-theme" onClick={() => setTheme((old) => old === 'dark' ? 'light' : 'dark')} aria-label={theme === 'dark' ? '切换亮色主题' : '切换暗色主题'}>{theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}</button></div></header>
+  if (!token || pairingKey) return <Pairing pairingKey={pairingKey} onConnect={connect} message={pairError} theme={theme} setTheme={setTheme} />;
+  const shellControls = <>
+    <span className="last-checked" title="最后一次额度检查时间"><Clock3 size={11} />{lastSync ? new Date(lastSync).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '尚未检查'}</span>
+    <button type="button" className="control-solo" onClick={() => location.reload()} title="重新读取电脑数据" aria-label="重新读取电脑数据"><RefreshCw size={13} /></button>
+    <div className="overview-controls" aria-label="额度展示方式">{[['rings', '账号总览', CircleGauge], ['rows', '行式明细', Rows3], ['periods', '周期明细', Clock3]].map(([key, label, Icon]) => <button type="button" key={key} className={mode === key && !selectedAccountId ? 'active' : ''} onClick={() => { setSelectedAccountId(null); setMode(key); }} title={label} aria-label={label}><Icon size={13} /></button>)}</div>
+    <button type="button" className="remote-title-theme" onClick={() => setTheme((old) => old === 'dark' ? 'light' : 'dark')} aria-label={theme === 'dark' ? '切换亮色主题' : '切换暗色主题'}>{theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}</button>
+  </>;
+  return <AppShell variant="remote" controls={shellControls}>
     <main className="main-shell content-area remote-main">
       {connectionError && <div className="remote-banner offline" role="status"><WifiOff size={18} /><span>{connectionError}{snapshot ? '，下方保留本次读取的数据。' : '。'}</span></div>}
       {loading && !snapshot ? <div className="remote-loading"><RefreshCw size={23} className="spinning" /><span>正在读取电脑上的额度</span></div> : snapshot ? <>
         {selectedAccount ? <HistoryView key={selectedAccount.id} account={selectedAccount} provider={selectedProvider} onBack={() => setSelectedAccountId(null)} readOnly wasteWindowsOverride={selectedAccount.wasteWindows} /> : <>
-          <div className="view-intro overview-title remote-view-title"><h1>{mode === 'rings' ? '账号总览' : mode === 'rows' ? '行式明细' : '周期明细'}</h1><span className="health-summary">{activeCount} 个账号 · {readOnly ? '只读访问' : '网页交互访问'}</span></div>
-          <StatusView accounts={accounts} providers={providers} mode={mode} readOnly onOpenHistory={(account) => setSelectedAccountId(account.id)} lastSync={lastSync} reminderRules={[]} testResults={{}} />
+          <StatusView accounts={accounts} providers={providers} mode={mode} readOnly onOpenHistory={(account) => setSelectedAccountId(account.id)} lastSync={lastSync} reminderRules={snapshot.settings?.alerts === false ? [] : snapshot.settings?.reminderRules || []} sortWeights={{ fiveHourRemaining: snapshot.settings?.periodSort5hRemaining, otherRemaining: snapshot.settings?.periodSortLongRemaining }} testResults={{}} />
         </>}
       </> : !loading && <div className="remote-empty"><WifiOff size={23} /><strong>暂时无法读取额度</strong><span>请确认电脑正在运行并可通过配对地址访问</span></div>}
     </main>
-  </div>;
+  </AppShell>;
 }
 
 const root = document.getElementById('remote-root');
