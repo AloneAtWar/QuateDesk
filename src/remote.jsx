@@ -19,13 +19,28 @@ const MODE_KEY = 'quota-desk-remote-mode-v1';
 function readInitialConnection() {
   const params = new URLSearchParams(location.hash.slice(1));
   const pairingKey = params.get('pair') || '';
-  const legacyToken = params.get('access') || '';
-  if (pairingKey || legacyToken) history.replaceState(null, '', location.pathname + location.search);
-  if (legacyToken) localStorage.setItem(TOKEN_KEY, legacyToken);
+  if (pairingKey || params.has('access')) history.replaceState(null, '', location.pathname + location.search);
   return {
     pairingKey,
-    token: pairingKey ? '' : (legacyToken || localStorage.getItem(TOKEN_KEY) || (import.meta.env.DEV ? 'demo' : '')),
+    token: pairingKey ? '' : (localStorage.getItem(TOKEN_KEY) || (import.meta.env.DEV ? 'demo' : '')),
   };
+}
+
+function parsePairingInput(value) {
+  const input = String(value || '').trim();
+  if (/^https?:\/\//i.test(input)) {
+    let url;
+    try { url = new URL(input); }
+    catch { throw new Error('配对链接格式无效，请重新扫描电脑端二维码'); }
+    if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password || !['', '/', '/remote.html'].includes(url.pathname)) {
+      throw new Error('配对链接格式无效，请重新扫描电脑端二维码');
+    }
+    const pairingKey = new URLSearchParams(url.hash.slice(1)).get('pair') || '';
+    if (!pairingKey) throw new Error('配对链接中没有配对密钥，请扫描电脑端当前的二维码');
+    return { pairingKey };
+  }
+  if (/^[A-Za-z0-9_-]{32,128}$/.test(input)) return { pairingKey: input };
+  throw new Error('配对信息格式无效，请扫描电脑端二维码或粘贴配对密钥');
 }
 
 const initialConnection = readInitialConnection();
@@ -172,11 +187,6 @@ function App() {
   const connect = async (value, deviceName) => {
     const parsed = parsePairingInput(value);
     setPairError('');
-    if (parsed.legacy) {
-      localStorage.setItem(TOKEN_KEY, parsed.pairingKey);
-      setPairingKey(''); setLoading(true); setToken(parsed.pairingKey);
-      return;
-    }
     try {
       const deviceId = localStorage.getItem(DEVICE_ID_KEY) || (crypto.randomUUID ? crypto.randomUUID() : `device-${Date.now()}-${Math.random().toString(36).slice(2)}`);
       const response = await fetch('/api/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', body: JSON.stringify({ pairingKey: parsed.pairingKey, id: deviceId, name: deviceName }) });

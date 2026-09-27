@@ -58,7 +58,6 @@ class DesktopStore {
     const port = Number(saved.port);
     return {
       enabled: Boolean(saved.enabled),
-      token: decrypt(saved.token),
       pairingKey: decrypt(saved.pairingKey),
       devices: Array.isArray(saved.devices) ? saved.devices.filter((device) => device && typeof device.id === 'string' && /^[\w-]{1,128}$/.test(device.id) && /^[a-f\d]{64}$/i.test(device.tokenHash || '')).map((device) => ({
         id: device.id,
@@ -70,7 +69,7 @@ class DesktopStore {
     };
   }
 
-  saveRemoteAccess({ enabled, token = '', pairingKey = '', devices = [], port = REMOTE_PORT }) {
+  saveRemoteAccess({ enabled, pairingKey = '', devices = [], port = REMOTE_PORT }) {
     if (!safeStorage.isEncryptionAvailable()) throw new Error('系统凭据加密不可用，无法启用远程查看');
     const normalizedPort = Number(port);
     if (!Number.isInteger(normalizedPort) || normalizedPort < 1024 || normalizedPort > 65535) throw new Error('访问端口必须是 1024–65535 之间的整数');
@@ -82,7 +81,6 @@ class DesktopStore {
     }));
     writeJson(this.remoteAccessPath, {
       enabled: Boolean(enabled),
-      token: token ? safeStorage.encryptString(String(token)).toString('base64') : '',
       pairingKey: pairingKey ? safeStorage.encryptString(String(pairingKey)).toString('base64') : '',
       devices: safeDevices,
       port: normalizedPort,
@@ -91,13 +89,6 @@ class DesktopStore {
 
   isRemoteTokenAuthorized(token) {
     const config = this.loadRemoteAccess();
-    const matches = (expected) => {
-      if (!expected) return false;
-      const supplied = Buffer.from(String(token || ''));
-      const stored = Buffer.from(String(expected));
-      return supplied.length > 0 && supplied.length === stored.length && crypto.timingSafeEqual(supplied, stored);
-    };
-    if (matches(config.token)) return true;
     const digest = crypto.createHash('sha256').update(String(token || '')).digest('hex');
     return config.devices.some((device) => {
       const left = Buffer.from(digest, 'hex');
@@ -123,19 +114,13 @@ class DesktopStore {
 
   removeRemoteDevice(id) {
     const config = this.loadRemoteAccess();
-    if (id === 'legacy') {
-      this.saveRemoteAccess({ ...config, token: '' });
-    } else {
-      this.saveRemoteAccess({ ...config, devices: config.devices.filter((device) => device.id !== id) });
-    }
+    this.saveRemoteAccess({ ...config, devices: config.devices.filter((device) => device.id !== id) });
     return this.listRemoteDevices();
   }
 
   listRemoteDevices() {
     const config = this.loadRemoteAccess();
-    const devices = config.devices.map(({ id, name, pairedAt }) => ({ id, name, pairedAt, legacy: false }));
-    if (config.token) devices.unshift({ id: 'legacy', name: '旧版设备（共用配对密钥）', pairedAt: null, legacy: true });
-    return devices;
+    return config.devices.map(({ id, name, pairedAt }) => ({ id, name, pairedAt }));
   }
 
   // 周期浪费档案：{ accountId: [{ window, from, end, kind, observedAt, remaining, amount, limit, gapMs, reliable }] }

@@ -123,8 +123,7 @@ async function startRemoteView() {
   if (remoteViewServer) return;
   const config = store.loadRemoteAccess();
   if (!config.enabled) return;
-  // Existing installs used the shared access token as their only credential.
-  // Create the new-device invitation key while retaining that token for compatibility.
+  // Create the device-pairing invitation key when remote access is first enabled.
   if (!config.pairingKey) {
     config.pairingKey = crypto.randomBytes(32).toString('base64url');
     store.saveRemoteAccess(config);

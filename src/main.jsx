@@ -1477,6 +1477,8 @@ function RemoteViewSettings() {
   const activeLanUrl = lanUrls.includes(selectedLanUrl) ? selectedLanUrl : lanUrls[0] || '';
   const portNumber = Number(portDraft);
   const canSavePort = Number.isInteger(portNumber) && portNumber >= 1024 && portNumber <= 65535 && portNumber !== status?.port;
+  const pairedDevices = status?.devices || [];
+  const hasPairedDevices = pairedDevices.length > 0;
   const action = async (name, operation) => {
     setBusy(name); setError('');
     try { setStatus(await operation()); }
@@ -1503,8 +1505,7 @@ function RemoteViewSettings() {
     finally { setBusy(''); }
   };
   const removeDevice = async (device) => {
-    const detail = device.legacy ? '删除后，所有仍在使用旧版共用密钥的设备都会断开。' : `删除后「${device.name}」将无法继续访问电脑。`;
-    if (!window.confirm(`${detail}\n\n确定删除此配对设备吗？`)) return;
+    if (!window.confirm(`移除后「${device.name}」将无法继续访问电脑。\n\n确定移除此设备吗？`)) return;
     await action(`remove:${device.id}`, () => bridge.removeRemoteViewDevice(device.id));
   };
   if (!bridge?.getRemoteViewStatus) return <small className="drawer-help">远程查看设置仅在桌面应用中可用。</small>;
@@ -1519,27 +1520,35 @@ function RemoteViewSettings() {
     {status?.enabled && <>
       <div className={`remote-setting-status ${status.running ? 'ok' : 'fail'}`}><i />{status.running ? `运行中 · 端口 ${status.port}` : '局域网服务未启动'}</div>
       {status.error && <small className="remote-setting-error">{status.error}</small>}
-      {pairingLink && <div className="remote-setting-actions"><button type="button" className="primary-button remote-qr-button" onClick={() => setQrOpen(true)}><QrCode size={15} />配对信息</button><button type="button" className="outline-button remote-qr-button" disabled={!previewLink} onClick={() => bridge.openExternal(previewLink)}><Eye size={15} />预览</button></div>}
       {status.running && !pairingLink && <div className="remote-setting-hint">暂未发现局域网地址，请确认电脑已连接 Wi-Fi 或以太网。</div>}
       <small className="drawer-help">电脑需保持运行。跨网络访问由你使用的 VPN 或内网穿透提供。</small>
     </>}
-    <button type="button" className="outline-button full" onClick={() => bridge.openExternal('https://github.com/AloneAtWar/QuotaDesk-Android/releases/latest')}><ExternalLink size={14} />手机版</button>
-    {status && <section className="remote-paired-devices">
-      <div className="remote-paired-devices-head"><span><b>已配对设备</b><small>重置配对密钥不会移除这些设备</small></span><span>{(status.devices || []).length} 台</span></div>
-      {(status.devices || []).length === 0 ? <div className="remote-settings-empty">还没有配对设备</div> : (status.devices || []).map((device) => <div className="remote-paired-device" key={device.id}>
-        <span><b title={device.name}>{device.name}</b><small>{device.legacy ? '兼容旧版共用密钥' : device.pairedAt ? `配对于 ${new Date(device.pairedAt).toLocaleString('zh-CN')}` : '旧版设备'}</small></span>
-        <button type="button" className="icon-button danger" disabled={Boolean(busy)} title="删除配对设备" aria-label={`删除配对设备 ${device.name}`} onClick={() => removeDevice(device)}><Trash2 size={14} /></button>
-      </div>)}
-    </section>}
+    <div className="remote-mobile-download">手机可以通过 <a href="https://github.com/AloneAtWar/QuotaDesk-Android/releases/latest" onClick={(event) => { event.preventDefault(); bridge.openExternal(event.currentTarget.href); }}>此处</a> 下载 Android 安装包。</div>
+    {status && (pairingLink || hasPairedDevices) && <div className={`remote-setting-actions${pairingLink ? '' : ' single'}`}>
+      <button type="button" className="primary-button remote-qr-button" onClick={() => setQrOpen(true)}><QrCode size={15} />配对信息</button>
+      {pairingLink && <button type="button" className="outline-button remote-qr-button" disabled={!previewLink} onClick={() => bridge.openExternal(previewLink)}><Eye size={15} />预览</button>}
+    </div>}
     {error && !qrOpen && <div className="remote-setting-error" role="alert">{error}</div>}
-    {qrOpen && pairingLink && <div className="modal-backdrop remote-qr-backdrop" onClick={() => setQrOpen(false)}><section className="modal compact-modal remote-qr-modal" role="dialog" aria-modal="true" aria-labelledby="remote-qr-title" onClick={(event) => event.stopPropagation()}>
+    {qrOpen && <div className="modal-backdrop remote-qr-backdrop" onClick={() => setQrOpen(false)}><section className="modal compact-modal remote-qr-modal" role="dialog" aria-modal="true" aria-labelledby="remote-qr-title" onClick={(event) => event.stopPropagation()}>
       <div className="modal-head"><div><h2 id="remote-qr-title">配对信息</h2><small>使用 Quota Desk 手机 App 或其他设备扫描</small></div></div>
-      {lanUrls.length > 1 && <label className="field remote-qr-address-field"><span>访问设备</span><select value={activeLanUrl} onChange={(event) => setSelectedLanUrl(event.target.value)}>{lanUrls.map((url) => <option key={url} value={url}>{new URL(url).host}</option>)}</select></label>}
-      <div className="remote-setting-qr">{qrImage && <img src={qrImage} alt="配对信息二维码" />}</div>
-      <div className="remote-setting-address" title={activeLanUrl}>{activeLanUrl ? new URL(activeLanUrl).host : ''}</div>
+      {pairingLink ? <>
+        {lanUrls.length > 1 && <label className="field remote-qr-address-field"><span>访问设备</span><select value={activeLanUrl} onChange={(event) => setSelectedLanUrl(event.target.value)}>{lanUrls.map((url) => <option key={url} value={url}>{new URL(url).host}</option>)}</select></label>}
+        <div className="remote-setting-qr">{qrImage && <img src={qrImage} alt="配对信息二维码" />}</div>
+      </> : <div className="remote-qr-unavailable">启用局域网访问并连接网络后，可以生成新的配对二维码。</div>}
+      <section className="remote-paired-devices">
+        <div className="remote-paired-devices-head"><span><b>已配对设备</b><small>重置配对密钥不会移除这些设备</small></span><span>{pairedDevices.length} 台</span></div>
+        {pairedDevices.length === 0 ? <div className="remote-settings-empty">还没有配对设备</div> : pairedDevices.map((device) => {
+          const pairedAt = Date.parse(device.pairedAt || '');
+          const pairedTime = Number.isFinite(pairedAt) ? new Date(pairedAt).toLocaleString('zh-CN') : '配对时间未知';
+          return <div className="remote-paired-device" key={device.id}>
+            <span><b title={device.name}>{device.name}</b><small>配对成功 · {pairedTime}</small></span>
+            <button type="button" className="icon-button danger" disabled={Boolean(busy)} title="移除配对设备" aria-label={`移除配对设备 ${device.name}`} onClick={() => removeDevice(device)}><Trash2 size={14} /></button>
+          </div>;
+        })}
+      </section>
       {error && <small className="remote-setting-error" role="alert">{error}</small>}
       {confirmRotate ? <div className="remote-qr-reset-confirm"><span>只影响之后添加的设备。已配对设备仍可访问。</span><div><button type="button" className="remote-qr-reset-danger" disabled={Boolean(busy)} onClick={resetPairingKey}>{busy === 'rotate' ? '正在重置…' : '确认重置'}</button><button type="button" className="remote-qr-reset-cancel" onClick={() => setConfirmRotate(false)}>取消</button></div></div> : <button type="button" className="remote-setting-link remote-qr-reset" onClick={() => setConfirmRotate(true)}>重置配对密钥</button>}
-      <small className="drawer-help">配对链接只保存在二维码中；二维码会包含本次配对密钥。</small>
+      {pairingLink && <small className="drawer-help">配对链接只保存在二维码中；二维码会包含本次配对密钥。</small>}
     </section></div>}
   </div>;
 }
