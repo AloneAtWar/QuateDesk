@@ -6,7 +6,7 @@
 }
 * { box-sizing: border-box; }
 html, body, #remote-root { min-height: 100%; margin: 0; }
-body { min-width: 320px; background: var(--r-bg); color: var(--r-text); font-family: 'Manrope', 'Noto Sans SC', 'Microsoft YaHei', sans-serif; -webkit-font-smoothing: antialiased; }
+body { min-width: 0; overflow-x: hidden; background: var(--r-bg); color: var(--r-text); font-family: 'Manrope', 'Noto Sans SC', 'Microsoft YaHei', sans-serif; -webkit-font-smoothing: antialiased; }
 button, input { font: inherit; }
 button { cursor: pointer; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--r-accent); outline-offset: 3px; }
@@ -199,7 +199,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--r-accent); 
   .remote-panel-content { padding: 18px 14px 28px; }
 }
 
-.remote-shell { min-height: 100dvh; }
+.remote-shell { min-height: 100dvh; overflow-x: clip; }
 .remote-titlebar { position: sticky; top: 0; z-index: 15; height: 40px; padding: 0 12px; }
 .remote-titlebar .titlebar-drag { min-width: 95px; }
 .remote-titlebar .titlebar-controls { gap: 6px; }
@@ -221,9 +221,16 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--r-accent); 
 .remote-history-view { max-width: 760px; margin: 0 auto; }
 .remote-history-view .trend-view { height: auto; min-height: 0; }
 .remote-history-view .trend-view .chart-legend { margin-top: 0; }
-.remote-history-view .history-head { min-height: 54px; }
+.remote-history-view .history-head { min-height: 54px; flex-wrap: wrap; }
+.remote-history-tools { flex: 0 0 auto; display: flex; align-items: center; gap: 9px; }
+.remote-history-tabpanel { min-width: 0; }
 .remote-history-label { flex: 0 0 auto; color: var(--faint); font-size: 10px; }
 .remote-history-view .back-button { display: grid; place-items: center; }
+.remote-waste-view .waste-row { gap: 6px; }
+.remote-waste-view .waste-col { appearance: none; border: 0; padding: 0; color: inherit; background: transparent; cursor: pointer; }
+.remote-provider-usage .provider-heatmap-scroll { min-width: 0; }
+.remote-provider-usage .provider-heatmap-grid button { position: relative; }
+.remote-provider-usage .provider-heatmap-grid button::after { position: absolute; inset: -2px; content: ''; }
 .remote-usage-chart { padding: 10px 8px 8px; }
 .remote-usage-chart .chart-detail { min-height: 28px; }
 .remote-usage-chart .chart-detail-main { min-width: 0; }
@@ -251,16 +258,30 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--r-accent); 
   .remote-view-title { margin: 0 -10px 9px !important; padding: 8px 10px 6px !important; }
   .remote-history-inline .remote-history-panel { border-radius: 10px; }
   .remote-history-view .history-head { padding: 9px 11px; }
-  .remote-history-view .history-head .account-identity { flex: 1; }
+  .remote-history-view .history-head .account-identity { flex: 1 1 180px; }
+  .remote-history-tools { width: 100%; justify-content: space-between; }
+  .remote-history-view .history-view-switch { flex: 0 0 auto; }
   .remote-history-label { display: none; }
   .remote-history-view .range-control button { min-width: 26px; min-height: 25px; font-size: 10px; }
   .remote-history-view .chart-legend { padding: 7px 11px 8px; }
   .remote-history-view .chart-legend button { min-height: 30px; font-size: 10px; }
+  .remote-waste-view .waste-row { align-items: flex-start; flex-direction: column; }
+  .remote-waste-view .waste-stats { width: 100%; }
+  .remote-provider-usage { padding-right: 7px; padding-left: 7px; }
+  .remote-provider-usage .provider-usage-summary { gap: 4px; }
+  .remote-provider-usage .provider-stat { gap: 4px; padding: 4px 5px; }
+  .remote-provider-usage .stat-icon { width: 18px; height: 18px; }
+  .remote-provider-usage .provider-stat strong { font-size: 10px; }
+  .remote-provider-usage .provider-day-card { padding-right: 5px; padding-left: 5px; }
+  .remote-provider-usage .day-cell + .day-cell { padding-left: 6px; }
 }
 @media (max-width: 390px) {
   .remote-titlebar .last-checked { display: none; }
   .remote-view-title .health-summary { max-width: 195px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .remote-history-inline .remote-panel-content { padding: 14px 10px 20px; }
+}
+@media (max-width: 520px) {
+  .remote-provider-usage .provider-usage-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 760px) {
   .remote-rows .account-window-row { display: block; height: auto; min-height: 0; padding: 14px; overflow: visible; }

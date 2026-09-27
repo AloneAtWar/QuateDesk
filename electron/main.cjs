@@ -144,6 +144,8 @@ async function startRemoteView() {
         const days = historyRetentionDays();
         return days === 0 ? points : points.filter((point) => Date.parse(point.at) >= Date.now() - days * 86_400_000);
       },
+      getCycles: (accountId) => store.getCycles(accountId),
+      getUsage: (accountId) => queryProviderUsage(accountId, { days: 365 }),
     });
     remoteViewError = '';
   } catch (error) {

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AlertCircle, ArrowLeft, ArrowUpRight, ChevronDown, ChevronRight, CircleGauge, Clock3, KeyRound, LockKeyhole, Moon, RefreshCw, Rows3, ShieldCheck, Sun, WifiOff } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ArrowUpRight, Bot, ChevronDown, ChevronRight, CircleGauge, Clock3, Flame, History, KeyRound, LockKeyhole, Moon, RefreshCw, Rows3, ShieldCheck, Sun, TrendingUp, Trophy, WifiOff, Zap } from 'lucide-react';
 import { initialAccounts, providerCatalog, windowCatalog } from './data';
 import { ConcentricRings, durationOrder } from './quota-rings';
 import './styles.css';
@@ -66,7 +66,13 @@ const demoSnapshot = {
   lastSync: new Date().toISOString(),
   pollMinutes: 5,
   providers: providerCatalog,
-  accounts: initialAccounts.map((account) => ({ ...account, provider: providerMap.get(account.providerId)?.name || account.providerId })),
+  accounts: initialAccounts.map((account) => ({
+    ...account,
+    provider: providerMap.get(account.providerId)?.name || account.providerId,
+    usageSupported: ['deepseek', 'zai', 'codex', 'minimax'].includes(account.providerId),
+    usageStatus: account.providerId === 'zai' ? 'connected' : 'disconnected',
+    wasteWindows: (account.windows || []).map((window) => window.key).filter((key) => ['weekly', 'monthly'].includes(key)),
+  })),
 };
 const demoHistory = (account, days) => {
   const count = days === 1 ? 36 : 76;
@@ -80,6 +86,19 @@ const demoHistory = (account, days) => {
       }])),
     };
   }) };
+};
+const demoUsage = (account) => {
+  const today = new Date();
+  const days = Array.from({ length: 365 }, (_, index) => {
+    const date = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - (364 - index))).toISOString().slice(0, 10);
+    const tokens = Math.round((8 + (Math.sin(index * .17) + 1) * 13 + (Math.cos(index * .037) + 1) * 10) * 1_000_000);
+    return { date, cost: Number((tokens / 1_000_000 * .72).toFixed(2)), tokens, requests: Math.round(tokens / 7200), currency: '¥' };
+  });
+  return {
+    provider: account.providerId, metric: 'cost', currency: '¥',
+    summary: { totalCost: days.reduce((sum, day) => sum + day.cost, 0), totalTokens: days.reduce((sum, day) => sum + day.tokens, 0), peakDailyCost: Math.max(...days.map((day) => day.cost)), peakDailyTokens: Math.max(...days.map((day) => day.tokens)), currentStreakDays: 4, longestStreakDays: 27 },
+    coverage: { timezoneOffsetSec: 8 * 60 * 60, cost: { complete: true }, tokens: { complete: true } }, days,
+  };
 };
 
 function ProviderMark({ id, name, providerInfo }) {
@@ -163,6 +182,144 @@ function PeriodsView({ accounts, providerInfo, onHistory }) {
 const trendColors = { five_hour: 'var(--cyan)', daily: 'var(--sky)', weekly: 'var(--violet)', monthly: 'var(--coral)', balance: 'var(--green)', gemini_pro: 'var(--sky)', gemini_flash: 'var(--cyan)', gemini_flash_lite: 'var(--green-deep)' };
 const trendColor = (key, index) => trendColors[key] || ['var(--cyan)', 'var(--violet)', 'var(--coral)', 'var(--green)'][index % 4];
 const sampleValue = (sample) => sample?.unit === '%' ? Number(sample.remaining) : Number(sample?.amount ?? sample?.remaining);
+const shortNumber = (value) => value != null && Number.isFinite(Number(value)) ? new Intl.NumberFormat('zh-CN', { notation: 'compact', maximumFractionDigits: 1 }).format(Number(value)) : '—';
+const wasteDay = (value) => { const date = new Date(value); return `${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`; };
+const wasteStart = (end, key) => { const date = new Date(end); if (key === 'monthly') date.setMonth(date.getMonth() - 1); else date.setDate(date.getDate() - 7); return date.toISOString(); };
+
+function RemoteWasteView({ account, token }) {
+  const windows = account.wasteWindows || [];
+  const [curWindow, setCurWindow] = useState(windows[0] || 'weekly');
+  const [cycles, setCycles] = useState(null);
+  const [selected, setSelected] = useState(null);
+  useEffect(() => {
+    let active = true;
+    requestJson(`/api/cycles?accountId=${encodeURIComponent(account.id)}`, token)
+      .then((result) => { if (active) setCycles(result.cycles || []); })
+      .catch(() => { if (active) setCycles([]); });
+    return () => { active = false; };
+  }, [account.id, token]);
+  useEffect(() => { if (!windows.includes(curWindow) && windows.length) setCurWindow(windows[0]); }, [windows, curWindow]);
+  const windowCycles = (cycles || []).filter((cycle) => cycle.window === curWindow).sort((a, b) => Date.parse(a.end) - Date.parse(b.end));
+  const meter = account.windows?.find((item) => item.key === curWindow);
+  const nowCycle = meter?.resetAt && Date.parse(meter.resetAt) > Date.now() && !account.disabled
+    ? { now: true, remaining: clamp(meter.remaining, 0, 100), from: wasteStart(meter.resetAt, curWindow), end: meter.resetAt }
+    : null;
+  const shown = [...windowCycles, ...(nowCycle ? [nowCycle] : [])];
+  const reliable = windowCycles.filter((cycle) => cycle.reliable && cycle.kind === 'natural');
+  const average = reliable.length ? reliable.reduce((sum, cycle) => sum + Number(cycle.remaining || 0), 0) / reliable.length : null;
+  const total = reliable.reduce((sum, cycle) => sum + Number(cycle.remaining || 0), 0) / 100;
+  const detail = selected && (selected.now
+    ? `${wasteDay(selected.from)} → ${wasteDay(selected.end)}（进行中） · 剩余 ${Math.round(selected.remaining)}% · ${resetLabel(selected.end)} 后重置`
+    : `${wasteDay(selected.from)} → ${wasteDay(selected.end)} · ${selected.kind === 'early' ? '提前重置' : selected.reliable ? `浪费 ${Math.round(selected.remaining)}%` : `浪费 ≤${Math.round(selected.remaining)}%（可能失真）`} · 记录于 ${timeLabel(selected.observedAt)}`);
+  const softColor = curWindow === 'monthly' ? 'var(--coral)' : 'var(--violet)';
+  return <div className="waste-view remote-waste-view">
+    <div className="waste-row">{windows.length >= 2 ? <div className="seg-control">{windows.map((key) => <button type="button" key={key} className={key === curWindow ? 'active' : ''} onClick={() => { setCurWindow(key); setSelected(null); }}>{trendLabel({ key })} 额度</button>)}</div> : <span className="waste-label">{trendLabel({ key: curWindow })} 额度 · 浪费统计</span>}<span className="waste-stats"><span>{windowCycles.length} 个周期</span><span>平均浪费 <b>{average == null ? '—' : `${average.toFixed(0)}%`}</b>（{reliable.length} 可靠）</span><span>累计 <b>{reliable.length ? `${Math.round(total * 100) / 100}` : '—'}</b> 倍额度</span></span></div>
+    <div className="chart-detail waste-detail">{detail || <span className="chart-detail-hint">选择柱状图查看周期详情</span>}</div>
+    <div className="waste-scroll"><div className={`waste-plot ${curWindow === 'monthly' ? 'mo' : 'wk'}`}>
+      {[25, 50, 75].map((value) => <div key={value} className="waste-gridline" style={{ bottom: `${value}%` }} />)}
+      {average != null && <div className="waste-avg" style={{ bottom: `${Math.min(100, average)}%` }}><em>平均 {average.toFixed(0)}%</em></div>}
+      {!shown.length && <div className="waste-empty-hint"><span>{cycles === null ? '正在读取周期历史…' : '还没有已完成的周期'}</span><span>第一个周期重置后自动生成统计</span></div>}
+      {shown.map((cycle, index) => <button type="button" key={cycle.now ? 'now' : `${cycle.end}-${index}`} className={`waste-col ${cycle.now ? 'now' : cycle.kind === 'early' ? 'early' : !cycle.reliable ? 'bad' : ''} ${selected === cycle ? 'hot' : ''}`} title={`${wasteDay(cycle.from || wasteStart(cycle.end, curWindow))} → ${wasteDay(cycle.end)}`} onClick={() => setSelected(cycle)}><span className="waste-bar" style={{ height: `${Math.max(2, clamp(cycle.remaining, 0, 100))}%` }} /></button>)}
+    </div><div className={`waste-x-labels ${curWindow === 'monthly' ? 'mo' : 'wk'}`}>{shown.map((cycle, index) => <span key={cycle.now ? 'now' : `${cycle.end}-${index}`} className="waste-x-cell">{shown.length <= 6 || index % Math.ceil(shown.length / 12) === 0 ? `${wasteDay(cycle.from || wasteStart(cycle.end, curWindow))}→${wasteDay(cycle.end)}` : ''}</span>)}</div></div>
+    <div className="chart-legend waste-legend"><span><i style={{ background: softColor }} />浪费率</span><span><i style={{ background: `repeating-linear-gradient(-45deg, color-mix(in srgb, ${softColor} 30%, transparent) 0 3px, transparent 3px 6px)` }} />可能失真</span><span><i className="swatch-early" />提前重置</span><span><i className="swatch-now" />进行中</span><span className="legend-right">{windowCycles.length - reliable.length} 个周期不计入平均</span></div>
+  </div>;
+}
+
+function RemoteUsageView({ account, token }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(account.usageStatus === 'connected');
+  const [selectedDate, setSelectedDate] = useState('');
+  const heatmapRef = useRef(null);
+  const [cellPx, setCellPx] = useState(8);
+  useEffect(() => {
+    if (account.usageStatus !== 'connected') { setLoading(false); return undefined; }
+    let active = true;
+    setLoading(true); setError('');
+    (import.meta.env.DEV && token === 'demo' ? Promise.resolve(demoUsage(account)) : requestJson(`/api/usage?accountId=${encodeURIComponent(account.id)}`, token))
+      .then((result) => { if (active) { setData(result); setSelectedDate((old) => result.days?.some((day) => day.date === old) ? old : result.days?.at(-1)?.date || ''); } })
+      .catch((reason) => { if (active) setError(reason.message === '读取失败（HTTP 409）' ? '请先在桌面端连接该厂商的官方用量' : reason.message); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [account.id, account.usageStatus, token]);
+  const days = [...(data?.days || [])].filter((day) => /^\d{4}-\d{2}-\d{2}$/.test(day.date)).sort((a, b) => a.date.localeCompare(b.date));
+  const first = days[0]?.date?.split('-').map(Number) || [];
+  const leading = first.length === 3 ? (new Date(Date.UTC(first[0], first[1] - 1, first[2])).getUTCDay() + 6) % 7 : 0;
+  const cells = [...Array(leading).fill(null), ...days];
+  const weekCount = Math.max(1, Math.ceil(cells.length / 7));
+  const monthMarkers = [];
+  let previousMonth = '';
+  cells.forEach((day, index) => { if (!day) return; const month = day.date.slice(0, 7); if (month === previousMonth) return; previousMonth = month; monthMarkers.push({ key: month, label: `${Number(month.slice(5))}月`, column: Math.floor(index / 7) + 1 }); });
+  const shownMonthMarkers = cellPx < 6 ? monthMarkers.filter((_item, index) => index % 2 === 0 || index === monthMarkers.length - 1) : monthMarkers;
+  useEffect(() => {
+    const el = heatmapRef.current; if (!el || !weekCount) return undefined;
+    const measure = () => setCellPx(Math.min(12, Math.max(4, Math.floor((el.clientWidth - 30) / weekCount))));
+    measure();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(measure); observer.observe(el); return () => observer.disconnect();
+  }, [weekCount]);
+  const hasCost = days.some((day) => day.cost != null); const metric = hasCost ? 'cost' : 'tokens';
+  const value = (day, key) => key === 'cost' ? (day?.cost == null ? '—' : `${day?.currency || data?.currency || ''}${Number(day.cost).toFixed(2)}`) : `${shortNumber(day?.tokens)} Token`;
+  const level = (day) => { if (day?.[metric] == null) return 'missing'; const number = Number(day[metric]); if (!Number.isFinite(number)) return 'missing'; if (number <= 0) return '0'; if (metric === 'tokens') return number < 10_000_000 ? '1' : number < 30_000_000 ? '2' : number < 80_000_000 ? '3' : '4'; return number < 30 ? '1' : number < 100 ? '2' : number < 250 ? '3' : '4'; };
+  const selected = days.find((day) => day.date === selectedDate);
+  const selectedIndex = selected ? days.indexOf(selected) : -1;
+  const stepTo = (index) => {
+    const next = days[Math.max(0, Math.min(days.length - 1, index))];
+    if (!next) return;
+    setSelectedDate(next.date);
+    requestAnimationFrame(() => heatmapRef.current?.querySelector(`[data-usage-date="${next.date}"]`)?.focus());
+  };
+  const handleHeatmapKey = (event) => {
+    if (!days.length) return;
+    const base = selectedIndex >= 0 ? selectedIndex : days.length - 1;
+    if (event.key === 'Home') { event.preventDefault(); stepTo(0); return; }
+    if (event.key === 'End') { event.preventDefault(); stepTo(days.length - 1); return; }
+    const delta = { ArrowUp: -1, ArrowDown: 1, ArrowLeft: -7, ArrowRight: 7 }[event.key];
+    if (delta === undefined) return;
+    event.preventDefault(); stepTo(base + delta);
+  };
+  const dayAriaLabel = (day) => [day.date, day.cost != null ? `花费 ${value(day, 'cost')}` : '花费未覆盖', day.tokens != null ? `Token ${value(day, 'tokens')}` : 'Token 未覆盖', day.requests != null ? `请求 ${shortNumber(day.requests)}` : null].filter(Boolean).join('，');
+  if (!account.usageSupported) return <div className="provider-usage-state"><span className="provider-usage-state-icon"><History size={18} /></span><div><b>此厂商没有官方用量历史</b><small>可查看额度趋势与周期浪费记录</small></div></div>;
+  if (account.usageStatus !== 'connected') return <div className="provider-usage-state connect-guide"><span className="provider-usage-state-icon"><History size={18} /></span><div><b>{account.usageStatus === 'reauth_required' ? '官方用量连接已失效' : '官方用量尚未连接'}</b><small>请在桌面端设置中连接账号；连接凭据不会传到浏览器。</small></div></div>;
+  if (loading) return <div className="provider-usage-state"><RefreshCw size={17} className="spinning" /><div><b>正在读取厂商服务端用量</b><small>只读取已连接账号返回的逐日统计</small></div></div>;
+  if (error || !data) return <div className="provider-usage-state"><span className="provider-usage-state-icon"><AlertCircle size={18} /></span><div><b>服务端用量暂时不可用</b><small>{error || '暂无用量数据'}</small></div></div>;
+  if (!days.some((day) => day.cost != null || day.tokens != null)) return <div className="provider-usage-state"><span className="provider-usage-state-icon"><History size={18} /></span><div><b>这个区间没有厂商历史数据</b><small>额度趋势与周期浪费记录仍可在其他页签查看。</small></div></div>;
+  const hasTokens = days.some((day) => day.tokens != null);
+  const hasRequests = days.some((day) => day.requests != null);
+  const usageNumber = (value) => value != null && Number.isFinite(Number(value)) ? Number(value) : null;
+  const accountTotalCost = usageNumber(data.summary?.totalCost);
+  const rangeCost = usageNumber(data.summary?.rangeCost);
+  const knownRangeCost = usageNumber(data.summary?.knownRangeCost);
+  const costTotal = accountTotalCost ?? (data.coverage?.cost?.complete && rangeCost != null ? rangeCost : knownRangeCost);
+  const costLabel = accountTotalCost != null ? '累计花费' : '区间花费';
+  const accountTotalTokens = usageNumber(data.summary?.totalTokens);
+  const rangeTokens = usageNumber(data.summary?.rangeTokens);
+  const knownRangeTokens = usageNumber(data.summary?.knownRangeTokens);
+  const tokensTotal = accountTotalTokens ?? (data.coverage?.tokens?.complete && rangeTokens != null ? rangeTokens : knownRangeTokens);
+  const tokensLabel = accountTotalTokens != null || (data.coverage?.tokens?.complete && rangeTokens != null) ? '累计消耗 Token' : '已覆盖区间 Token';
+  const peakCost = usageNumber(data.summary?.peakDailyCost);
+  const peakTokens = usageNumber(data.summary?.peakDailyTokens);
+  const peakIsCost = metric === 'cost' && peakCost != null;
+  const hasPeak = peakIsCost || peakTokens != null;
+  const currentStreak = usageNumber(data.summary?.currentStreakDays);
+  const longestStreak = usageNumber(data.summary?.longestStreakDays);
+  const countLabel = (value) => new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(Number(value));
+  const costLabelValue = (value) => `${data.currency || ''}${Number(value).toFixed(2)}`;
+  const summaryCards = [
+    hasCost && <div key="cost" className="provider-stat cost" title={costTotal == null ? '' : costLabelValue(costTotal)}><span className="stat-icon"><Zap size={13} /></span><div className="stat-copy"><span>{costLabel}</span><strong>{costTotal == null ? '—' : costLabelValue(costTotal)}</strong></div></div>,
+    hasTokens && <div key="tokens" className="provider-stat tokens" title={tokensTotal == null ? '' : `${countLabel(tokensTotal)} Token`}><span className="stat-icon"><Bot size={13} /></span><div className="stat-copy"><span>{tokensLabel}</span><strong>{shortNumber(tokensTotal)}</strong></div></div>,
+    hasPeak && <div key="peak" className="provider-stat peak" title={data.summary?.peakDailyTokensDate ? `峰值日期 ${data.summary.peakDailyTokensDate}` : '区间内单日最高消耗'}><span className="stat-icon"><TrendingUp size={13} /></span><div className="stat-copy"><span>{peakIsCost ? '峰值花费' : '峰值 Token'}</span><strong>{peakIsCost ? costLabelValue(peakCost) : shortNumber(peakTokens)}</strong></div></div>,
+    currentStreak != null && account.providerId !== 'codex' && <div key="streak" className="provider-stat streak"><span className="stat-icon"><Flame size={13} /></span><div className="stat-copy"><span>当前连续</span><strong>{countLabel(currentStreak)} 天</strong></div></div>,
+    longestStreak != null && <div key="longest" className="provider-stat longest"><span className="stat-icon"><Trophy size={13} /></span><div className="stat-copy"><span>最长连续</span><strong>{countLabel(longestStreak)} 天</strong></div></div>,
+  ].filter(Boolean);
+  const selectedLabel = selected && selected.date === new Date(Date.now() + Number(data.coverage?.timezoneOffsetSec || 0) * 1000).toISOString().slice(0, 10) ? '当日' : `${selected?.date || ''} `;
+  return <div className="provider-usage-view remote-provider-usage">
+    <div className="provider-usage-summary">{summaryCards}</div>
+    <div className="provider-heatmap-head"><span className="provider-heatmap-title">近 1 年使用热力图</span><div className="provider-heatmap-legend"><span>较少</span>{[0, 1, 2, 3, 4].map((item) => <i key={item} className={`provider-heatmap-cell level-${item}`} />)}<span>较多</span></div></div>
+    <div className="provider-heatmap-scroll" role="grid" tabIndex={0} aria-label="近 1 年每日用量热力图，方向键选择日期" ref={heatmapRef} onKeyDown={handleHeatmapKey}><div className="provider-heatmap-board" style={{ '--hm-cell': `${cellPx}px`, '--hm-cell-h': `${cellPx}px` }}><span className="provider-heatmap-corner" aria-hidden="true" /><div className="provider-heatmap-months" aria-hidden="true" style={{ width: `${weekCount * cellPx}px` }}>{shownMonthMarkers.map((item) => <span key={item.key} style={{ left: `${(item.column - 1) * cellPx}px` }}>{item.label}</span>)}</div><div className="provider-heatmap-weekdays" aria-hidden="true"><span>一</span><span /><span>三</span><span /><span>五</span><span /><span>日</span></div><div className="provider-heatmap-grid" role="rowgroup" aria-label={`每日${metric === 'cost' ? '花费' : 'Token'}热力图`}>{cells.map((day, index) => day ? <button type="button" role="gridcell" key={day.date} data-usage-date={day.date} tabIndex={selectedDate === day.date ? 0 : -1} aria-selected={selectedDate === day.date} aria-label={dayAriaLabel(day)} className={`provider-heatmap-cell level-${level(day)}${day.date === selectedDate ? ' selected' : ''}`} title={dayAriaLabel(day)} onFocus={() => setSelectedDate(day.date)} onClick={() => setSelectedDate(day.date)} /> : <span key={`blank-${index}`} className="provider-heatmap-cell blank" aria-hidden="true" />)}</div></div></div>
+    <div className="provider-day-card">{selected ? <>{hasCost && <div className="day-cell"><div><span>{selectedLabel}花费</span><b>{selected.cost == null ? '—' : value(selected, 'cost')}</b></div></div>}{hasTokens && <div className="day-cell"><div><span>{selectedLabel}Token</span><b>{selected.tokens == null ? '—' : shortNumber(selected.tokens)}</b></div></div>}{hasRequests && <div className="day-cell"><div><span>{selectedLabel}请求</span><b>{selected.requests == null ? '—' : shortNumber(selected.requests)}</b></div></div>}</> : <span className="chart-detail-hint">点击热力图方格查看当日用量</span>}</div>
+  </div>;
+}
 
 function TrendChart({ points, keys, hiddenKeys, days, onDaysChange }) {
   const [hoverIndex, setHoverIndex] = useState(null);
@@ -213,6 +370,7 @@ function HistoryPanel({ account, token, onClose, providerInfo }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [hiddenKeys, setHiddenKeys] = useState([]);
+  const [view, setView] = useState('trend');
   useEffect(() => {
     let active = true;
     setLoading(true); setError('');
@@ -226,7 +384,46 @@ function HistoryPanel({ account, token, onClose, providerInfo }) {
   }, [account.id, days, token]);
   const keys = [...new Set(points.flatMap((point) => Object.keys(point.windows || {})))].sort((a, b) => (durationOrder[a] || 9) - (durationOrder[b] || 9));
   const toggleKey = (key) => setHiddenKeys((old) => old.includes(key) ? old.filter((item) => item !== key) : keys.length - old.length > 1 ? [...old, key] : old);
-  return <div className="view-stack history-view remote-history-view"><section className="surface-section"><div className="history-head"><RemoteIdentity account={account} providerInfo={providerInfo} /><span className="remote-history-label">额度历史 · 只读</span><button type="button" className="back-button" onClick={onClose} title="返回" aria-label="返回"><ArrowLeft size={15} /></button></div><div className="trend-view">{loading ? <div className="settings-empty chart-empty">正在读取历史记录…</div> : error ? <div className="settings-empty chart-empty">{error}</div> : <TrendChart points={points} keys={keys} hiddenKeys={hiddenKeys} days={days} onDaysChange={(value) => { setHiddenKeys([]); setDays(value); }} />}{keys.length > 0 && <div className="chart-legend">{keys.map((key, index) => { const latest = [...points].reverse().find((point) => point.windows?.[key])?.windows[key]; return <button type="button" key={key} className={hiddenKeys.includes(key) ? 'off' : ''} onClick={() => toggleKey(key)} title={hiddenKeys.includes(key) ? '点击显示该折线' : '点击隐藏该折线'}><i style={{ background: trendColor(key, index) }} />{trendLabel({ key })}{latest && <em>{latest.unit === '%' ? `${Math.round(sampleValue(latest))}%` : `${sampleValue(latest).toFixed(2)} ${latest.unit || ''}`}</em>}</button>; })}<span className="legend-right">{points.length} 条记录</span></div>}</div></section><div className="history-foot"><button type="button" className="outline-button" onClick={onClose}><ArrowLeft size={14} />返回</button></div></div>;
+  const tabs = [
+    { key: 'trend', label: '趋势' },
+    ...(account.usageSupported ? [{ key: 'usage', label: '用量' }] : []),
+    ...(account.wasteWindows?.length ? [{ key: 'waste', label: '浪费' }] : []),
+  ];
+  useEffect(() => { if (!tabs.some((tab) => tab.key === view)) setView('trend'); }, [account.usageSupported, account.wasteWindows, view]);
+  const panelId = `remote-history-${String(account.id).replace(/[^a-zA-Z0-9_-]/g, '-')}-panel`;
+  const handleTabKey = (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const index = Math.max(0, tabs.findIndex((tab) => tab.key === view));
+    const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    const next = tabs[nextIndex];
+    if (!next) return;
+    setView(next.key);
+    requestAnimationFrame(() => document.getElementById(`${panelId}-tab-${next.key}`)?.focus());
+  };
+  const changeDays = (value) => { setHiddenKeys([]); setDays(value); };
+  return <div className="view-stack history-view remote-history-view">
+    <section className="surface-section">
+      <div className="history-head">
+        <RemoteIdentity account={account} providerInfo={providerInfo} />
+        <div className="remote-history-tools">
+          {tabs.length > 1 && <div className="seg-control history-view-switch" role="tablist" aria-label="账号历史视图" onKeyDown={handleTabKey}>
+            {tabs.map((tab) => <button type="button" role="tab" id={`${panelId}-tab-${tab.key}`} key={tab.key} data-history-tab={tab.key} tabIndex={view === tab.key ? 0 : -1} aria-controls={panelId} aria-selected={view === tab.key} className={view === tab.key ? 'active' : ''} onClick={() => setView(tab.key)}>{tab.label}</button>)}
+          </div>}
+          <button type="button" className="back-button" onClick={onClose} title="返回" aria-label="返回"><ArrowLeft size={15} /></button>
+        </div>
+      </div>
+      <div className="remote-history-tabpanel" {...(tabs.length > 1 ? { role: 'tabpanel', id: panelId, 'aria-labelledby': `${panelId}-tab-${view}` } : {})}>
+        {view === 'waste' ? <RemoteWasteView account={account} token={token} />
+          : view === 'usage' ? <RemoteUsageView account={account} token={token} />
+            : <div className="trend-view">
+              {loading ? <div className="settings-empty chart-empty">正在读取历史记录…</div> : error ? <div className="settings-empty chart-empty">{error}</div> : <TrendChart points={points} keys={keys} hiddenKeys={hiddenKeys} days={days} onDaysChange={changeDays} />}
+              {keys.length > 0 && <div className="chart-legend">{keys.map((key, index) => { const latest = [...points].reverse().find((point) => point.windows?.[key])?.windows[key]; return <button type="button" key={key} className={hiddenKeys.includes(key) ? 'off' : ''} onClick={() => toggleKey(key)} title={hiddenKeys.includes(key) ? '点击显示该折线' : '点击隐藏该折线'}><i style={{ background: trendColor(key, index) }} />{trendLabel({ key })}{latest && <em>{latest.unit === '%' ? `${Math.round(sampleValue(latest))}%` : `${sampleValue(latest).toFixed(2)} ${latest.unit || ''}`}</em>}</button>; })}<span className="legend-right">{points.length} 条记录</span></div>}
+            </div>}
+      </div>
+    </section>
+    <div className="history-foot"><button type="button" className="outline-button" onClick={onClose}><ArrowLeft size={14} />返回</button></div>
+  </div>;
 }
 
 function App() {

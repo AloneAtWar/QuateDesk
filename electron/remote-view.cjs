@@ -2,6 +2,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { resolveWasteWindows } = require('./waste.cjs');
 
 const REMOTE_PORT = 43187;
 const WINDOW_FIELDS = ['key', 'remaining', 'used', 'total', 'unit', 'resetAt', 'available', 'amount', 'limitAmount'];
@@ -40,12 +41,48 @@ const publicSnapshot = (state) => {
       identity: safeText(account.identity),
       provider: safeText(providers.get(account.providerId)?.name || account.providerId),
       providerId: safeText(account.providerId, 80),
+      usageSupported: ['deepseek', 'zai', 'codex', 'minimax'].includes(account.providerId) && account.usageConnection?.supported !== false,
+      usageStatus: ['connected', 'reauth_required'].includes(account.usageConnection?.status)
+        ? account.usageConnection.status
+        : account.usageConnection?.connected === true ? 'connected' : 'disconnected',
+      wasteWindows: (() => {
+        const available = resolveWasteWindows(providers.get(account.providerId)?.requestConfig);
+        const tracked = Array.isArray(account.windowKeys) && account.windowKeys.length
+          ? account.windowKeys
+          : (Array.isArray(account.windows) && account.windows.length ? account.windows.map((meter) => meter.key) : null);
+        return tracked ? available.filter((key) => tracked.includes(key)) : available;
+      })(),
       tags: (Array.isArray(account.tags) ? account.tags : []).slice(0, 4).map((tag) => safeText(tag, 40)),
       disabled: Boolean(account.disabled),
       status: account.status === 'warning' ? 'warning' : 'active',
       lastChecked: account.lastChecked || null,
       windows: (Array.isArray(account.windows) ? account.windows : []).map(publicWindow),
     })),
+  };
+};
+
+const publicUsage = (data) => {
+  const summary = data?.summary || {};
+  const numericSummary = ['totalCost', 'rangeCost', 'knownRangeCost', 'totalTokens', 'rangeTokens', 'knownRangeTokens', 'peakDailyTokens', 'peakDailyCost', 'currentStreakDays', 'longestStreakDays'];
+  const days = (Array.isArray(data?.days) ? data.days : []).map((day) => ({
+    date: safeText(day?.date, 10), cost: safeNumber(day?.cost), tokens: safeNumber(day?.tokens),
+    requests: safeNumber(day?.requests), currency: safeText(day?.currency, 16),
+  })).filter((day) => /^\d{4}-\d{2}-\d{2}$/.test(day.date)).sort((a, b) => a.date.localeCompare(b.date)).slice(-370);
+  return {
+    provider: safeText(data?.provider, 80),
+    metric: safeText(data?.metric, 24),
+    currency: safeText(data?.currency, 16),
+    summary: {
+      ...Object.fromEntries(numericSummary.map((key) => [key, safeNumber(summary[key])]).filter(([, value]) => value !== null)),
+      ...(typeof summary.peakDailyTokensDate === 'string' ? { peakDailyTokensDate: safeText(summary.peakDailyTokensDate, 10) } : {}),
+      ...(typeof summary.planName === 'string' ? { planName: safeText(summary.planName, 80) } : {}),
+    },
+    coverage: {
+      timezoneOffsetSec: safeNumber(data?.coverage?.timezoneOffsetSec),
+      cost: { complete: Boolean(data?.coverage?.cost?.complete) },
+      tokens: { complete: Boolean(data?.coverage?.tokens?.complete) },
+    },
+    days,
   };
 };
 
@@ -81,7 +118,7 @@ const json = (response, status, body) => {
   response.end(JSON.stringify(body));
 };
 
-function createRemoteViewServer({ store, distDir, getToken, getHistory, port = REMOTE_PORT }) {
+function createRemoteViewServer({ store, distDir, getToken, getHistory, getCycles, getUsage, port = REMOTE_PORT }) {
   const server = http.createServer((request, response) => {
     setHeaders(response);
     if (request.method !== 'GET' && request.method !== 'HEAD') return json(response, 405, { error: 'method_not_allowed' });
@@ -101,6 +138,28 @@ function createRemoteViewServer({ store, distDir, getToken, getHistory, port = R
         if (!accounts.some((account) => account.id === accountId)) return json(response, 404, { error: 'account_not_found' });
         const days = [1, 7, 30, 90, 0].includes(Number(url.searchParams.get('days'))) ? Number(url.searchParams.get('days')) : 7;
         return json(response, 200, { accountId, days, points: publicHistory(getHistory(accountId), days) });
+      }
+      if (pathname === '/api/cycles') {
+        const accountId = url.searchParams.get('accountId') || '';
+        if (!(store.loadState()?.accounts || []).some((account) => account.id === accountId)) return json(response, 404, { error: 'account_not_found' });
+        const cycles = getCycles ? getCycles(accountId) : [];
+        return json(response, 200, { accountId, cycles: (Array.isArray(cycles) ? cycles : []).map((cycle) => ({
+          window: safeText(cycle?.window, 60), from: safeText(cycle?.from, 40), end: safeText(cycle?.end, 40),
+          kind: ['natural', 'early'].includes(cycle?.kind) ? cycle.kind : 'unknown', observedAt: safeText(cycle?.observedAt, 40),
+          remaining: safeNumber(cycle?.remaining), amount: safeNumber(cycle?.amount), limit: safeNumber(cycle?.limit),
+          gapMs: safeNumber(cycle?.gapMs), reliable: Boolean(cycle?.reliable),
+        })) });
+      }
+      if (pathname === '/api/usage') {
+        const accountId = url.searchParams.get('accountId') || '';
+        const account = (store.loadState()?.accounts || []).find((item) => item.id === accountId);
+        if (!account) return json(response, 404, { error: 'account_not_found' });
+        if (!getUsage || !['deepseek', 'zai', 'codex', 'minimax'].includes(account.providerId) || account.usageConnection?.supported === false || (account.usageConnection?.status !== 'connected' && account.usageConnection?.connected !== true)) return json(response, 409, { error: 'usage_not_connected' });
+        Promise.resolve(getUsage(accountId)).then((data) => {
+          if (data?.provider !== account.providerId) return json(response, 502, { error: 'usage_unavailable' });
+          return json(response, 200, publicUsage(data));
+        }).catch(() => json(response, 502, { error: 'usage_unavailable' }));
+        return;
       }
       return json(response, 404, { error: 'not_found' });
     }
