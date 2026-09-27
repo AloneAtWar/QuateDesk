@@ -13,7 +13,6 @@
     "dev": "vite",
     "dev:lan": "vite --host 0.0.0.0",
     "build": "vite build",
-    "android:debug": "node scripts/build-android.js",
     "preview": "vite preview",
     "desktop": "npm run build && electron .",
     "dist": "node build/preflight.cjs && npm run build && electron-builder",

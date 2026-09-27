@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<network-security-config>
-    <!-- The desktop viewer currently serves HTTP on private LAN and overlay-network addresses. -->
-    <base-config cleartextTrafficPermitted="true" />
-</network-security-config>
