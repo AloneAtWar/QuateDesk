@@ -1,4 +1,5 @@
 const { resolveCliAuth, refreshTokenOf, accessTokenExpiryMs, fetchWithCliAuth, __grok: cliGrok } = require('./cli-auth.cjs');
+const { fetchMimoSnapshot, mimoCookieHeader, ProviderUsageError, PROVIDER_USAGE_AUTH_KEY } = require('./provider-usage.cjs');
 
 const reauthRequiredError = (message) => Object.assign(new Error(message), { authStatus: 'reauth_required' });
 const authStatusForPollError = (error) => error?.authStatus === 'reauth_required' ? 'reauth_required' : 'temporary_error';
@@ -357,11 +358,23 @@ async function queryAccountOnce(account, provider, credential, fetcher = fetch, 
     const cliContext = { variables, onAuthUpdate: options.onCliAuth ? (kind, next, previous, source) => options.onCliAuth({ account, kind, next, previous, source }) : undefined };
     if (config.adapterMode === 'claude') return queryClaudeQuota(fetcher, meter, timeoutMs, cliContext);
     if (config.adapterMode === 'codex') return queryCodexQuota(fetcher, meter, timeoutMs, cliContext);
-    if (config.adapterMode === 'kimi') return queryKimiWebQuota(fetcher, meter, timeoutMs, cliContext);
+    if (config.adapterMode === 'kimi') {
+      // Kimi 同渠道双登录：无扫码快照的账号是 API Key 模式（kimi 没有 live 登录文件，
+      // resolveCliAuth 为 null 即没有快照），走 API Key 用量端点（拿不到月订阅额度）
+      if (!resolveCliAuth('kimi', variables)) return queryKimiApiKeyQuota(account, provider, credential, fetcher, meter, timeoutMs, variables);
+      return queryKimiWebQuota(fetcher, meter, timeoutMs, cliContext);
+    }
     if (config.adapterMode === 'grok') return queryGrokSubscription(fetcher, timeoutMs, cliContext);
     if (config.adapterMode === 'copilot') return queryCopilotQuota(fetcher, meter, timeoutMs, cliContext);
     if (config.adapterMode === 'grokbot') return queryGrokBotUsage(fetcher, meter, timeoutMs, cliContext);
     return queryGeminiQuota(fetcher, meter, timeoutMs, cliContext);
+  }
+  // MiMo Token Plan：额度接口只认网页会话 Cookie（没有 API Key 端点），凭据
+  // 来自官方账号登录保存在加密变量里的 Cookie 快照；会话 24 小时过期后由
+  // 主进程 pollState 的静默续期（recoverBrowserUsageAuth）换发再重试。
+  if (config.adapterMode === 'mimo') {
+    const variables = options.getSecretVariables ? options.getSecretVariables() : secretVariables;
+    return queryMimoQuota(fetcher, meter, timeoutMs, variables);
   }
   const credentialRequired = config.adapterMode === 'script' ? config.credentialRequired === true : config.auth !== 'none';
   if (!credential && credentialRequired) throw reauthRequiredError('缺少凭据，请在「设置 → 账号与凭据」中编辑该账号填写 API Token');
@@ -390,6 +403,102 @@ async function queryAccountOnce(account, provider, credential, fetcher = fetch, 
   const visibleWindows = selected ? windows.filter((item) => selected.has(item.key)) : windows;
   if (!visibleWindows.length) throw new Error('接口已返回额度，但没有包含该账号选择的窗口');
   return visibleWindows;
+}
+
+// ── Kimi API Key 额度适配（kimi-subscription 渠道的 API Key 登录模式）────────
+// 同一渠道两种登录方式：有扫码快照的账号走 queryKimiWebQuota（含月订阅额度）；
+// 只有 API Key 的账号走这里——GET api.kimi.com/coding/v1/usages（Bearer Key），
+// 接口只返回 5 小时 / 7 天窗口，拿不到月订阅额度。API Key 账号扫码升级后 Key 仍
+// 保留在凭据里（storage.saveCredential 空凭据保留原值），cc-switch 导入按 Key 去重不受影响。
+const KIMI_API_USAGE_ENDPOINT = 'https://api.kimi.com/coding/v1/usages';
+
+async function queryKimiApiKeyQuota(account, provider, credential, fetcher, meter, timeoutMs, secretVariables = {}) {
+  const apiKey = String(secretVariables?.apiKey || credential || '').trim();
+  if (!apiKey) throw reauthRequiredError('该 Kimi 账号没有 API Key，也没有扫码登录：请在「设置 → 账号与凭据」中编辑该账号完成登录');
+  const endpoint = String(account.endpoint || provider?.requestConfig?.endpoint || KIMI_API_USAGE_ENDPOINT);
+  const response = await fetcher(endpoint, { method: 'GET', headers: { Accept: 'application/json', Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(timeoutMs) });
+  if (response.status === 401 || response.status === 403) throw reauthRequiredError('Kimi API Key 已失效：请在设置中编辑该账号改用扫码登录，或删除账号后重新添加');
+  if (!response.ok) throw new Error(`Kimi 额度接口返回 HTTP ${response.status}`);
+  const payload = await response.json();
+  const windows = (payload?.limits || []).map((item) => {
+    const detail = item?.detail || item || {};
+    const total = numeric(detail.limit);
+    const remaining = numeric(detail.remaining);
+    return meter('five_hour', percent(remaining, total), 100, '%', detail.resetTime, { amount: remaining, limitAmount: total });
+  });
+  if (payload?.usage) {
+    const total = numeric(payload.usage.limit);
+    const remaining = numeric(payload.usage.remaining);
+    windows.push(meter('weekly', percent(remaining, total), 100, '%', payload.usage.resetTime, { amount: remaining, limitAmount: total }));
+  }
+  if (!windows.length) throw new Error('Kimi 接口返回成功，但没有识别到额度窗口');
+  return windows;
+}
+
+// ── Xiaomi MiMo Token Plan 额度专属适配 ─────────────────────────────────────
+// 额度数据来自平台控制台的内部接口（tokenPlan/usage + detail），鉴权是官方账号
+// 登录保存的网页会话 Cookie（见 provider-usage.cjs 的 MiMo 段）。
+// 展示口径：只展示套餐 Credits（原始值以“亿”为单位，cc-switch 社区惯例，
+// Lite ≈ 492 亿）；钱包余额不作为额度窗口。会话过期抛 reauth_required，由主进程
+// 走隐藏窗口静默续期后重试，续期失败才提示用户重新登录。
+const MIMO_CREDITS_YI = 1e8;
+
+// 包年 / 包月按周期时长自动区分：包月账号挂到通用的 monthly 窗口（「1个月」，
+// 与其它厂商的月度窗口同一口径），包年账号挂到新增的 yearly 窗口（「1年」）。
+// 优先用详情里的周期起点 + 终点算完整时长（年付临近续期的最后一两个月，
+// 只看「距重置还剩多久」会误判成包月）；拿不到起点时退回距重置的剩余时长
+// （月付周期 ≤ 31 天，距重置超过阈值即视为包年）。
+const MIMO_YEARLY_THRESHOLD_MS = 45 * 24 * 60 * 60 * 1000;
+const mimoPlanWindowKey = (detail) => {
+  const end = detail?.resetsAt ? Date.parse(detail.resetsAt) : NaN;
+  if (!Number.isFinite(end)) return 'monthly';
+  const start = detail?.periodStartAt ? Date.parse(detail.periodStartAt) : NaN;
+  const span = Number.isFinite(start) ? end - start : end - Date.now();
+  return span > MIMO_YEARLY_THRESHOLD_MS ? 'yearly' : 'monthly';
+};
+
+const readMimoAuthCookies = (variables = {}) => {
+  const raw = variables?.[PROVIDER_USAGE_AUTH_KEY];
+  if (!raw) return [];
+  try {
+    const auth = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Array.isArray(auth?.cookies) ? auth.cookies : [];
+  } catch { return []; }
+};
+
+async function queryMimoQuota(fetcher, meter, timeoutMs, variables = {}) {
+  const cookies = readMimoAuthCookies(variables);
+  if (!cookies.length) {
+    throw reauthRequiredError('尚未连接小米账号：请编辑该账号并勾选「官方账号用量」完成登录');
+  }
+  const cookieHeader = mimoCookieHeader(cookies);
+  if (!cookieHeader) throw reauthRequiredError('MiMo 登录 Cookie 缺失，请重新连接官方账号');
+  let snapshot;
+  try {
+    snapshot = await fetchMimoSnapshot(fetcher, { cookieHeader, timeoutMs });
+  } catch (error) {
+    if (error instanceof ProviderUsageError && (error.code === 'AUTH_EXPIRED' || error.code === 'AUTH_MISSING')) {
+      throw reauthRequiredError('MiMo 官方账号登录已失效，请重新连接官方账号');
+    }
+    throw error;
+  }
+  const windows = [];
+  const plan = snapshot.plan;
+  if (plan && plan.limit !== null && plan.limit > 0) {
+    const remainingCredits = Math.max(0, plan.limit - (plan.used ?? 0));
+    const remainingPercent = plan.usedPercent !== null
+      ? Math.max(0, 100 - plan.usedPercent)
+      : percent(remainingCredits, plan.limit);
+    windows.push(meter(mimoPlanWindowKey(snapshot.detail), remainingPercent, 100, '%', snapshot.detail?.resetsAt ?? null, {
+      amount: Number((remainingCredits / MIMO_CREDITS_YI).toFixed(2)),
+      limitAmount: Number((plan.limit / MIMO_CREDITS_YI).toFixed(2)),
+      available: !(snapshot.detail?.expired),
+    }));
+  }
+  if (!windows.length) {
+    throw new Error('MiMo 账号没有识别到 Token Plan 套餐 Credits（可能尚未订阅）');
+  }
+  return windows;
 }
 
 // ── Grok（xAI）订阅额度专属适配 ─────────────────────────────────────────────
@@ -595,5 +704,6 @@ module.exports = {
   queryAccount,
   authStatusForPollError,
   __grok: { selectGrokAuthEntry, parseGrokBilling, grokWindowKey, grpcStatusFromData },
+  __mimo: { queryMimoQuota, readMimoAuthCookies, mimoPlanWindowKey, MIMO_CREDITS_YI, MIMO_YEARLY_THRESHOLD_MS },
   __network: { accountTimeoutMs, isTransientNetworkError, describeNetworkError },
 };

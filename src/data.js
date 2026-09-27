@@ -41,6 +41,13 @@ export const adapterRegistry = {
     auth: 'bearer',
     windows: ['five_hour', 'weekly'],
   },
+  mimo: {
+    id: 'mimo',
+    label: 'Xiaomi MiMo Token Plan',
+    endpoint: '',
+    auth: 'none',
+    windows: ['monthly', 'yearly'],
+  },
   claude: {
     id: 'claude',
     label: 'Claude Code',
@@ -75,13 +82,14 @@ const minutesFromNow = (minutes) => new Date(Date.now() + minutes * 60_000).toIS
 const daysFromNow = (days) => minutesFromNow(days * 24 * 60);
 
 export const providerCatalog = [
-  // Kimi 只保留订阅渠道（kimi-subscription 扫码登录），独立 API Key 渠道已下线
+  // Kimi 渠道（kimi-subscription）双登录：扫码登录含月订阅额度；API Key 登录只有 5 小时 / 7 天（无月额度）
   { id: 'zai', name: 'Z.ai', legalName: 'Z.ai / 智谱', monogram: 'Z', tone: 'violet', adapter: 'zai', logo: './logos/zai.svg', website: 'https://bigmodel.cn/' },
   { id: 'deepseek', name: 'DeepSeek', legalName: 'DeepSeek API', monogram: 'D', tone: 'blue', adapter: 'deepseek', logo: './logos/deepseek.png', website: 'https://www.deepseek.com/' },
   { id: 'wlb', name: 'wlbclub', legalName: 'wlbclub', monogram: 'W', tone: 'coral', adapter: 'wlb', website: 'https://www.wlbclub.com/' },
   { id: 'grok', name: 'Grok', legalName: 'xAI Grok', monogram: 'G', tone: 'slate', adapter: 'grok', logo: './logos/grok.png', website: 'https://grok.com/' },
   { id: 'grokbot', name: 'Grok Bot', legalName: 'xAI Grok Bot', monogram: 'G', tone: 'slate', adapter: 'grokbot', logo: './logos/grokbot.png', website: 'https://x.ai/bot' },
   { id: 'minimax', name: 'MiniMax', legalName: 'MiniMax Coding Plan', monogram: 'M', tone: 'mint', adapter: 'minimax', logo: './logos/minimax.svg', website: 'https://platform.minimaxi.com' },
+  { id: 'mimo', name: 'Xiaomi MiMo', legalName: 'Xiaomi MiMo Token Plan', monogram: 'M', tone: 'coral', adapter: 'mimo', logo: './logos/mimo.webp', website: 'https://platform.xiaomimimo.com' },
   { id: 'claude', name: 'Claude', legalName: 'Claude Code', monogram: 'C', tone: 'coral', adapter: 'claude', logo: './logos/claude.jpg', website: 'https://claude.com/claude-code' },
   { id: 'codex', name: 'Codex', legalName: 'OpenAI Codex', monogram: 'O', tone: 'mint', adapter: 'codex', logo: './logos/codex.svg', website: 'https://developers.openai.com/codex/' },
   { id: 'gemini', name: 'Gemini', legalName: 'Gemini CLI', monogram: 'G', tone: 'sky', adapter: 'gemini', logo: './logos/gemini.svg', website: 'https://gemini.google.com/' },
@@ -94,7 +102,10 @@ export const windowCatalog = {
   daily: { key: 'daily', label: '1 天', short: '1d', group: '短周期', color: 'sky' },
   weekly: { key: 'weekly', label: '7 天', short: '7d', group: '中周期', color: 'violet' },
   monthly: { key: 'monthly', label: '1个月', short: '1M', group: '长周期', color: 'coral' },
+  yearly: { key: 'yearly', label: '1年', short: '1Y', group: '长周期', color: 'amber' },
   balance: { key: 'balance', label: '余额', short: '余额', group: '余额', color: 'green' },
+  // 旧版 MiMo 套餐窗口：已按包月 / 包年并入 monthly / yearly，条目留给历史数据标名
+  mimo_plan: { key: 'mimo_plan', label: 'Credits', short: 'Credits', group: 'MiMo', color: 'coral' },
   gemini_pro: { key: 'gemini_pro', label: 'Gemini Pro', short: 'Pro', group: 'Gemini', color: 'sky' },
   gemini_flash: { key: 'gemini_flash', label: 'Gemini Flash', short: 'Flash', group: 'Gemini', color: 'cyan' },
   gemini_flash_lite: { key: 'gemini_flash_lite', label: 'Flash Lite', short: 'Lite', group: 'Gemini', color: 'mint' },

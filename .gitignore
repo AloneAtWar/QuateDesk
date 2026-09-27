@@ -8,3 +8,7 @@ work/
 release-new/
 release-r2/
 build-cache/
+android/.gradle/
+android/local.properties
+android/**/build/
+.idea/

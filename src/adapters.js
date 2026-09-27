@@ -60,6 +60,8 @@ export const adapterDefinitions = {
   },
   // 以下厂商同样由主进程专属适配（官方 CLI 登录态 / 官方 Coding Plan 接口），网页演示模式无数据
   minimax: { ...adapterRegistry.minimax, normalize() { return []; } },
+  // Xiaomi MiMo Token Plan：主进程专属适配（官方账号 Cookie 查控制台内部接口）
+  mimo: { ...adapterRegistry.mimo, normalize() { return []; } },
   claude: { ...adapterRegistry.claude, normalize() { return []; } },
   codex: { ...adapterRegistry.codex, normalize() { return []; } },
   gemini: { ...adapterRegistry.gemini, normalize() { return []; } },

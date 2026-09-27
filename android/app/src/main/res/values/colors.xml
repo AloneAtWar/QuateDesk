@@ -1,0 +1,10 @@
+<resources>
+    <color name="qd_background">#111917</color>
+    <color name="qd_surface">#19221F</color>
+    <color name="qd_surface_raised">#202B27</color>
+    <color name="qd_border">#303D38</color>
+    <color name="qd_text">#F1F5F1</color>
+    <color name="qd_muted">#9BAAA2</color>
+    <color name="qd_accent">#9BDFB2</color>
+    <color name="qd_accent_ink">#14271C</color>
+</resources>

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, nativeImage, net, Notification, screen, session, shell, Tray } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, screen, session, shell, Tray } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -11,6 +11,7 @@ const { resolveWasteWindows } = require('./waste.cjs');
 const { builtinConfigs } = require('./builtin-configs.cjs');
 const { scanCcswitch } = require('./ccswitch.cjs');
 const { mergeMainOwnedUsageConnections } = require('./provider-usage-state.cjs');
+const { buildExportPackage, validateExportPackage, mergeImportPackage } = require('./import-export.cjs');
 const { CLI_KINDS, SNAPSHOT_KEY, readLiveAuth, cliIdentity, resolveCliAuth, authVersionMatches, writeLiveIfCurrent, fetchWithCliAuth, COPILOT_CLIENT_ID, COPILOT_DEVICE_CODE_URL, COPILOT_TOKEN_URL, COPILOT_SCOPE } = require('./cli-auth.cjs');
 const {
   fetchDeepSeekUsage,
@@ -27,7 +28,14 @@ const {
   probeMinimaxSession,
   isAllowedMinimaxLoginUrl,
   isMinimaxCookieDomain,
+  fetchMimoUsage,
+  fetchMimoProfile,
+  probeMimoSession,
+  isAllowedMimoLoginUrl,
+  isMimoCookieDomain,
+  mimoCookieHeader,
   ProviderUsageError,
+  PROVIDER_USAGE_AUTH_KEY,
   shouldUseCachedUsage,
 } = require('./provider-usage.cjs');
 
@@ -54,7 +62,7 @@ const providerUsageWindows = new Map();
 const providerUsageSessions = new Map();
 const providerUsageRequests = new Map();
 const providerUsageEpochs = new Map();
-const PROVIDER_USAGE_AUTH_KEY = 'providerUsageAuth';
+const mimoRenewalAttempts = new Map();
 const PROVIDER_USAGE_CACHE_MS = 2 * 60 * 1000;
 const DEEPSEEK_USAGE_URL = 'https://platform.deepseek.com/usage';
 const DEEPSEEK_PLATFORM_ORIGIN = new URL(DEEPSEEK_USAGE_URL).origin;
@@ -373,6 +381,7 @@ const builtinLogos = {
   grok: './logos/grok.png',
   grokbot: './logos/grokbot.png',
   minimax: './logos/minimax.svg',
+  mimo: './logos/mimo.webp',
   claude: './logos/claude.jpg',
   codex: './logos/codex.svg',
   gemini: './logos/gemini.svg',
@@ -387,6 +396,7 @@ const builtinWebsites = {
   grok: 'https://grok.com/',
   grokbot: 'https://x.ai/bot',
   minimax: 'https://platform.minimaxi.com',
+  mimo: 'https://platform.xiaomimimo.com',
   claude: 'https://claude.com/claude-code',
   codex: 'https://developers.openai.com/codex/',
   gemini: 'https://gemini.google.com/',
@@ -398,6 +408,9 @@ const ensureCliProviders = (providers) => {
     { id: 'grok', name: 'Grok', legalName: 'xAI Grok', monogram: 'G', tone: 'slate', adapter: 'grok', logo: './logos/grok.png' },
     { id: 'grokbot', name: 'Grok Bot', legalName: 'xAI Grok Bot', monogram: 'G', tone: 'slate', adapter: 'grokbot', logo: './logos/grokbot.png' },
     { id: 'minimax', name: 'MiniMax', legalName: 'MiniMax Coding Plan', monogram: 'M', tone: 'mint', adapter: 'minimax', logo: './logos/minimax.svg' },
+    // MiMo Token Plan：额度接口只认网页会话 Cookie（无 API Key 端点），账号
+    // 凭据即「连接官方账号」捕获的小米账号登录，轮询与静默续期都在主进程
+    { id: 'mimo', name: 'Xiaomi MiMo', legalName: 'Xiaomi MiMo Token Plan', monogram: 'M', tone: 'coral', adapter: 'mimo', logo: './logos/mimo.webp' },
     { id: 'claude', name: 'Claude', legalName: 'Claude Code', monogram: 'C', tone: 'coral', adapter: 'claude', logo: './logos/claude.jpg' },
     { id: 'codex', name: 'Codex', legalName: 'OpenAI Codex', monogram: 'O', tone: 'mint', adapter: 'codex', logo: './logos/codex.svg' },
     { id: 'gemini', name: 'Gemini', legalName: 'Gemini CLI', monogram: 'G', tone: 'sky', adapter: 'gemini', logo: './logos/gemini.svg' },
@@ -413,7 +426,7 @@ const ensureCliProviders = (providers) => {
 const migrateProvider = (provider) => {
   if (!provider) return provider;
   // 旧版 logo 引用（含已删除的 png/旧文件名）视为 legacy，重新指向当前内置图标
-  const legacyLogo = !provider.logo || /^https?:\/\//i.test(provider.logo) || /\.\/logos\/(kimi\.(png|svg)|zai\.svg|zhipu\.svg|deepseek\.(png|svg)|grok\.svg|anthropic\.svg|openai\.svg|claude\.(png|svg))$/i.test(provider.logo);
+  const legacyLogo = !provider.logo || /^https?:\/\//i.test(provider.logo) || /\.\/logos\/(kimi\.(png|svg)|zai\.svg|zhipu\.svg|deepseek\.(png|svg)|grok\.svg|anthropic\.svg|openai\.svg|claude\.(png|svg)|mimo\.(svg|webp))$/i.test(provider.logo);
   const logo = legacyLogo && builtinLogos[provider.id] ? builtinLogos[provider.id] : provider.logo;
   const builtinConfig = builtinConfigs[provider.id];
   const needsWlbMigration = provider.id === 'wlb' && builtinConfig?.builtinMigration && provider.requestConfig?.builtinMigration !== builtinConfig.builtinMigration;
@@ -421,8 +434,29 @@ const migrateProvider = (provider) => {
   const seededVariables = !builtin && builtinConfig?.adapterMode === 'script' && !provider.requestConfig?.variables?.some((item) => item.key === 'endpoint')
     ? { ...provider, requestConfig: { ...provider.requestConfig, variables: builtinConfig.variables } }
     : provider;
+  // Kimi 双登录改造：给存量 kimi-subscription 渠道补上 API Key 用量端点
+  // （API Key 表单的默认接口地址 + cc-switch 导入的域名匹配）
+  const kimiEndpointSeeded = provider.id === 'kimi-subscription' && builtinConfig?.endpoint && provider.requestConfig?.endpoint !== builtinConfig.endpoint
+    ? { ...seededVariables, requestConfig: { ...seededVariables.requestConfig, endpoint: builtinConfig.endpoint } }
+    : seededVariables;
+  // MiMo 窗口改版：存量 state 的 requestConfig.windows 还是旧的 ['mimo_plan'] 时，
+  // 刷新为内置的周期窗口（包月 monthly「1个月」/ 包年 yearly「1年」）；旧配置的
+  // wasteWindows 是空数组（当时明确不做浪费统计），一并刷新为内置预设参与浪费统计
+  const mimoWindowsStale = provider.id === 'mimo' && Array.isArray(provider.requestConfig?.windows) && provider.requestConfig.windows.includes('mimo_plan');
+  const refreshedWindows = mimoWindowsStale && builtinConfig?.windows
+    ? {
+        ...kimiEndpointSeeded,
+        requestConfig: {
+          ...kimiEndpointSeeded.requestConfig,
+          windows: builtinConfig.windows,
+          ...(Array.isArray(kimiEndpointSeeded.requestConfig?.wasteWindows) && !kimiEndpointSeeded.requestConfig.wasteWindows.length
+            ? { wasteWindows: builtinConfig.wasteWindows }
+            : {}),
+        },
+      }
+    : kimiEndpointSeeded;
   const website = provider.website === undefined ? (builtinWebsites[provider.id] ?? '') : provider.website;
-  const migrated = builtin ? { ...provider, website, baseUrl: undefined, domain: undefined, requestConfig: builtin, logo } : { ...seededVariables, website, baseUrl: undefined, domain: undefined, logo };
+  const migrated = builtin ? { ...provider, website, baseUrl: undefined, domain: undefined, requestConfig: builtin, logo } : { ...refreshedWindows, website, baseUrl: undefined, domain: undefined, logo };
   // 浪费统计预设补齐：存量 state 的 requestConfig 还没有 wasteWindows 字段时用内置预设；
   // 用户手动设置过（包括空数组 = 明确不做浪费统计）则保留不动
   const seededWaste = builtinConfig && migrated.requestConfig && !Array.isArray(migrated.requestConfig.wasteWindows)
@@ -454,12 +488,18 @@ const migrateAccount = (account) => {
   if (normalized.providerId === 'wlb' && Array.isArray(normalized.windowKeys) && normalized.windowKeys.length && !normalized.windowKeys.includes('daily')) {
     return { ...normalized, windowKeys: [...normalized.windowKeys, 'daily'] };
   }
+  // MiMo 额度窗口从单一 Credits 改为按套餐周期出窗口（包月 → monthly「1个月」，包年 →
+  // yearly「1年」）：已显式选过窗口的存量账号把 mimo_plan 换成两个新键，巡检出哪个显示哪个
+  if (normalized.providerId === 'mimo' && Array.isArray(normalized.windowKeys) && normalized.windowKeys.includes('mimo_plan')) {
+    return { ...normalized, windowKeys: [...normalized.windowKeys.filter((key) => key !== 'mimo_plan'), 'monthly', 'yearly'] };
+  }
   return normalized;
 };
 
-// 下线的渠道在迁移时一并丢弃：mimo 从未推出适配接口；kimi 的独立 API Key 渠道已下线
-// （订阅统一走 kimi-subscription 扫码登录，避免同一厂商出现两个入口）
-const dropProviderIds = new Set(['mimo', 'kimi']);
+// 下线的渠道在迁移时一并丢弃：kimi 的独立 API Key 渠道已下线
+// （订阅统一走 kimi-subscription 扫码登录，避免同一厂商出现两个入口）。
+// mimo 曾因无适配接口下线，现以官方账号 Cookie 适配重新上架，不在丢弃列表。
+const dropProviderIds = new Set(['kimi']);
 const migrateState = (state) => state ? {
   ...state,
   accounts: (state.accounts || []).map(migrateAccount).filter((account) => !dropProviderIds.has(account.providerId)),
@@ -684,6 +724,7 @@ const deleteAccountLocalData = async (accountId) => {
   abortProviderUsageRequests(accountId);
   closeProviderUsageWindows(accountId);
   clearProviderUsageCache(accountId);
+  mimoRenewalAttempts.delete(accountId);
   // The auxiliary session is memory-only. Always remove the encrypted credential even
   // if Chromium cannot eagerly release its in-process cache.
   await clearProviderUsageSession(accountId);
@@ -786,6 +827,28 @@ const PROVIDER_USAGE_CONFIGS = {
       readCredential: null,
       validate: (_auth, sessionFetch, signal) => probeMinimaxSession(sessionFetch, { timeoutMs: 15_000, signal }),
       fetchUsage: (_auth, sessionFetch, options) => fetchMinimaxUsage(sessionFetch, options),
+    },
+  },
+  // MiMo Token Plan 的官方账号登录不只是历史用量增强——额度轮询本身也依赖这
+  // 份 Cookie 快照（MiMo 没有 API Key 额度端点）。登录走小米通行证 SSO：
+  // 控制台页 → genLoginUrl → account.xiaomi.com；会话 Cookie 24 小时过期后，
+  // 隐藏窗口重放同一链路，通行证 Cookie（passToken 等）仍在即可静默换发，
+  // 无需用户再登录（pollState 里的 recoverBrowserUsageAuth 兜底）。
+  mimo: {
+    id: 'mimo',
+    mode: 'browser-cookie',
+    timezoneOffsetSec: 8 * 60 * 60,
+    missingAuthMessage: '尚未连接 MiMo 官方账号',
+    expiredMessage: 'MiMo 官方账号登录已失效，请重新连接',
+    browser: {
+      loginUrl: 'https://platform.xiaomimimo.com/console/plan-manage',
+      loginTitle: '连接 MiMo 官方账号',
+      isAllowedLoginUrl: isAllowedMimoLoginUrl,
+      isCookieDomain: isMimoCookieDomain,
+      requiresToken: false,
+      readCredential: null,
+      validate: (_auth, sessionFetch, signal) => probeMimoSession(sessionFetch, { timeoutMs: 15_000, signal }),
+      fetchUsage: (_auth, sessionFetch, options) => fetchMimoUsage(sessionFetch, options),
     },
   },
 };
@@ -1236,6 +1299,44 @@ const mergePolledAccounts = (latestAccounts, polled, originals = []) => {
   });
 };
 
+// MiMo 额度轮询的会话续期兜底：平台会话 Cookie 官方政策 24 小时过期，轮询抛
+// reauth_required 时先用隐藏窗口静默重走登录链路（通行证 Cookie 仍在即可无感
+// 换发，见 PROVIDER_USAGE_CONFIGS.mimo），成功后带着新 Cookie 重试一次。续期
+// 失败（通行证也失效）才标记 reauth_required 交还错误，由界面提示重新连接。
+// 续期尝试按账号节流：通行证已死时避免每轮巡检都空开 15 秒隐藏窗口。
+const MIMO_SILENT_RENEWAL_INTERVAL_MS = 30 * 60 * 1000;
+const queryAccountWithSilentRenewal = async (account, provider) => {
+  const run = () => {
+    const secrets = store.getSecrets(account.id);
+    return queryAccount(account, provider, secrets.credential, net.fetch, secrets.variables, {
+      onCliAuth: ({ kind, next, previous, source }) => persistCliAuthUpdate(account.id, { kind, next, previous, source }),
+      // 网络重试时重新读凭据：上一次尝试可能已续期并轮换 refresh_token，继续用旧值会被判复用
+      getSecretVariables: () => store.getSecrets(account.id).variables,
+    });
+  };
+  try {
+    return await run();
+  } catch (error) {
+    if (error?.authStatus !== 'reauth_required' || account.providerId !== 'mimo') throw error;
+    const config = PROVIDER_USAGE_CONFIGS.mimo;
+    // 从未连接过官方账号：没有可续期的登录态，直接交还可行动的错误
+    if (!readProviderUsageAuth(account.id)) throw error;
+    const lastAttempt = Number(mimoRenewalAttempts.get(account.id) || 0);
+    if (Date.now() - lastAttempt < MIMO_SILENT_RENEWAL_INTERVAL_MS) throw error;
+    mimoRenewalAttempts.set(account.id, Date.now());
+    let renewed = null;
+    try { renewed = await recoverBrowserUsageAuth(config, account.id, providerUsageEpoch(account.id)); }
+    catch { renewed = null; }
+    if (!renewed) {
+      markProviderUsageExpired(account.id, config);
+      throw error;
+    }
+    // 续期成功：清掉节流记录，下一次过期立即续期
+    mimoRenewalAttempts.delete(account.id);
+    return await run();
+  }
+};
+
 async function pollState(accountIds = null) {
   const current = migrateState(store.loadState());
   if (!current) throw new Error('桌面状态尚未初始化');
@@ -1254,12 +1355,7 @@ async function pollState(accountIds = null) {
       continue;
     }
     try {
-      const secrets = store.getSecrets(account.id);
-      const windows = await queryAccount(account, provider, secrets.credential, net.fetch, secrets.variables, {
-        onCliAuth: ({ kind, next, previous, source }) => persistCliAuthUpdate(account.id, { kind, next, previous, source }),
-        // 网络重试时重新读凭据：上一次尝试可能已续期并轮换 refresh_token，继续用旧值会被判复用
-        getSecretVariables: () => store.getSecrets(account.id).variables,
-      });
+      const windows = await queryAccountWithSilentRenewal(account, provider);
       const checkedAt = new Date().toISOString();
       // 查询成功后刷新身份信息（续期后的最新凭据重新解析一次）
       const identityPatch = cliIdentityPatch(account, provider.requestConfig?.adapterMode, store.getSecrets(account.id));
@@ -1316,7 +1412,7 @@ function createMainWindow() {
     backgroundColor: themeColors(savedTheme()).main, title: 'Quota Desk', icon: loadAppIcon(), autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: preloadPath },
   });
-  mainWindow.loadFile(distPath);
+  mainWindow.loadFile(distPath, process.argv.includes('--onboard') ? { query: { onboard: '1' } } : undefined);
   // Windows 上只有一个真正生效的置顶层，主窗口置顶后与浮窗同层、激活即会盖到浮窗上；
   // 主窗口显示/被激活时把浮窗压回自己上方，保证自家浮窗永不被主界面挡住
   mainWindow.on('show', () => {
@@ -1444,6 +1540,42 @@ const formatWindowSummary = (windows) => (windows || [])
   .map((item) => `${windowSummaryLabels[item.key] || item.key} ${item.unit === '%' ? `${Math.round(Number(item.remaining) || 0)}%` : `${item.amount ?? item.remaining}${item.unit ? ` ${item.unit}` : ''}`}`)
   .join(' · ') || '没有可用额度窗口';
 
+// 数据备份只把用户新增的厂商写入文件；内置厂商会由当前版本迁移逻辑自动补齐。
+const builtinProviderIds = new Set([...Object.keys(builtinConfigs), ...Object.keys(builtinLogos), 'wlb']);
+const exportFileStamp = () => new Date().toISOString().replace(/[:.]/g, '-').replace(/Z$/, '');
+const dataDialogOwner = () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined);
+const accountSecretMap = (accounts) => {
+  const stored = store.loadCredentials();
+  return Object.fromEntries((accounts || [])
+    .filter((account) => Object.prototype.hasOwnProperty.call(stored, account.id))
+    .map((account) => [account.id, store.getSecrets(account.id)]));
+};
+const restoredUsageConnections = (accounts, importedIds) => (accounts || []).map((account) => {
+  if (!importedIds.has(account.id) || account.usageConnection || !PROVIDER_USAGE_CONFIGS[account.providerId]) return account;
+  const auth = readProviderUsageAuth(account.id);
+  if (!auth) return account;
+  return {
+    ...account,
+    usageConnection: {
+      provider: account.providerId,
+      mode: 'official-account',
+      status: 'connected',
+      connectedAt: auth.connectedAt || new Date().toISOString(),
+      checkedAt: null,
+      lastError: null,
+      revision: 1,
+    },
+  };
+});
+const importStatsText = (stats = {}) => [
+  `新增账号 ${Number(stats.importedAccounts ?? stats.accounts ?? 0)} 个`,
+  `跳过重复账号 ${Number(stats.duplicateAccounts || 0)} 个`,
+  `新增厂商 ${Number(stats.importedProviders ?? stats.providers ?? 0)} 个`,
+  `跳过重复厂商 ${Number(stats.duplicateProviders || 0)} 个`,
+  `合并历史点 ${Number(stats.importedHistory ?? stats.history ?? 0)} 条`,
+  `合并周期档案 ${Number(stats.importedCycles ?? stats.cycles ?? 0)} 条`,
+].join('，');
+
 function registerIpc() {
   ipcMain.handle('state:load', () => {
     const state = migrateState(store.loadState());
@@ -1531,6 +1663,101 @@ function registerIpc() {
     const previous = store.loadRemoteAccess();
     store.saveRemoteAccess({ ...previous, token: crypto.randomBytes(32).toString('base64url') });
     return remoteViewStatus();
+  });
+  ipcMain.handle('data:export', async (_event, options = {}) => {
+    const state = migrateState(store.loadState());
+    if (!state) throw new Error('桌面状态尚未初始化');
+    const includeCredentials = options?.includeCredentials !== false;
+    const pkg = buildExportPackage(
+      cleanState(state),
+      store.loadHistory(),
+      store.loadCycles(),
+      includeCredentials ? accountSecretMap(state.accounts) : null,
+      { includeCredentials, builtinProviderIds },
+    );
+    const result = await dialog.showSaveDialog(dataDialogOwner(), {
+      title: '导出 Quota Desk 数据',
+      defaultPath: path.join(app.getPath('documents'), `Quota-Desk-backup-${exportFileStamp()}.json`),
+      filters: [{ name: 'Quota Desk 数据', extensions: ['json'] }, { name: '所有文件', extensions: ['*'] }],
+    });
+    if (result.canceled || !result.filePath) return { canceled: true };
+    try {
+      const tempPath = `${result.filePath}.tmp`;
+      fs.writeFileSync(tempPath, JSON.stringify(pkg, null, 2), 'utf8');
+      fs.renameSync(tempPath, result.filePath);
+    } catch (error) {
+      try { fs.rmSync(`${result.filePath}.tmp`, { force: true }); } catch {}
+      throw new Error(`导出数据失败：${error.message}`);
+    }
+    const accounts = (pkg.state?.accounts || []).length;
+    const providers = (pkg.state?.providers || []).length;
+    const historyPoints = Object.values(pkg.history || {}).reduce((sum, points) => sum + (Array.isArray(points) ? points.length : 0), 0);
+    return { ok: true, path: result.filePath, counts: { accounts, providers, historyPoints, includesCredentials: Boolean(pkg.credentials) } };
+  });
+  ipcMain.handle('data:import', async () => {
+    const result = await dialog.showOpenDialog(dataDialogOwner(), {
+      title: '导入 Quota Desk 数据',
+      properties: ['openFile'],
+      filters: [{ name: 'Quota Desk 数据', extensions: ['json'] }, { name: '所有文件', extensions: ['*'] }],
+    });
+    if (result.canceled || !result.filePaths?.[0]) return { canceled: true };
+    let payload;
+    try {
+      payload = JSON.parse(fs.readFileSync(result.filePaths[0], 'utf8'));
+    } catch (error) {
+      throw new Error(`无法读取数据文件：${error.message}`);
+    }
+    const validation = validateExportPackage(payload, { builtinProviderIds });
+    if (!validation.ok) throw new Error(`数据文件无效：${validation.errors.join('；')}`);
+    const current = migrateState(store.loadState()) || { accounts: [], providers: [], settings: {}, lastSync: new Date().toISOString() };
+    const merged = mergeImportPackage(
+      cleanState(current),
+      store.loadHistory(),
+      store.loadCycles(),
+      payload,
+      { builtinProviderIds, currentCredentials: accountSecretMap(current.accounts) },
+    );
+    const credentialIdsBeforeImport = new Set(Object.keys(store.loadCredentials()));
+    const stats = merged.stats || {};
+    const confirm = await dialog.showMessageBox(dataDialogOwner(), {
+      type: 'question',
+      title: '确认导入数据',
+      message: '将合并 Quota Desk 数据',
+      detail: `${importStatsText(stats)}。当前数据会保留，重复项目不会覆盖。${payload.credentials ? '\n文件包含账号凭据，请确认文件来源可信。' : ''}`,
+      buttons: ['导入', '取消'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (confirm.response !== 0) return { canceled: true, stats };
+    const importedCredentials = payload.credentials || {};
+    let credentialsFailed = 0;
+    for (const [sourceId, secret] of Object.entries(importedCredentials)) {
+      const accountId = merged.accountIdMap?.[sourceId];
+      if (!accountId || credentialIdsBeforeImport.has(accountId)) continue;
+      if (!secret || (!String(secret.credential || '').trim() && !Object.values(secret.variables || {}).some((value) => String(value || '').trim()))) continue;
+      try { store.saveCredential(accountId, secret.credential || '', secret.variables || {}); credentialIdsBeforeImport.add(accountId); }
+      catch (error) { credentialsFailed += 1; console.warn('[Quota Desk] 导入账号凭据失败', accountId, error.message); }
+    }
+    store.saveHistory(merged.history);
+    store.saveCycles(merged.cycles);
+    const importedIds = new Set((payload.state?.accounts || []).map((account) => merged.accountIdMap?.[account.id]).filter(Boolean));
+    const saved = store.saveState(cleanState({
+      ...merged.state,
+      accounts: restoredUsageConnections(merged.state.accounts, importedIds).map((account) => importedIds.has(account.id) && !current.accounts.some((item) => item.id === account.id)
+        ? { ...account, status: 'warning', lastError: '等待首次刷新', lastChecked: null }
+        : account),
+      settings: current.settings,
+      lastSync: new Date().toISOString(),
+    }));
+    const savedIds = new Set((saved.accounts || []).map((account) => account.id));
+    store.pruneCyclesAccounts([...savedIds]);
+    applyProxySetting();
+    schedulePolling();
+    refreshLiveIdentities();
+    sendState(saved);
+    refreshTray();
+    return { ok: true, path: result.filePaths[0], stats: { ...stats, credentialsFailed }, state: { ...saved, runtime: runtimeStatus() } };
   });
   ipcMain.handle('usage:get', async (_event, accountId, options = {}) => queryProviderUsage(String(accountId || ''), options));
   ipcMain.handle('usage:connect', async (_event, accountId) => connectProviderUsage(String(accountId || '')));
@@ -1886,8 +2113,12 @@ function registerIpc() {
       const customTags = Array.isArray(options?.tags) ? options.tags.map((tag) => String(tag).trim()).filter(Boolean) : null;
       // 自动生成的标识（… 尾号）跟随新登录更新，用户手填的标识不动
       const nextIdentity = (!target.identity || target.identity.startsWith('…')) ? (identity.display || target.identity) : target.identity;
+      // API Key 账号扫码升级为订阅模式：补上月订阅窗口（API Key 保留用于 cc-switch 导入去重）
+      const upgradedWindowKeys = target.cliAuthSource !== 'snapshot' && !(target.windowKeys || []).includes('monthly')
+        ? [...(target.windowKeys?.length ? target.windowKeys : ['five_hour', 'weekly']), 'monthly']
+        : null;
       const updatedAccounts = (state.accounts || []).map((account) => account.id === reloginId
-        ? { ...account, identity: nextIdentity, ...(customName ? { name: customName } : {}), ...(customTags ? { tags: customTags } : {}), cliAuthSource: 'snapshot', cliFingerprint: identity.fingerprint, status: 'active', lastError: null }
+        ? { ...account, ...(upgradedWindowKeys ? { windowKeys: upgradedWindowKeys } : {}), identity: nextIdentity, ...(customName ? { name: customName } : {}), ...(customTags ? { tags: customTags } : {}), cliAuthSource: 'snapshot', cliFingerprint: identity.fingerprint, status: 'active', lastError: null }
         : account);
       const saved = store.saveState(cleanState({ ...state, accounts: updatedAccounts }));
       sendState(saved);
@@ -1920,6 +2151,104 @@ function registerIpc() {
     sendState(saved);
     await pollState([id]).catch(() => {});
     return { imported: 1, duplicate: false, name: account.name, state: migrateState(store.loadState()) };
+  });
+
+  // ── MiMo 官方账号登录（Kimi 扫码同款两步模式）─────────────────────────────
+  // 第一步 login-start：弹浏览器窗口实际登录小米账号，捕获的 Cookie 只暂存主进程
+  // 内存（顺手读一次邮箱做标识）；第二步 login-import：用户确认账号名/标签后，
+  // 由主进程原子建号/回写并立即巡检。账号指纹 = 会话里的 userId Cookie。
+  const mimoPendingLogins = new Map();
+  const mimoUserIdOf = (cookies) => {
+    const userId = (Array.isArray(cookies) ? cookies : []).find((cookie) => cookie?.name === 'userId');
+    return typeof userId?.value === 'string' ? userId.value.trim().slice(0, 64) : '';
+  };
+  const mimoLoginDisplay = (entry) => entry.display || (() => {
+    const userId = mimoUserIdOf(entry.cookies);
+    return userId ? `…${userId.slice(-4)}` : '';
+  })();
+
+  ipcMain.handle('mimo:login-start', async () => {
+    const config = PROVIDER_USAGE_CONFIGS.mimo;
+    // 登录窗口用一次性 draft id：分区是内存态、窗口关闭即清理，不落任何账号数据
+    const loginId = `mimo-login-${Date.now().toString(36)}`;
+    const result = await captureBrowserUsageLogin(config, { accountId: loginId, interactive: true });
+    if (!result) return { cancelled: true };
+    let display = '';
+    try {
+      const profile = await fetchMimoProfile(net.fetch, { cookieHeader: mimoCookieHeader(result.cookies), timeoutMs: 10_000 });
+      display = profile?.email || '';
+    } catch {}
+    const code = crypto.randomBytes(12).toString('hex');
+    mimoPendingLogins.set(code, { cookies: result.cookies, connectedAt: result.validatedAt || new Date().toISOString(), display, createdAt: Date.now() });
+    return { code, display };
+  });
+
+  ipcMain.handle('mimo:login-import', async (_event, code, options = {}) => {
+    const entry = mimoPendingLogins.get(String(code || ''));
+    mimoPendingLogins.delete(String(code || ''));
+    if (!entry?.cookies?.length) throw new Error('登录会话已失效，请重新登录');
+    const config = PROVIDER_USAGE_CONFIGS.mimo;
+    const state = migrateState(store.loadState());
+    if (!state) throw new Error('桌面状态尚未初始化');
+    const provider = (state.providers || []).find((item) => item.id === 'mimo');
+    if (!provider) throw new Error('找不到厂商配置：mimo');
+    const fingerprint = mimoUserIdOf(entry.cookies);
+    const display = mimoLoginDisplay(entry);
+    // 重新登录已有账号（静默续期失败后的「重新登录」）：新 Cookie 写回原账号，
+    // 配置全部保留；账号名 / 标签允许在重登面板里顺手改
+    const reloginId = String(options?.accountId || '');
+    if (reloginId) {
+      const target = (state.accounts || []).find((account) => account.id === reloginId && account.providerId === 'mimo');
+      if (!target) throw new Error('找不到要重新登录的 MiMo 账号');
+      if (fingerprint) {
+        const conflict = (state.accounts || []).find((account) => account.id !== reloginId && account.providerId === 'mimo'
+          && mimoUserIdOf(readProviderUsageAuth(account.id)?.cookies || []) === fingerprint);
+        if (conflict) return { imported: 0, duplicate: true, name: conflict.name, state: migrateState(store.loadState()) };
+      }
+      const previous = readProviderUsageAuth(reloginId);
+      saveProviderUsageAuth(reloginId, config, null, previous?.connectedAt, entry.cookies);
+      clearProviderUsageCache(reloginId);
+      const customName = String(options?.name || '').trim();
+      const customTags = Array.isArray(options?.tags) ? options.tags.map((tag) => String(tag).trim()).filter(Boolean) : null;
+      // 自动生成的标识（邮箱 / …尾号）跟随新登录更新，用户手填的标识不动
+      const nextIdentity = (!target.identity || target.identity.startsWith('…') || /.+@.+\..+/.test(target.identity || '')) ? (display || target.identity) : target.identity;
+      const updatedAccounts = (state.accounts || []).map((account) => account.id === reloginId
+        ? { ...account, identity: nextIdentity, ...(customName ? { name: customName } : {}), ...(customTags ? { tags: customTags } : {}), status: 'active', authStatus: null, lastError: null }
+        : account);
+      const saved = store.saveState(cleanState({ ...state, accounts: updatedAccounts }));
+      sendState(saved);
+      markProviderUsageConnected(reloginId, config, previous?.connectedAt, true);
+      await pollState([reloginId]).catch(() => {});
+      return { imported: 1, duplicate: false, relogin: true, name: customName || target.name, display, state: migrateState(store.loadState()) };
+    }
+    // 指纹去重：同一小米账号已收录为独立账号时不重复导入
+    if (fingerprint) {
+      const existing = (state.accounts || []).find((account) => account.providerId === 'mimo'
+        && mimoUserIdOf(readProviderUsageAuth(account.id)?.cookies || []) === fingerprint);
+      if (existing) return { imported: 0, duplicate: true, name: existing.name, state: migrateState(store.loadState()) };
+    }
+    const id = `mimo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    saveProviderUsageAuth(id, config, null, entry.connectedAt, entry.cookies);
+    const customName = String(options?.name || '').trim();
+    const customTags = (Array.isArray(options?.tags) ? options.tags : []).map((tag) => String(tag).trim()).filter(Boolean);
+    const account = {
+      id,
+      providerId: 'mimo',
+      name: customName || provider.name,
+      identity: display,
+      tags: customTags,
+      windowKeys: provider.requestConfig?.windows?.length ? provider.requestConfig.windows : ['monthly', 'yearly'],
+      windows: [],
+      status: 'active',
+      lastError: null,
+      lastChecked: null,
+      lastTestAt: null,
+    };
+    const saved = store.saveState(cleanState({ ...state, accounts: [...(state.accounts || []), account] }));
+    sendState(saved);
+    markProviderUsageConnected(id, config, entry.connectedAt, true);
+    await pollState([id]).catch(() => {});
+    return { imported: 1, duplicate: false, name: account.name, display, state: migrateState(store.loadState()) };
   });
   // 从 cc-switch 导入：扫描结果不含 API key / OAuth token，应用时主进程重新提取并写凭据
   ipcMain.handle('import:scan-ccswitch', () => {
@@ -1964,6 +2293,7 @@ function registerIpc() {
     }
     const nextAccounts = [...(state.accounts || [])];
     const importedIds = [];
+    let kimiApiKeyImported = 0;
     for (const candidate of scan.candidates) {
       if (!selected.has(candidate.key)) continue;
       const provider = providers.find((item) => item.id === candidate.providerId);
@@ -1980,7 +2310,7 @@ function registerIpc() {
           providerId: candidate.providerId,
           name: candidate.name,
           identity: candidate.oauthDisplay || '',
-          tags: ['cc-switch'],
+          tags: [],
           cliAuthSource: 'snapshot',
           cliFingerprint: candidate.fingerprint,
           windowKeys: provider.requestConfig?.windows?.length ? provider.requestConfig.windows : ['five_hour', 'weekly', 'monthly', 'balance'],
@@ -1993,7 +2323,10 @@ function registerIpc() {
       }
       if (usedKeys.has(candidate.apiKey)) continue;
       usedKeys.add(candidate.apiKey);
-      const windows = provider.requestConfig?.windows?.length ? provider.requestConfig.windows : ['five_hour', 'weekly', 'monthly', 'balance'];
+      // Kimi API Key 账号：usages 接口只有 5 小时 / 7 天窗口，不给月订阅留空窗口
+      const isKimiKey = candidate.providerId === 'kimi-subscription';
+      if (isKimiKey) kimiApiKeyImported += 1;
+      const windows = isKimiKey ? ['five_hour', 'weekly'] : (provider.requestConfig?.windows?.length ? provider.requestConfig.windows : ['five_hour', 'weekly', 'monthly', 'balance']);
       store.saveCredential(id, candidate.apiKey);
       importedIds.push(id);
       nextAccounts.push({
@@ -2001,7 +2334,7 @@ function registerIpc() {
         providerId: candidate.providerId,
         name: candidate.name,
         identity: '',
-        tags: ['cc-switch'],
+        tags: [],
         windowKeys: windows,
         windows: [],
         status: 'active',
@@ -2012,7 +2345,8 @@ function registerIpc() {
     const saved = store.saveState(cleanState({ ...state, accounts: nextAccounts }));
     sendState(saved);
     if (importedIds.length) await pollState(importedIds).catch(() => {});
-    return { imported: importedIds.length, state: migrateState(store.loadState()) };
+    // kimiApiKeyImported：本次导入的 Kimi API Key 账号数，前端据此提示「无法获取月额度」
+    return { imported: importedIds.length, kimiApiKeyImported, state: migrateState(store.loadState()) };
   });
   ipcMain.handle('update:get-status', () => updateStatus);
   ipcMain.handle('update:check', () => checkForUpdates(true));
