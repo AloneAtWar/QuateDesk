@@ -118,10 +118,13 @@ const json = (response, status, body) => {
   response.end(JSON.stringify(body));
 };
 
-function createRemoteViewServer({ store, distDir, getToken, getHistory, getCycles, getUsage, port = REMOTE_PORT }) {
+function createRemoteViewServer({ store, distDir, getToken, getReadOnly = () => true, getHistory, getCycles, getUsage, port = REMOTE_PORT }) {
   const server = http.createServer((request, response) => {
     setHeaders(response);
-    if (request.method !== 'GET' && request.method !== 'HEAD') return json(response, 405, { error: 'method_not_allowed' });
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      if (getReadOnly() !== false) return json(response, 403, { error: 'read_only' });
+      return json(response, 405, { error: 'method_not_supported' });
+    }
     let pathname;
     let url;
     try {
@@ -131,7 +134,7 @@ function createRemoteViewServer({ store, distDir, getToken, getHistory, getCycle
 
     if (pathname.startsWith('/api/')) {
       if (!isAuthorized(request.headers.authorization, getToken())) return json(response, 401, { error: 'unauthorized' });
-      if (pathname === '/api/snapshot') return json(response, 200, publicSnapshot(store.loadState()));
+      if (pathname === '/api/snapshot') return json(response, 200, { ...publicSnapshot(store.loadState()), readOnly: getReadOnly() !== false });
       if (pathname === '/api/history') {
         const accountId = url.searchParams.get('accountId') || '';
         const accounts = store.loadState()?.accounts || [];
@@ -176,7 +179,9 @@ function createRemoteViewServer({ store, distDir, getToken, getHistory, getCycle
   });
   return new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(port, '127.0.0.1', () => {
+    // Bind all interfaces so paired devices on the local network can reach the viewer.
+    // External VPN/tunnel routing is intentionally configured outside Quota Desk.
+    server.listen(port, '0.0.0.0', () => {
       server.removeListener('error', reject);
       resolve(server);
     });

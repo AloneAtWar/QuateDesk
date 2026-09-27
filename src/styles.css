@@ -109,6 +109,11 @@ button { cursor: pointer; }
 .remote-setting { display: grid; gap: 10px; }
 .remote-setting .setting-toggle { padding-top: 0; }
 .remote-setting .primary-button.full { width: 100%; }
+.remote-setting-port { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.remote-setting-port > span { display: grid; gap: 3px; min-width: 0; }
+.remote-setting-port b { font-size: 11px; }
+.remote-setting-port small { color: var(--faint); font-size: 9px; line-height: 1.4; }
+.remote-setting-port input { width: 104px; height: 32px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink); background: var(--control); font: 11px 'DM Mono', monospace; }
 .remote-setting-status { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }
 .remote-setting-status i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .remote-setting-status.ok { color: var(--green); }.remote-setting-status.fail, .remote-setting-error { color: var(--coral-deep); }

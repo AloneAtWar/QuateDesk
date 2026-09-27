@@ -118,7 +118,7 @@ function Pairing({ onConnect, message }) {
   return <main className="remote-pair-page">
     <div className="remote-pair-card">
       <div className="remote-pair-icon"><LockKeyhole size={28} strokeWidth={1.7} /></div>
-      <div className="remote-eyebrow">QUOTA DESK · 只读连接</div>
+      <div className="remote-eyebrow">QUOTA DESK · 额度查看</div>
       <h1>在这里查看你的额度</h1>
       <p>在电脑端开启「远程查看」，用手机扫描配对二维码；另一台电脑可复制配对链接打开。</p>
       <form onSubmit={(event) => { event.preventDefault(); if (input.trim()) onConnect(input.trim()); }}>
@@ -449,7 +449,7 @@ function App() {
       } catch (error) {
         if (!active) return;
         if (error.unauthorized) { localStorage.removeItem(TOKEN_KEY); setToken(''); setSnapshot(null); setPairError(error.message); }
-        else setConnectionError('无法连接电脑，请检查电脑是否开机、Quota Desk 与 Tailscale 是否运行');
+        else setConnectionError('无法连接电脑，请确认 Quota Desk 已开启远程查看，且设备能够访问主机地址');
       } finally { if (active) setLoading(false); }
     };
     load();
@@ -474,7 +474,7 @@ function App() {
       {connectionError && <div className="remote-banner offline" role="status"><WifiOff size={19} /><span>{connectionError}{snapshot ? '，下方保留本次打开期间的旧数据。' : '。'}</span></div>}
       {loading && !snapshot ? <div className="remote-loading"><RefreshCw size={24} className="spinning" /><span>正在读取电脑上的额度</span></div> : snapshot ? <>
         {selectedAccount ? <HistoryPanel key={selectedAccount.id} account={selectedAccount} token={token} providerInfo={providerInfo[selectedAccount.providerId]} onClose={() => setSelectedAccountId(null)} /> : <>
-          <div className="view-intro overview-title remote-view-title"><h1>{mode === 'rings' ? '账号总览' : mode === 'rows' ? '行式明细' : '周期明细'}</h1><span className="health-summary">{attentionCount ? `${attentionCount} 个账号需关注` : `${activeAccounts.length} 个账号状态良好`} · 只读</span></div>
+          <div className="view-intro overview-title remote-view-title"><h1>{mode === 'rings' ? '账号总览' : mode === 'rows' ? '行式明细' : '周期明细'}</h1><span className="health-summary">{attentionCount ? `${attentionCount} 个账号需关注` : `${activeAccounts.length} 个账号状态良好`} · {snapshot?.readOnly === false ? '交互访问' : '只读访问'}</span></div>
           {mode === 'rings' && <div className="view-stack"><section className="overview-grid remote-card-grid">{activeAccounts.map((account) => <AccountCard key={account.id} account={account} providerInfo={providerInfo[account.providerId]} stale={minutesSince(account.lastChecked) > staleAfter} onHistory={(item) => setSelectedAccountId(item.id)} />)}</section>{disabledAccounts.length > 0 && <><button type="button" className="disabled-fold" onClick={() => setDisabledOpen((old) => !old)}>{disabledAccounts.length} 个账号已停用，点击{disabledOpen ? '收起' : '展开查看'}{disabledOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</button>{disabledOpen && <div className="overview-grid remote-card-grid disabled-grid">{disabledAccounts.map((account) => <AccountCard key={account.id} account={account} providerInfo={providerInfo[account.providerId]} stale={false} onHistory={(item) => setSelectedAccountId(item.id)} />)}</div>}</>}</div>}
           {mode === 'rows' && <RowsView accounts={activeAccounts} providerInfo={providerInfo} onHistory={(item) => setSelectedAccountId(item.id)} />}
           {mode === 'periods' && <PeriodsView accounts={activeAccounts} providerInfo={providerInfo} onHistory={(item) => setSelectedAccountId(item.id)} />}

@@ -1426,7 +1426,14 @@ function RemoteViewSettings() {
   const [error, setError] = useState('');
   const [copied, setCopied] = useState('');
   const [confirmRotate, setConfirmRotate] = useState(false);
+  const [selectedLanUrl, setSelectedLanUrl] = useState('');
+  const [portDraft, setPortDraft] = useState('');
   useEffect(() => { if (bridge?.getRemoteViewStatus) bridge.getRemoteViewStatus().then(setStatus).catch((reason) => setError(reason.message)); }, [bridge]);
+  useEffect(() => { if (status?.port) setPortDraft(String(status.port)); }, [status?.port]);
+  const lanUrls = Array.isArray(status?.lanUrls) ? status.lanUrls : [];
+  const activeLanUrl = lanUrls.includes(selectedLanUrl) ? selectedLanUrl : lanUrls[0] || '';
+  const portNumber = Number(portDraft);
+  const canSavePort = Number.isInteger(portNumber) && portNumber >= 1024 && portNumber <= 65535 && portNumber !== status?.port;
   const action = async (name, operation) => {
     setBusy(name); setError('');
     try { setStatus(await operation()); }
@@ -1437,39 +1444,39 @@ function RemoteViewSettings() {
     try { await navigator.clipboard.writeText(value); setCopied(label); setTimeout(() => setCopied(''), 2500); }
     catch { setError('复制失败，请检查系统剪贴板权限'); }
   };
-  const tailnetLink = status?.tailscale?.served && status?.tailscale?.url && status?.token
-    ? `${status.tailscale.url}#access=${encodeURIComponent(status.token)}` : '';
+  const lanLink = activeLanUrl && status?.token ? `${activeLanUrl}#access=${encodeURIComponent(status.token)}` : '';
   const localLink = status?.running && status?.token ? `${status.localUrl}#access=${encodeURIComponent(status.token)}` : '';
   const qrImage = useMemo(() => {
-    if (!tailnetLink) return '';
-    try { const qr = qrcode(0, 'M'); qr.addData(tailnetLink); qr.make(); return qr.createDataURL(4, 6); }
+    if (!lanLink) return '';
+    try { const qr = qrcode(0, 'M'); qr.addData(lanLink); qr.make(); return qr.createDataURL(4, 6); }
     catch { return ''; }
-  }, [tailnetLink]);
+  }, [lanLink]);
   if (!bridge?.getRemoteViewStatus) return <small className="drawer-help">远程查看设置仅在桌面应用中可用。</small>;
   return <div className="remote-setting">
-    <Toggle checked={Boolean(status?.enabled)} onChange={(enabled) => action('toggle', () => bridge.setRemoteViewEnabled(enabled))} label="启用只读查看" description="只在本机启动服务，默认关闭" />
+    <Toggle checked={Boolean(status?.enabled)} onChange={(enabled) => action('toggle', () => bridge.setRemoteViewEnabled(enabled))} label="启用局域网访问" description="在这台电脑启动配对保护的数据服务，默认关闭" />
     {!status && !error && <small className="drawer-help">正在读取远程查看状态…</small>}
+    <label className="remote-setting-port"><span><b>访问端口</b><small>1024–65535；修改后重启服务，需使用新地址重新配对</small></span><input type="number" min="1024" max="65535" step="1" value={portDraft} onChange={(event) => setPortDraft(event.target.value)} aria-label="局域网访问端口" /></label>
+    <button type="button" className="outline-button full" disabled={!canSavePort || Boolean(busy)} onClick={() => action('port', () => bridge.setRemoteViewPort(portNumber))}>{busy === 'port' ? '正在应用端口…' : `保存端口${status?.port && portNumber !== status.port ? `（当前 ${status.port}）` : ''}`}</button>
+    <Toggle checked={status?.readOnly !== false} onChange={(readOnly) => action('read-only', () => bridge.setRemoteViewReadOnly(readOnly))} label="只读访问" description={status?.readOnly === false ? '网页操作不受只读限制' : '只允许读取电脑数据（默认开启）'} />
+    <small className="drawer-help">当前网页提供额度查看、视图切换、主题和历史浏览；暂不提供账号或设置编辑。关闭只读不会增加网页当前没有的功能。</small>
     {status?.enabled && <>
-      <div className={`remote-setting-status ${status.running ? 'ok' : 'fail'}`}><i />{status.running ? `本机服务运行中 · 端口 ${status.port}` : '本机服务未启动'}</div>
+      <div className={`remote-setting-status ${status.running ? 'ok' : 'fail'}`}><i />{status.running ? `局域网服务运行中 · 端口 ${status.port}` : '局域网服务未启动'}</div>
       {status.error && <small className="remote-setting-error">{status.error}</small>}
       {localLink && <button type="button" className="outline-button full" onClick={() => bridge.openExternal(localLink)}>在这台电脑的浏览器中预览</button>}
       <div className="remote-setting-divider" />
-      <div className="remote-setting-title"><b>Tailscale 私有访问</b><small>手机和另一台电脑都加入同一个 tailnet</small></div>
-      {status.tailscale?.state === 'missing' && <div className="remote-setting-hint">电脑还没有安装 Tailscale。安装并登录后，重新打开此设置即可配置远程地址。</div>}
-      {status.tailscale?.state === 'offline' && <div className="remote-setting-hint">电脑上的 Tailscale 尚未连接。请先登录并打开连接。</div>}
-      {status.tailscale?.state === 'unavailable' && <div className="remote-setting-hint">暂时读不到 Tailscale 状态。请确认它已运行。</div>}
-      {status.tailscale?.state === 'online' && !status.tailscale.served && <button type="button" className="primary-button full" disabled={Boolean(busy) || !status.running || status.tailscale.occupied} onClick={() => action('tailscale', () => bridge.configureTailscaleServe())}>{busy === 'tailscale' ? '正在配置…' : '配置 Tailscale Serve'}</button>}
-      {status.tailscale?.occupied && <div className="remote-setting-hint">Tailscale 的 8443 端口已有其他服务，请先调整该端口的配置。</div>}
-      {tailnetLink && <div className="remote-setting-share">
+      <div className="remote-setting-title"><b>局域网访问</b><small>手机或其他电脑需能访问这台电脑的局域网地址</small></div>
+      {lanUrls.length === 0 && <div className="remote-setting-hint">暂未发现局域网 IPv4 地址。请确认电脑已连接 Wi-Fi 或以太网。</div>}
+      {lanLink && <div className="remote-setting-share">
         <div className="remote-setting-qr">{qrImage && <img src={qrImage} alt="手机配对二维码" />}</div>
         <b>手机扫码，即可配对</b>
-        <small>另一台电脑可复制配对链接，在浏览器打开。</small>
-        <div className="remote-setting-address" title={status.tailscale.url}>{status.tailscale.url}</div>
-        <button type="button" className="primary-button full" onClick={() => copy('link', tailnetLink)}>{copied === 'link' ? <><Check size={13} /> 已复制链接</> : '复制配对链接'}</button>
+        <small>设备需能访问所选地址；其他电脑也可复制配对链接。</small>
+        {lanUrls.length > 1 && <label className="setting-select remote-setting-lan-select"><span><b>局域网地址</b><small>选择手机或电脑所在网络的地址</small></span><select value={activeLanUrl} onChange={(event) => setSelectedLanUrl(event.target.value)}>{lanUrls.map((url) => <option key={url} value={url}>{url.replace('/remote.html', '')}</option>)}</select></label>}
+        <div className="remote-setting-address" title={activeLanUrl}>{activeLanUrl}</div>
+        <button type="button" className="primary-button full" onClick={() => copy('link', lanLink)}>{copied === 'link' ? <><Check size={13} /> 已复制链接</> : '复制配对链接'}</button>
       </div>}
       <button type="button" className="outline-button full" onClick={() => copy('key', status.token || '')}>{copied === 'key' ? '密钥已复制' : '复制配对密钥'}</button>
       {confirmRotate ? <div className="remote-setting-confirm"><span>旧设备需要重新配对。</span><button type="button" onClick={() => { setConfirmRotate(false); action('rotate', () => bridge.rotateRemoteViewToken()); }}>确认重置</button><button type="button" onClick={() => setConfirmRotate(false)}>取消</button></div> : <button type="button" className="remote-setting-link" onClick={() => setConfirmRotate(true)}>重置配对密钥</button>}
-      <small className="drawer-help">额度仍由这台电脑采集。电脑睡眠、退出 Quota Desk 或断开 Tailscale 时，远程页面无法更新。关闭此开关会停止本机服务。</small>
+      <small className="drawer-help">额度仍由这台电脑采集。电脑睡眠、退出 Quota Desk 或断开网络时，远程页面无法更新。局域网外访问请自行配置 VPN、内网穿透或反向代理转发到此端口；Quota Desk 不管理转发，公网访问请由转发服务提供 HTTPS。配对链接包含访问密钥，只发给自己的设备。关闭局域网访问会停止本机服务。</small>
     </>}
     {error && <div className="remote-setting-error" role="alert">{error}</div>}
   </div>;

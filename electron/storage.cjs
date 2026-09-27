@@ -3,6 +3,7 @@ const path = require('node:path');
 const { app, safeStorage } = require('electron');
 const { appendHistoryPoint, pruneHistory } = require('./history.cjs');
 const { extractCycles, mergeCycles, purgeGhostCycles } = require('./waste.cjs');
+const { REMOTE_PORT } = require('./remote-view.cjs');
 
 const readJson = (filePath, fallback) => {
   try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); }
@@ -51,14 +52,24 @@ class DesktopStore {
       try { token = safeStorage.decryptString(Buffer.from(saved.token, 'base64')); }
       catch { token = ''; }
     }
-    return { enabled: Boolean(saved.enabled), token };
+    const port = Number(saved.port);
+    return {
+      enabled: Boolean(saved.enabled),
+      token,
+      port: Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : REMOTE_PORT,
+      readOnly: saved.readOnly !== false,
+    };
   }
 
-  saveRemoteAccess({ enabled, token }) {
+  saveRemoteAccess({ enabled, token, port = REMOTE_PORT, readOnly = true }) {
     if (!safeStorage.isEncryptionAvailable()) throw new Error('系统凭据加密不可用，无法启用远程查看');
+    const normalizedPort = Number(port);
+    if (!Number.isInteger(normalizedPort) || normalizedPort < 1024 || normalizedPort > 65535) throw new Error('访问端口必须是 1024–65535 之间的整数');
     writeJson(this.remoteAccessPath, {
       enabled: Boolean(enabled),
       token: safeStorage.encryptString(String(token || '')).toString('base64'),
+      port: normalizedPort,
+      readOnly: Boolean(readOnly),
     });
   }
 
