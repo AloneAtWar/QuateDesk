@@ -233,4 +233,4 @@ function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, ge
   });
 }
 
-module.exports = { REMOTE_PORT, createRemoteViewServer, publicSnapshot, publicHistory, publicRemoteSettings, sanitizeRemoteSettingsPatch };
+module.exports = { REMOTE_PORT, createRemoteViewServer, publicSnapshot, publicHistory, publicRemoteSettings };
