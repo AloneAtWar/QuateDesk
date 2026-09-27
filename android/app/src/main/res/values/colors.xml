@@ -7,4 +7,11 @@
     <color name="qd_muted">#9BAAA2</color>
     <color name="qd_accent">#9BDFB2</color>
     <color name="qd_accent_ink">#14271C</color>
+    <color name="qd_light_background">#F3F5F1</color>
+    <color name="qd_light_surface">#FBFCF9</color>
+    <color name="qd_light_surface_raised">#F0F4EF</color>
+    <color name="qd_light_border">#DFE4DF</color>
+    <color name="qd_light_text">#1E282D</color>
+    <color name="qd_light_muted">#788188</color>
+    <color name="qd_light_accent">#2E8B66</color>
 </resources>

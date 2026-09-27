@@ -51,16 +51,17 @@ import java.util.List;
 import java.util.Locale;
 
 public final class MainActivity extends ComponentActivity {
-    private static final int BG = Color.rgb(17, 25, 23);
-    private static final int SURFACE = Color.rgb(25, 34, 31);
-    private static final int RAISED = Color.rgb(32, 43, 39);
-    private static final int BORDER = Color.rgb(48, 61, 56);
-    private static final int INK = Color.rgb(241, 245, 241);
-    private static final int MUTED = Color.rgb(155, 170, 162);
-    private static final int ACCENT = Color.rgb(155, 223, 178);
-    private static final int ACCENT_INK = Color.rgb(20, 39, 28);
+    private int BG;
+    private int SURFACE;
+    private int RAISED;
+    private int BORDER;
+    private int INK;
+    private int MUTED;
+    private int ACCENT;
+    private int ACCENT_INK;
     private static final String PREFS = "quota_desk_mobile";
     private static final String PREF_PROFILES = "device_profiles_v1";
+    private static final String PREF_LIGHT_THEME = "light_theme_v1";
 
     private final List<DeviceProfile> devices = new ArrayList<>();
     private ActivityResultLauncher<ScanOptions> scanLauncher;
@@ -69,18 +70,22 @@ public final class MainActivity extends ComponentActivity {
     private TextView loadingLabel;
     private DeviceProfile activeProfile;
     private boolean showingDashboard;
+    private boolean lightTheme;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        lightTheme = getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(PREF_LIGHT_THEME, false);
+        setTheme(lightTheme ? R.style.AppThemeLight : R.style.AppTheme);
         super.onCreate(savedInstanceState);
+        applyNativeThemeColors();
         Window window = getWindow();
         WindowCompat.setDecorFitsSystemWindows(window, false);
         window.setStatusBarColor(Color.TRANSPARENT);
         window.setNavigationBarColor(Color.TRANSPARENT);
         if (android.os.Build.VERSION.SDK_INT >= 29) window.setNavigationBarContrastEnforced(false);
         WindowInsetsControllerCompat bars = WindowCompat.getInsetsController(window, window.getDecorView());
-        bars.setAppearanceLightStatusBars(false);
-        bars.setAppearanceLightNavigationBars(false);
+        bars.setAppearanceLightStatusBars(lightTheme);
+        bars.setAppearanceLightNavigationBars(lightTheme);
 
         scanLauncher = registerForActivityResult(new ScanContract(), this::onScanResult);
         loadProfiles();
@@ -273,6 +278,18 @@ public final class MainActivity extends ComponentActivity {
         badge.setPadding(dp(9), dp(6), dp(9), dp(6));
         badge.setBackground(round(RAISED, 20, BORDER, 1));
         brand.addView(badge);
+        TextView themeButton = label(lightTheme ? "☀" : "☾", 17, INK, true);
+        themeButton.setGravity(Gravity.CENTER);
+        themeButton.setContentDescription(lightTheme ? "切换暗色主题" : "切换亮色主题");
+        themeButton.setBackground(round(SURFACE, 10, BORDER, 1));
+        LinearLayout.LayoutParams themeParams = new LinearLayout.LayoutParams(dp(36), dp(36));
+        themeParams.leftMargin = dp(8);
+        brand.addView(themeButton, themeParams);
+        themeButton.setOnClickListener(view -> {
+            lightTheme = !lightTheme;
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_LIGHT_THEME, lightTheme).apply();
+            recreate();
+        });
         content.addView(brand);
 
         content.addView(gap(34));
@@ -622,6 +639,28 @@ public final class MainActivity extends ComponentActivity {
         });
         ViewCompat.requestApplyInsets(frame);
         return frame;
+    }
+
+    private void applyNativeThemeColors() {
+        if (lightTheme) {
+            BG = Color.rgb(243, 245, 241);
+            SURFACE = Color.rgb(251, 252, 249);
+            RAISED = Color.rgb(240, 244, 239);
+            BORDER = Color.rgb(223, 228, 223);
+            INK = Color.rgb(30, 40, 45);
+            MUTED = Color.rgb(120, 129, 136);
+            ACCENT = Color.rgb(46, 139, 102);
+            ACCENT_INK = Color.WHITE;
+        } else {
+            BG = Color.rgb(17, 25, 23);
+            SURFACE = Color.rgb(25, 34, 31);
+            RAISED = Color.rgb(32, 43, 39);
+            BORDER = Color.rgb(48, 61, 56);
+            INK = Color.rgb(241, 245, 241);
+            MUTED = Color.rgb(155, 170, 162);
+            ACCENT = Color.rgb(155, 223, 178);
+            ACCENT_INK = Color.rgb(20, 39, 28);
+        }
     }
 
     private void toast(String message) {

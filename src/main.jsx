@@ -293,9 +293,9 @@ const PROVIDER_USAGE_COPY = {
   },
 };
 const providerUsageCopy = (provider) => PROVIDER_USAGE_COPY[provider?.id] || null;
-const providerUsageSupported = (account, provider) => Boolean(providerUsageCopy(provider))
+const providerUsageSupported = (account, provider, { readOnly = false } = {}) => Boolean(providerUsageCopy(provider))
   && account?.usageConnection?.supported !== false
-  && Boolean(window.quotaDesk?.getProviderUsage && window.quotaDesk?.connectProviderUsage && window.quotaDesk?.disconnectProviderUsage);
+  && Boolean(window.quotaDesk?.getProviderUsage && (readOnly || (window.quotaDesk?.connectProviderUsage && window.quotaDesk?.disconnectProviderUsage)));
 const providerUsageStatus = (account) => {
   const connection = account?.usageConnection || {};
   if (connection.status) return connection.status;
@@ -906,10 +906,10 @@ function WasteView({ account, wasteWindows }) {
 
 // 厂商控制台的逐日用量。默认按金额着色；只有服务端同时返回 Token 数据时才
 // 开放切换。每一格都来自 usage:get 的 days，和本地轮询历史完全隔离。
-function ProviderUsageView({ account, provider, onState }) {
+function ProviderUsageView({ account, provider, onState, readOnly = false }) {
   const bridge = window.quotaDesk;
   const reportedStatus = providerUsageStatus(account);
-  const supported = providerUsageSupported(account, provider);
+  const supported = providerUsageSupported(account, provider, { readOnly });
   const [status, setStatus] = useState(reportedStatus);
   const [data, setData] = useState(null);
   const [empty, setEmpty] = useState(false);
@@ -1025,13 +1025,13 @@ function ProviderUsageView({ account, provider, onState }) {
   const copy = providerUsageCopy(provider) || PROVIDER_USAGE_COPY.deepseek;
   if (status === 'disconnected') return <div className="provider-usage-state connect-guide">
     <span className="provider-usage-state-icon"><Globe size={18} /></span>
-    <div><b>连接 {copy.display} 官方用量</b><small>{copy.connectHint}</small>{error && <em>{error}</em>}</div>
-    <button type="button" className="primary-button" disabled={connecting} onClick={connect}><Globe size={13} />{connecting ? copy.connecting : copy.connectAction}</button>
+    <div><b>{readOnly ? '官方用量尚未连接' : `连接 ${copy.display} 官方用量`}</b><small>{readOnly ? '请在电脑端设置中连接官方账号后查看。' : copy.connectHint}</small>{error && <em>{error}</em>}</div>
+    {!readOnly && <button type="button" className="primary-button" disabled={connecting} onClick={connect}><Globe size={13} />{connecting ? copy.connecting : copy.connectAction}</button>}
   </div>;
   if (status === 'reauth_required') return <div className="provider-usage-state auth-required">
     <span className="provider-usage-state-icon"><AlertCircle size={18} /></span>
-    <div><b>官方用量连接已失效</b><small>{account.usageConnection?.lastError || copy.reauthHint}</small>{error && <em>{error}</em>}</div>
-    <button type="button" className="primary-button" disabled={connecting} onClick={connect}><Globe size={13} />{connecting ? copy.connecting : '重新连接'}</button>
+    <div><b>官方用量连接已失效</b><small>{readOnly ? '请在电脑端设置中重新连接官方账号。' : account.usageConnection?.lastError || copy.reauthHint}</small>{error && <em>{error}</em>}</div>
+    {!readOnly && <button type="button" className="primary-button" disabled={connecting} onClick={connect}><Globe size={13} />{connecting ? copy.connecting : '重新连接'}</button>}
   </div>;
   if (loading && !data) return <div className="provider-usage-state"><RefreshCw size={17} className="spinning" /><div><b>正在读取 {copy.display} 服务端用量</b><small>{copy.loading}</small></div></div>;
   if ((error || empty) && !data) return <div className="provider-usage-state">
@@ -1210,7 +1210,7 @@ function ProviderUsageView({ account, provider, onState }) {
   </div>;
 }
 
-function HistoryView({ account, provider, onBack, onProviderUsageState }) {
+function HistoryView({ account, provider, onBack, onProviderUsageState, readOnly = false, wasteWindowsOverride }) {
   const [points, setPoints] = useState(null);
   const [hiddenKeys, setHiddenKeys] = useState([]);
   const [view, setView] = useState('trend');
@@ -1219,14 +1219,14 @@ function HistoryView({ account, provider, onBack, onProviderUsageState }) {
   // 再按账号实际追踪的窗口过滤：用户选过窗口用 windowKeys，否则用接口实时返回的窗口；
   // 账号还没有任何窗口数据时不过滤（避免轮询失败期间入口闪烁）
   const wasteWindows = useMemo(() => {
-    const base = resolveWasteWindows(provider?.requestConfig);
+    const base = Array.isArray(wasteWindowsOverride) ? wasteWindowsOverride : resolveWasteWindows(provider?.requestConfig);
     const tracked = Array.isArray(account.windowKeys) && account.windowKeys.length
       ? account.windowKeys
       : (account.windows?.length ? account.windows.map((item) => item.key) : null);
     return tracked ? base.filter((key) => tracked.includes(key)) : base;
-  }, [provider, account]);
+  }, [provider, account, wasteWindowsOverride]);
   // 用量统计入口常驻：未连接时页内直接引导登录，登录过期也能在原位置重新连接。
-  const showProviderUsageEntry = providerUsageSupported(account, provider);
+  const showProviderUsageEntry = providerUsageSupported(account, provider, { readOnly });
   const showWaste = view === 'waste' && wasteWindows.length > 0;
   const showProviderUsage = view === 'provider-usage' && showProviderUsageEntry;
   useEffect(() => {
@@ -1291,7 +1291,7 @@ function HistoryView({ account, provider, onBack, onProviderUsageState }) {
           {historyTabs.map((tab) => <button type="button" role="tab" id={`${historyDomId}-tab-${tab.key}`} data-history-tab={tab.key} key={tab.key} tabIndex={view === tab.key ? 0 : -1} aria-controls={historyPanelId} aria-selected={view === tab.key} className={view === tab.key ? 'active' : ''} onClick={() => setView(tab.key)}>{tab.label}</button>)}
         </div>}
       </div>
-      <div className="history-tabpanel" {...(hasHistoryTabs ? { role: 'tabpanel', id: historyPanelId, 'aria-labelledby': `${historyDomId}-tab-${view}` } : {})}>{showProviderUsage ? <ProviderUsageView account={account} provider={provider} onState={onProviderUsageState} /> : showWaste ? <WasteView account={account} wasteWindows={wasteWindows} /> : <div className="trend-view">
+      <div className="history-tabpanel" {...(hasHistoryTabs ? { role: 'tabpanel', id: historyPanelId, 'aria-labelledby': `${historyDomId}-tab-${view}` } : {})}>{showProviderUsage ? <ProviderUsageView account={account} provider={provider} onState={onProviderUsageState} readOnly={readOnly} /> : showWaste ? <WasteView account={account} wasteWindows={wasteWindows} /> : <div className="trend-view">
         {points === null ? <div className="settings-empty chart-empty">正在读取历史记录…</div>
           : points.length === 0 ? <div className="settings-empty chart-empty">暂无历史数据，每次成功刷新额度后都会记录一条</div>
             : <UsageChart points={points} hiddenKeys={hiddenKeys} rangeKey={rangeKey} onRangeKeyChange={setRangeKey} />}
@@ -1423,7 +1423,7 @@ function OverviewCard({ account, provider, feedback, onOpenHistory, onRelogin, o
   </div>;
 }
 
-function StatusView({ accounts, providers, runtime, onTestAccount, testingAccountId, testResults, reminderRules, mode = 'rings', onModeChange, onOpenSettings, lastSync, onRefresh, refreshing, onOpenHistory, onRelogin, onReorderAccounts, sortWeights }) {
+function StatusView({ accounts, providers, runtime, onTestAccount, testingAccountId, testResults = {}, reminderRules = [], mode = 'rings', onModeChange, onOpenSettings, lastSync, onRefresh, refreshing, onOpenHistory, onRelogin, onReorderAccounts, sortWeights, readOnly = false }) {
   // 停用账号从所有视图的常规列表里分离出来：rows/periods 直接不显示（resetAt 已过期会污染时间排序），
   // rings 视图单独收进置底的折叠分组；组内按停用时间倒序（最近停的排最前）
   const disabledAccounts = accounts.filter((a) => a.disabled)
@@ -1434,7 +1434,7 @@ function StatusView({ accounts, providers, runtime, onTestAccount, testingAccoun
   const [overId, setOverId] = useState(null);
   const skipClickRef = useRef(false);
   const allDisabledHint = disabledAccounts.length > 0 && activeAccounts.length === 0
-    ? <div className="settings-empty all-disabled-empty">所有账号均已停用。切换到「账号总览」视图，或在设置的账号列表中可重新启用。</div>
+    ? <div className="settings-empty all-disabled-empty">{readOnly ? '所有账号均已停用。可切换到「账号总览」查看停用前记录。' : '所有账号均已停用。切换到「账号总览」视图，或在设置的账号列表中可重新启用。'}</div>
     : null;
   if (mode === 'rows') return <div className="view-stack">{activeAccounts.length ? <WindowsView accounts={activeAccounts} providers={providers} reminderRules={reminderRules} embedded onOpenHistory={onOpenHistory} onRelogin={onRelogin} /> : allDisabledHint}</div>;
   if (mode === 'periods') return <div className="view-stack">{activeAccounts.length ? <PriorityView accounts={activeAccounts} providers={providers} reminderRules={reminderRules} onOpenHistory={onOpenHistory} sortWeights={sortWeights} /> : allDisabledHint}</div>;
@@ -1468,6 +1468,7 @@ function RemoteViewSettings() {
   const [error, setError] = useState('');
   const [copied, setCopied] = useState('');
   const [confirmRotate, setConfirmRotate] = useState(false);
+  const [qrOpen, setQrOpen] = useState(false);
   const [selectedLanUrl, setSelectedLanUrl] = useState('');
   const [portDraft, setPortDraft] = useState('');
   useEffect(() => { if (bridge?.getRemoteViewStatus) bridge.getRemoteViewStatus().then(setStatus).catch((reason) => setError(reason.message)); }, [bridge]);
@@ -1486,8 +1487,7 @@ function RemoteViewSettings() {
     try { await navigator.clipboard.writeText(value); setCopied(label); setTimeout(() => setCopied(''), 2500); }
     catch { setError('复制失败，请检查系统剪贴板权限'); }
   };
-  const lanLink = activeLanUrl && status?.token ? `${activeLanUrl}#access=${encodeURIComponent(status.token)}` : '';
-  const localLink = status?.running && status?.token ? `${status.localUrl}#access=${encodeURIComponent(status.token)}` : '';
+  const lanLink = status?.running && activeLanUrl && status?.token ? `${activeLanUrl}#access=${encodeURIComponent(status.token)}` : '';
   const qrImage = useMemo(() => {
     if (!lanLink) return '';
     try { const qr = qrcode(0, 'M'); qr.addData(lanLink); qr.make(); return qr.createDataURL(4, 6); }
@@ -1495,32 +1495,30 @@ function RemoteViewSettings() {
   }, [lanLink]);
   if (!bridge?.getRemoteViewStatus) return <small className="drawer-help">远程查看设置仅在桌面应用中可用。</small>;
   return <div className="remote-setting">
-    <Toggle checked={Boolean(status?.enabled)} onChange={(enabled) => action('toggle', () => bridge.setRemoteViewEnabled(enabled))} label="启用局域网访问" description="在这台电脑启动配对保护的数据服务，默认关闭" />
-    {!status && !error && <small className="drawer-help">正在读取远程查看状态…</small>}
-    <label className="remote-setting-port"><span><b>访问端口</b><small>1024–65535；修改后重启服务，需使用新地址重新配对</small></span><input type="number" min="1024" max="65535" step="1" value={portDraft} onChange={(event) => setPortDraft(event.target.value)} aria-label="局域网访问端口" /></label>
-    <button type="button" className="outline-button full" disabled={!canSavePort || Boolean(busy)} onClick={() => action('port', () => bridge.setRemoteViewPort(portNumber))}>{busy === 'port' ? '正在应用端口…' : `保存端口${status?.port && portNumber !== status.port ? `（当前 ${status.port}）` : ''}`}</button>
-    <Toggle checked={status?.readOnly !== false} onChange={(readOnly) => action('read-only', () => bridge.setRemoteViewReadOnly(readOnly))} label="只读访问" description={status?.readOnly === false ? '网页操作不受只读限制' : '只允许读取电脑数据（默认开启）'} />
-    <small className="drawer-help">当前网页提供额度查看、视图切换、主题和历史浏览；暂不提供账号或设置编辑。关闭只读不会增加网页当前没有的功能。</small>
+    <Toggle checked={Boolean(status?.enabled)} onChange={(enabled) => action('toggle', () => bridge.setRemoteViewEnabled(enabled))} label="启用局域网访问" description="允许其他设备连接这台电脑，默认关闭" />
+    {!status && !error && <small className="drawer-help">正在读取状态…</small>}
+    <div className="remote-setting-port-row">
+      <label className="remote-setting-port"><span><b>访问端口</b><small>修改后服务会重启</small></span><input type="number" min="1024" max="65535" step="1" value={portDraft} onChange={(event) => setPortDraft(event.target.value)} aria-label="局域网访问端口" /></label>
+      <button type="button" className="outline-button remote-port-save" disabled={!canSavePort || Boolean(busy)} onClick={() => action('port', () => bridge.setRemoteViewPort(portNumber))}>{busy === 'port' ? '保存中…' : '保存'}</button>
+    </div>
+    <Toggle checked={status?.readOnly !== false} onChange={(readOnly) => action('read-only', () => bridge.setRemoteViewReadOnly(readOnly))} label="只读访问" description="关闭后开放网页目前已有的操作" />
     {status?.enabled && <>
-      <div className={`remote-setting-status ${status.running ? 'ok' : 'fail'}`}><i />{status.running ? `局域网服务运行中 · 端口 ${status.port}` : '局域网服务未启动'}</div>
+      <div className={`remote-setting-status ${status.running ? 'ok' : 'fail'}`}><i />{status.running ? `运行中 · 端口 ${status.port}` : '局域网服务未启动'}</div>
       {status.error && <small className="remote-setting-error">{status.error}</small>}
-      {localLink && <button type="button" className="outline-button full" onClick={() => bridge.openExternal(localLink)}>在这台电脑的浏览器中预览</button>}
-      <div className="remote-setting-divider" />
-      <div className="remote-setting-title"><b>局域网访问</b><small>手机或其他电脑需能访问这台电脑的局域网地址</small></div>
-      {lanUrls.length === 0 && <div className="remote-setting-hint">暂未发现局域网 IPv4 地址。请确认电脑已连接 Wi-Fi 或以太网。</div>}
-      {lanLink && <div className="remote-setting-share">
-        <div className="remote-setting-qr">{qrImage && <img src={qrImage} alt="手机配对二维码" />}</div>
-        <b>手机扫码，即可配对</b>
-        <small>设备需能访问所选地址；其他电脑也可复制配对链接。</small>
-        {lanUrls.length > 1 && <label className="setting-select remote-setting-lan-select"><span><b>局域网地址</b><small>选择手机或电脑所在网络的地址</small></span><select value={activeLanUrl} onChange={(event) => setSelectedLanUrl(event.target.value)}>{lanUrls.map((url) => <option key={url} value={url}>{url.replace('/remote.html', '')}</option>)}</select></label>}
-        <div className="remote-setting-address" title={activeLanUrl}>{activeLanUrl}</div>
-        <button type="button" className="primary-button full" onClick={() => copy('link', lanLink)}>{copied === 'link' ? <><Check size={13} /> 已复制链接</> : '复制配对链接'}</button>
-      </div>}
-      <button type="button" className="outline-button full" onClick={() => copy('key', status.token || '')}>{copied === 'key' ? '密钥已复制' : '复制配对密钥'}</button>
+      {lanLink && <button type="button" className="primary-button full remote-qr-button" onClick={() => setQrOpen(true)}><QrCode size={15} />显示配对二维码</button>}
+      {status.running && !lanLink && <div className="remote-setting-hint">暂未发现局域网地址，请确认电脑已连接 Wi-Fi 或以太网。</div>}
       {confirmRotate ? <div className="remote-setting-confirm"><span>旧设备需要重新配对。</span><button type="button" onClick={() => { setConfirmRotate(false); action('rotate', () => bridge.rotateRemoteViewToken()); }}>确认重置</button><button type="button" onClick={() => setConfirmRotate(false)}>取消</button></div> : <button type="button" className="remote-setting-link" onClick={() => setConfirmRotate(true)}>重置配对密钥</button>}
-      <small className="drawer-help">额度仍由这台电脑采集。电脑睡眠、退出 Quota Desk 或断开网络时，远程页面无法更新。局域网外访问请自行配置 VPN、内网穿透或反向代理转发到此端口；Quota Desk 不管理转发，公网访问请由转发服务提供 HTTPS。配对链接包含访问密钥，只发给自己的设备。关闭局域网访问会停止本机服务。</small>
+      <small className="drawer-help">电脑需保持运行。跨网络访问由你使用的 VPN 或内网穿透提供。</small>
     </>}
     {error && <div className="remote-setting-error" role="alert">{error}</div>}
+    {qrOpen && lanLink && <div className="modal-backdrop remote-qr-backdrop" onClick={() => setQrOpen(false)}><section className="modal compact-modal remote-qr-modal" role="dialog" aria-modal="true" aria-labelledby="remote-qr-title" onClick={(event) => event.stopPropagation()}>
+      <div className="modal-head"><div><h2 id="remote-qr-title">配对设备</h2><small>使用手机或其他电脑扫描</small></div><button type="button" className="icon-button" aria-label="关闭" onClick={() => setQrOpen(false)}><X size={16} /></button></div>
+      {lanUrls.length > 1 && <label className="field remote-qr-address-field"><span>连接地址</span><select value={activeLanUrl} onChange={(event) => setSelectedLanUrl(event.target.value)}>{lanUrls.map((url) => <option key={url} value={url}>{url.replace('/remote.html', '')}</option>)}</select></label>}
+      <div className="remote-setting-qr">{qrImage && <img src={qrImage} alt="配对二维码" />}</div>
+      <div className="remote-setting-address" title={activeLanUrl}>{activeLanUrl}</div>
+      <button type="button" className="primary-button full" onClick={() => copy('link', lanLink)}>{copied === 'link' ? <><Check size={13} />已复制链接</> : '复制配对链接'}</button>
+      <small className="drawer-help">手机和电脑需能访问上面的地址。</small>
+    </section></div>}
   </div>;
 }
 
@@ -3556,7 +3554,8 @@ function App() {
 }
 
 export default App;
-export { ProviderUsageView };
+export { HistoryView, ProviderUsageView, StatusView };
 
 const widgetMode = new URLSearchParams(window.location.search).get('widget') === '1';
-createRoot(document.getElementById('root')).render(widgetMode ? <WidgetApp /> : <App />);
+const rootElement = document.getElementById('root');
+if (rootElement) createRoot(rootElement).render(widgetMode ? <WidgetApp /> : <App />);
