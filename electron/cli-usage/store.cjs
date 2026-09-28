@@ -6,7 +6,7 @@ const crypto = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
 const {
   canonicalModelKey, modelKeyForGrouping, modelDisplayName, hmacHex,
-  buildDayBoundaries, localDateString, computeStreaks,
+  buildDayBoundaries, localDateString, computeStreaks, createModelRuleMatcher,
 } = require('./normalize.cjs');
 
 const SCHEMA_VERSION = '1';
@@ -191,23 +191,78 @@ ON CONFLICT(agent, root_id, file_key) DO UPDATE SET
     return Number(row?.records || 0);
   }
 
-  earliestEventMs(agentFilter) {
-    const row = agentFilter && agentFilter !== 'all'
-      ? this.db.prepare('SELECT MIN(occurred_at_ms) AS earliest FROM usage_events WHERE agent = ?').get(agentFilter)
-      : this.db.prepare('SELECT MIN(occurred_at_ms) AS earliest FROM usage_events').get();
-    return row?.earliest ? Number(row.earliest) : null;
+  earliestEventMs(agentFilter, modelRules = null) {
+    if (modelRules === null || modelRules === undefined) {
+      const row = agentFilter && agentFilter !== 'all'
+        ? this.db.prepare('SELECT MIN(occurred_at_ms) AS earliest FROM usage_events WHERE agent = ?').get(agentFilter)
+        : this.db.prepare('SELECT MIN(occurred_at_ms) AS earliest FROM usage_events').get();
+      return row?.earliest ? Number(row.earliest) : null;
+    }
+    const matchesModel = createModelRuleMatcher(modelRules);
+    const filterByAgent = agentFilter && agentFilter !== 'all';
+    const iterator = filterByAgent
+      ? this.db.prepare('SELECT occurred_at_ms, model, canonical_model_key FROM usage_events WHERE agent = ? ORDER BY occurred_at_ms').iterate(agentFilter)
+      : this.db.prepare('SELECT occurred_at_ms, model, canonical_model_key FROM usage_events ORDER BY occurred_at_ms').iterate();
+    for (const row of iterator) {
+      if (matchesModel(row.canonical_model_key, row.model)) return Number(row.occurred_at_ms);
+    }
+    return null;
   }
 
-  totalTokensAll(agentFilter) {
-    const row = agentFilter && agentFilter !== 'all'
-      ? this.db.prepare('SELECT SUM(total_tokens) AS total FROM usage_events WHERE agent = ?').get(agentFilter)
-      : this.db.prepare('SELECT SUM(total_tokens) AS total FROM usage_events').get();
-    return Number(row?.total || 0);
+  totalTokensAll(agentFilter, modelRules = null) {
+    if (modelRules === null || modelRules === undefined) {
+      const row = agentFilter && agentFilter !== 'all'
+        ? this.db.prepare('SELECT SUM(total_tokens) AS total FROM usage_events WHERE agent = ?').get(agentFilter)
+        : this.db.prepare('SELECT SUM(total_tokens) AS total FROM usage_events').get();
+      return Number(row?.total || 0);
+    }
+    const matchesModel = createModelRuleMatcher(modelRules);
+    const filterByAgent = agentFilter && agentFilter !== 'all';
+    const iterator = filterByAgent
+      ? this.db.prepare('SELECT model, canonical_model_key, total_tokens FROM usage_events WHERE agent = ?').iterate(agentFilter)
+      : this.db.prepare('SELECT model, canonical_model_key, total_tokens FROM usage_events').iterate();
+    let total = 0;
+    for (const row of iterator) {
+      if (matchesModel(row.canonical_model_key, row.model)) total += Number(row.total_tokens) || 0;
+    }
+    return total;
+  }
+
+  matchingModels(agentFilter, modelRules) {
+    if (modelRules === null || modelRules === undefined) return [];
+    const matchesModel = createModelRuleMatcher(modelRules);
+    const filterByAgent = agentFilter && agentFilter !== 'all';
+    const iterator = filterByAgent
+      ? this.db.prepare('SELECT canonical_model_key, MIN(model) AS model FROM usage_events WHERE agent = ? GROUP BY canonical_model_key').iterate(agentFilter)
+      : this.db.prepare('SELECT canonical_model_key, MIN(model) AS model FROM usage_events GROUP BY canonical_model_key').iterate();
+    const models = [];
+    for (const row of iterator) {
+      if (!matchesModel(row.canonical_model_key, row.model)) continue;
+      models.push({
+        key: row.canonical_model_key || canonicalModelKey(row.model),
+        displayName: modelDisplayName(row.model || row.canonical_model_key),
+      });
+    }
+    return models
+      .filter((model) => model.key)
+      .sort((left, right) => left.displayName.localeCompare(right.displayName, 'zh-Hans-CN'));
+  }
+
+  matchingRecordsByAgent(modelRules) {
+    if (modelRules === null || modelRules === undefined) return null;
+    const matchesModel = createModelRuleMatcher(modelRules);
+    const counts = Object.fromEntries(AGENT_ORDER.map((agent) => [agent, 0]));
+    const iterator = this.db.prepare('SELECT agent, model, canonical_model_key, COUNT(*) AS records FROM usage_events GROUP BY agent, canonical_model_key, model').iterate();
+    for (const row of iterator) {
+      if (!matchesModel(row.canonical_model_key, row.model)) continue;
+      counts[row.agent] = (counts[row.agent] || 0) + Number(row.records || 0);
+    }
+    return counts;
   }
 
   // ---- 聚合:近一年摘要 ---------------------------------------------------
 
-  summary({ agent, timezone, endDate, days = 365 }) {
+  summary({ agent, timezone, endDate, days = 365, modelRules = null }) {
     // endDate 缺省为该时区今天(双保险:facade 的 IPC 层也会先规整)
     const effectiveEndDate = endDate || localDateString(timezone);
     const boundaries = buildDayBoundaries(timezone, effectiveEndDate, days);
@@ -225,15 +280,17 @@ ON CONFLICT(agent, root_id, file_key) DO UPDATE SET
     let cacheReadTokens = 0;
     let cacheWriteTokens = 0;
     let outputTokens = 0;
+    const matchesModel = createModelRuleMatcher(modelRules);
 
     const filterByAgent = agent && agent !== 'all';
     const iterate = filterByAgent
-      ? this.db.prepare('SELECT agent, occurred_at_ms, session_key, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, total_tokens FROM usage_events WHERE agent = ? AND occurred_at_ms >= ? AND occurred_at_ms < ? ORDER BY occurred_at_ms')
-      : this.db.prepare('SELECT agent, occurred_at_ms, session_key, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, total_tokens FROM usage_events WHERE occurred_at_ms >= ? AND occurred_at_ms < ? ORDER BY occurred_at_ms');
+      ? this.db.prepare('SELECT agent, occurred_at_ms, session_key, model, canonical_model_key, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, total_tokens FROM usage_events WHERE agent = ? AND occurred_at_ms >= ? AND occurred_at_ms < ? ORDER BY occurred_at_ms')
+      : this.db.prepare('SELECT agent, occurred_at_ms, session_key, model, canonical_model_key, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, total_tokens FROM usage_events WHERE occurred_at_ms >= ? AND occurred_at_ms < ? ORDER BY occurred_at_ms');
     const params = filterByAgent ? [agent, startMs, endMs] : [startMs, endMs];
 
     let index = 0;
     for (const row of iterate.iterate(...params)) {
+      if (!matchesModel(row.canonical_model_key, row.model)) continue;
       const stamp = Number(row.occurred_at_ms);
       while (index < buckets.length - 1 && stamp >= buckets[index].endMs) index += 1;
       if (stamp < buckets[index].startMs) continue;
@@ -260,12 +317,14 @@ ON CONFLICT(agent, root_id, file_key) DO UPDATE SET
     const cacheBase = inputTokens + cacheReadTokens + cacheWriteTokens;
     const cacheReuseRatio = cacheBase > 0 ? cacheReadTokens / cacheBase : null;
     // 累计口径:全部已索引历史;若最早事件早于窗口起点,说明只覆盖部分区间
-    const allHistoryTokens = this.totalTokensAll(agent);
-    const earliest = this.earliestEventMs(agent);
+    const allHistoryTokens = this.totalTokensAll(agent, modelRules);
+    const earliest = this.earliestEventMs(agent, modelRules);
 
     return {
       range: { start: boundaries[0].date, end: boundaries[boundaries.length - 1].date, timezone },
-      filter: { agent, timezone, endDate },
+      filter: { agent, timezone, endDate, modelRules },
+      matchedModels: this.matchingModels(agent, modelRules),
+      recordsByAgent: this.matchingRecordsByAgent(modelRules),
       summary: {
         totalTokens: allHistoryTokens,
         coverageComplete: earliest === null || earliest >= startMs,
@@ -292,7 +351,7 @@ ON CONFLICT(agent, root_id, file_key) DO UPDATE SET
 
   // ---- 聚合:模型拆分 -----------------------------------------------------
 
-  models({ agent, mergeSameModels, scope, timezone }) {
+  models({ agent, mergeSameModels, scope, timezone, modelRules = null }) {
     const filterByAgent = agent && agent !== 'all';
     const effectiveMerge = !filterByAgent && mergeSameModels !== false;
     let startMs;
@@ -317,12 +376,14 @@ ON CONFLICT(agent, root_id, file_key) DO UPDATE SET
     }
 
     const groups = new Map();
+    const matchesModel = createModelRuleMatcher(modelRules);
     const select = filterByAgent
       ? 'SELECT agent, session_key, model, canonical_model_key, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, reasoning_tokens, extra_tokens, total_tokens FROM usage_events WHERE agent = ? AND occurred_at_ms >= ? AND occurred_at_ms < ?'
       : 'SELECT agent, session_key, model, canonical_model_key, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, reasoning_tokens, extra_tokens, total_tokens FROM usage_events WHERE occurred_at_ms >= ? AND occurred_at_ms < ?';
     const params = filterByAgent ? [agent, startMs, endMs] : [startMs, endMs];
 
     for (const row of this.db.prepare(select).iterate(...params)) {
+      if (!matchesModel(row.canonical_model_key, row.model)) continue;
       const canonical = modelKeyForGrouping(row.canonical_model_key || canonicalModelKey(row.model));
       // 未知模型永远按渠道隔离,避免把无法识别的记录合在一起
       const groupingKey = canonical === '' || filterByAgent || !effectiveMerge
@@ -376,7 +437,7 @@ ON CONFLICT(agent, root_id, file_key) DO UPDATE SET
 
     return {
       range: { start: startDate, end: endDate, timezone },
-      filter: { agent, mergeSameModels, effectiveMergeSameModels: effectiveMerge, scope },
+      filter: { agent, mergeSameModels, effectiveMergeSameModels: effectiveMerge, scope, modelRules },
       models: rows,
     };
   }

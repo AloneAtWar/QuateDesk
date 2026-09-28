@@ -2,7 +2,9 @@
 // IPC 参数校验与错误脱敏;handler 不解析任何文件。
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
-const { isValidTimeZone, isValidDateString, localDateString } = require('./normalize.cjs');
+const {
+  isValidTimeZone, isValidDateString, localDateString, normalizeModelRules,
+} = require('./normalize.cjs');
 
 const AGENT_IDS = ['zcode', 'kimi', 'claude', 'codex'];
 const RANGE_DAYS = [7, 30, 90, 365];
@@ -111,7 +113,10 @@ class CliUsageService {
       if (!isValidDateString(query.endDate)) throw new CliUsageError('无效的日期');
       endDate = query.endDate;
     }
-    return { agent, timezone, endDate };
+    let modelRules;
+    try { modelRules = normalizeModelRules(query.modelRules); }
+    catch (error) { throw new CliUsageError(error.message); }
+    return { agent, timezone, endDate, modelRules };
   }
 
   static normalizeModelsQuery(raw) {
@@ -129,7 +134,10 @@ class CliUsageService {
       if (!RANGE_DAYS.includes(Number(scope.days))) throw new CliUsageError('无效的统计周期');
       normalizedScope = { kind: 'range', days: Number(scope.days) };
     } else throw new CliUsageError('无效的模型查询范围');
-    return { agent, timezone, mergeSameModels, scope: normalizedScope };
+    let modelRules;
+    try { modelRules = normalizeModelRules(query.modelRules); }
+    catch (error) { throw new CliUsageError(error.message); }
+    return { agent, timezone, mergeSameModels, scope: normalizedScope, modelRules };
   }
 
   // ---- 后台增量 ----------------------------------------------------------

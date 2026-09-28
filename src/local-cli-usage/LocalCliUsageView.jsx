@@ -1,7 +1,7 @@
 // 本机用量页:标题栏第四个全局视图。只读展示本机 CLI 会话的 Token 统计,
 // 与账号额度、官方用量完全独立。首卡确认后才开始扫描,数据只含聚合数值。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Database, Play, RefreshCw, ShieldCheck } from 'lucide-react';
+import { AlertCircle, Database, HelpCircle, Play, RefreshCw, ShieldCheck } from 'lucide-react';
 import useLocalCliUsage from './useLocalCliUsage';
 import ChannelSelect from './ChannelSelect';
 import LocalUsageHeatmap from './LocalUsageHeatmap';
@@ -15,7 +15,7 @@ const VIEWS = [
   { key: 'models', label: '模型拆分' },
 ];
 
-export default function LocalCliUsageView({ settings, setSettings, onApi, onMetaChange }) {
+export default function LocalCliUsageView({ settings, setSettings, onApi, onMetaChange, modelRules, scopeName, embedded = false }) {
   const bridge = window.quotaDesk;
   const timezone = useMemo(() => localTimeZone(), []);
   const [activeView, setActiveView] = useState('heatmap');
@@ -27,14 +27,25 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
     refreshSources, refreshSummary, refreshDayModels, refreshRangeModels, scan,
   } = useLocalCliUsage();
   const enabled = settings?.localCliUsage?.enabled === true;
+  const queryModelRules = useMemo(() => (Array.isArray(modelRules)
+    ? modelRules.map((rule) => ({ mode: rule.mode, value: rule.value }))
+    : undefined), [modelRules]);
   const mergeSameModels = settings?.localCliUsage?.mergeSameModels !== false;
   const canMergeModels = canMergeModelsFor(selectedAgent);
   const sources = sourcesBlock.data || [];
+  const [scopeMeta, setScopeMeta] = useState({ matchedModels: [], recordsByAgent: null });
   const agentNames = useMemo(() => Object.fromEntries(sources.map((source) => [source.agent, source.displayName])), [sources]);
-  // ChannelSelect 只吃 {id, label, colorToken, status};sources 的原始字段不外传
+  // 厂商上下文按规则命中数判断渠道是否可选；全局页直接使用来源总记录数。
   const channelOptions = useMemo(() => sources.map((source) => ({
-    id: source.agent, label: source.displayName, colorToken: source.colorToken, status: source.status,
-  })), [sources]);
+    id: source.agent,
+    label: source.displayName,
+    colorToken: source.colorToken,
+    status: source.status,
+    records: queryModelRules ? scopeMeta.recordsByAgent?.[source.agent] : source.records,
+    disabled: queryModelRules
+      ? scopeMeta.recordsByAgent !== null && Number(scopeMeta.recordsByAgent?.[source.agent] || 0) <= 0
+      : Number(source.records || 0) <= 0,
+  })), [sources, queryModelRules, scopeMeta.recordsByAgent]);
   const selectedSource = sources.find((source) => source.agent === selectedAgent) || null;
   const enteredRef = useRef(false);
 
@@ -45,17 +56,17 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
   // ---- 数据加载 -----------------------------------------------------------
 
   const loadSummary = useCallback((agent) => {
-    refreshSummary({ agent, timezone });
-  }, [refreshSummary, timezone]);
+    refreshSummary({ agent, timezone, ...(queryModelRules ? { modelRules: queryModelRules } : {}) });
+  }, [refreshSummary, timezone, queryModelRules]);
 
   const loadDayModels = useCallback((agent, date, merge) => {
     if (!date) return;
-    refreshDayModels({ agent, mergeSameModels: merge && agent === 'all', scope: { kind: 'day', date }, timezone });
-  }, [refreshDayModels, timezone]);
+    refreshDayModels({ agent, mergeSameModels: merge && agent === 'all', scope: { kind: 'day', date }, timezone, ...(queryModelRules ? { modelRules: queryModelRules } : {}) });
+  }, [refreshDayModels, timezone, queryModelRules]);
 
   const loadRangeModels = useCallback((agent, days, merge) => {
-    refreshRangeModels({ agent, mergeSameModels: merge && agent === 'all', scope: { kind: 'range', days }, timezone });
-  }, [refreshRangeModels, timezone]);
+    refreshRangeModels({ agent, mergeSameModels: merge && agent === 'all', scope: { kind: 'range', days }, timezone, ...(queryModelRules ? { modelRules: queryModelRules } : {}) });
+  }, [refreshRangeModels, timezone, queryModelRules]);
 
   // 进入页面:并行读 sources 与缓存 summary;已启用时后台轻量增量,完成后刷新
   useEffect(() => {
@@ -77,6 +88,21 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
     if (activeView === 'models') loadRangeModels(selectedAgent, modelRangeDays, mergeSameModels);
     else loadDayModels(selectedAgent, selectedDate, mergeSameModels);
   }, [selectedAgent]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!summaryBlock.data) return;
+    setScopeMeta({
+      matchedModels: Array.isArray(summaryBlock.data.matchedModels) ? summaryBlock.data.matchedModels : [],
+      recordsByAgent: summaryBlock.data.recordsByAgent && typeof summaryBlock.data.recordsByAgent === 'object'
+        ? summaryBlock.data.recordsByAgent
+        : null,
+    });
+  }, [summaryBlock.data]);
+
+  useEffect(() => {
+    if (selectedAgent === 'all') return;
+    if (channelOptions.find((option) => option.id === selectedAgent)?.disabled) setSelectedAgent('all');
+  }, [channelOptions, selectedAgent]);
 
   // summary 到达后初始化/校对选中日期:默认最近一个有数据的日期
   useEffect(() => {
@@ -129,13 +155,13 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
   // ---- 渲染 ---------------------------------------------------------------
 
   if (!bridge?.getLocalCliUsageSources) {
-    return <section className="surface-section local-cli-page">
+    return <section className={`${embedded ? '' : 'surface-section '}local-cli-page${embedded ? ' embedded' : ''}`}>
       <div className="local-cli-state-card"><AlertCircle size={18} /><div><b>本机用量仅在桌面应用中可用</b><small>网页演示模式无法读取本机 CLI 记录。</small></div></div>
     </section>;
   }
 
   if (!enabled) {
-    return <section className="surface-section local-cli-page">
+    return <section className={`${embedded ? '' : 'surface-section '}local-cli-page${embedded ? ' embedded' : ''}`}>
       <div className="local-cli-intro-card">
         <span className="local-cli-state-icon"><ShieldCheck size={18} /></span>
         <div className="local-cli-intro-copy">
@@ -148,7 +174,8 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
   }
 
   const body = () => {
-    if (selectedAgent !== 'all' && selectedSource && selectedSource.status !== 'ready' && selectedSource.status !== 'partial') {
+    const selectedOption = channelOptions.find((option) => option.id === selectedAgent);
+    if (selectedAgent !== 'all' && selectedSource && selectedOption?.disabled && selectedSource.status !== 'ready' && selectedSource.status !== 'partial') {
       const hint = selectedSource.status === 'missing'
         ? `未检测到 ${selectedSource.displayName} 的本机记录,默认目录:${(selectedSource.rootLabels || []).join(' 或 ')}。`
         : selectedSource.status === 'incompatible'
@@ -165,7 +192,7 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
     }
     const hasData = (summaryBlock.data?.summary?.activeDays || 0) > 0;
     if (!hasData) {
-      return <div className="local-cli-state-card"><Database size={18} /><div><b>没有找到可解析的用量记录</b><small>已扫描本机 CLI 目录,但没有可统计的 Token 记录;正常使用 CLI 后会自动出现。</small></div></div>;
+      return <div className="local-cli-state-card"><Database size={18} /><div><b>{queryModelRules ? `没有找到 ${scopeName || '当前厂商'} 相关的本机用量` : '没有找到可解析的用量记录'}</b><small>{queryModelRules ? '当前模型规则没有匹配到已扫描的 CLI 记录。' : '已扫描本机 CLI 目录,但没有可统计的 Token 记录;正常使用 CLI 后会自动出现。'}</small></div></div>;
     }
     return activeView === 'heatmap'
       ? <LocalUsageHeatmap
@@ -195,13 +222,21 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
   };
 
   const lastScanned = sources.find((source) => source.lastScannedAt)?.lastScannedAt;
+  const matchedModels = scopeMeta.matchedModels;
+  const visibleMatchedModels = matchedModels.slice(0, 2);
 
-  return <section className="surface-section local-cli-page">
+  return <section className={`${embedded ? '' : 'surface-section '}local-cli-page${embedded ? ' embedded' : ''}`}>
     <div className="local-cli-page-head">
-      <div className="local-cli-page-title">
+      {embedded ? <div className="local-cli-scope-models">
+        <span>相关模型</span>
+        {visibleMatchedModels.map((model) => <span className="local-cli-model-chip" key={model.key} title={model.displayName}>{model.displayName}</span>)}
+        {matchedModels.length > visibleMatchedModels.length && <span className="local-cli-model-more" title={matchedModels.slice(visibleMatchedModels.length).map((model) => model.displayName).join('、')}>+{matchedModels.length - visibleMatchedModels.length}</span>}
+        {!matchedModels.length && <em>{summaryBlock.loading ? '读取中…' : '暂无数据'}</em>}
+        <span className="local-cli-scope-help" title="显示当前渠道下实际命中模型规则的本机 CLI 模型。记录可能同时匹配多个厂商，不代表由当前账号产生。"><HelpCircle size={13} /></span>
+      </div> : <div className="local-cli-page-title">
         <b>本机用量</b>
         <small>{lastScanned ? `最后扫描 ${formatLocalDateTime(lastScanned)}` : '尚未完成扫描'}{agentNames[selectedAgent] && selectedAgent !== 'all' ? ` · ${agentNames[selectedAgent]}` : ''}</small>
-      </div>
+      </div>}
       <div className="local-cli-page-actions">
         <div className="seg-control local-cli-view-switch" role="tablist" aria-label="本机用量视图">
           {VIEWS.map((view) => <button key={view.key} type="button" role="tab" aria-selected={activeView === view.key} className={activeView === view.key ? 'active' : ''} onClick={() => setActiveView(view.key)}>{view.label}</button>)}

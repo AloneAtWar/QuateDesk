@@ -59,7 +59,7 @@ export default function LocalUsageModelBreakdown({ report, loading, error, range
                   row.extraTokens > 0 ? `其他 ${formatLocalTokensExact(row.extraTokens)}` : null,
                   `合计 ${formatLocalTokensExact(row.totalTokens)} Token · ${formatLocalTokensExact(row.requests)} 次请求 · ${row.sessions} 个会话`,
                 ].filter(Boolean).join('\n');
-                return <div key={row.modelKey} className="local-cli-model-row" title={tip}>
+                return <div key={`${row.modelKey}-${row.agents.join('-')}`} className="local-cli-model-row" title={tip}>
                   <div className="col-model">
                     <b>{row.displayName}</b>
                     {!hideAgentLabel && <small>{agentsLine}{!canMergeModels ? '' : row.agents.length > 1 ? ` · ${row.agents.length} 个渠道` : ''}</small>}

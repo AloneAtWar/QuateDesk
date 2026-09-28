@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const {
   canonicalModelKey, modelDisplayName, hmacHex, safeTokenCount, buildUsageEvent,
   isValidTimeZone, isValidDateString, localDateString, shiftDateString,
-  buildDayBoundaries, computeStreaks,
+  buildDayBoundaries, computeStreaks, normalizeModelRules, createModelRuleMatcher,
 } = require('../electron/cli-usage/normalize.cjs');
 
 test('canonicalModelKey 保守归一:NFKC、空格折叠、大小写、平台前缀', () => {
@@ -28,6 +28,27 @@ test('modelDisplayName 去掉平台前缀,未知模型兜底', () => {
   assert.equal(modelDisplayName('kimi-code/kimi-for-coding'), 'kimi-for-coding');
   assert.equal(modelDisplayName(null), '未知模型');
   assert.equal(modelDisplayName('GLM-5.3'), 'GLM-5.3');
+});
+
+test('模型规则匹配规范化名称，支持完全匹配与忽略大小写的正则', () => {
+  assert.deepEqual(normalizeModelRules([{ mode: 'exact', value: ' Anthropic/Claude-Sonnet-4-5 ' }]), [
+    { mode: 'exact', value: 'claude-sonnet-4-5' },
+  ]);
+  const matchesClaude = createModelRuleMatcher([{ mode: 'regex', value: '^CLAUDE(?:-|$)' }]);
+  assert.equal(matchesClaude('claude-sonnet-4-5'), true);
+  assert.equal(matchesClaude(null, 'anthropic/Claude-Opus-4'), true);
+  assert.equal(matchesClaude('gpt-5.6-sol'), false);
+  const matchesExact = createModelRuleMatcher([{ mode: 'exact', value: 'openai/gpt-5.6-sol' }]);
+  assert.equal(matchesExact('gpt-5.6-sol'), true);
+  assert.equal(matchesExact('gpt-5.6-terra'), false);
+  assert.equal(createModelRuleMatcher([])('glm-4.7'), false);
+  assert.equal(createModelRuleMatcher(null)('anything'), true);
+});
+
+test('模型规则拒绝空内容、未知模式与无效正则', () => {
+  assert.throws(() => normalizeModelRules([{ mode: 'regex', value: '(' }]), /正则无效/);
+  assert.throws(() => normalizeModelRules([{ mode: 'prefix', value: 'glm-' }]), /匹配方式/);
+  assert.throws(() => normalizeModelRules([{ mode: 'exact', value: ' ' }]), /不能为空/);
 });
 
 test('hmacHex 同 salt 稳定、不同值不同、截断到 24 位', () => {

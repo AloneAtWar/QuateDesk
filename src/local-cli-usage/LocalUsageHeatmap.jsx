@@ -133,11 +133,10 @@ export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate,
             {dayModelsLoading && !dayModels?.models?.length ? <span className="local-cli-models-hint">正在读取当日模型…</span>
               : !selectedDate || !(dayModels?.models || []).length ? <span className="local-cli-models-hint">这一天没有本机用量记录</span>
                 : dayModels.models.map((model) => <div
-                  key={model.modelKey} className="local-cli-day-model-card"
+                  key={`${model.modelKey}-${model.agents.join('-')}`} className="local-cli-day-model-card"
                   title={`${model.displayName}${model.rawModels.length > 1 ? `(${model.rawModels.length} 个原始名称)` : ''}\n${hideAgentLabel ? '' : `${localAgentsLine(model.agents, agentNames, 99)} · `}${formatLocalTokensExact(model.totalTokens)} Token`}
                 >
-                  <b>{model.displayName}</b>
-                  {!hideAgentLabel && <small>{localAgentsLine(model.agents, agentNames)}</small>}
+                  <div className="local-cli-day-model-card-head"><b>{model.displayName}</b>{!hideAgentLabel && <small>{localAgentsLine(model.agents, agentNames)}</small>}</div>
                   <em>{formatLocalTokensCompact(model.totalTokens)}</em>
                 </div>)}
           </div>

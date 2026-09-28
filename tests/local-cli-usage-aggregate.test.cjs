@@ -186,6 +186,52 @@ test('渠道筛选:单渠道 summary 只统计该渠道', () => {
   store.close();
 });
 
+test('厂商模型规则同时筛选 summary 累计/热力图与 models 明细', () => {
+  const { store } = createStore();
+  seedBase(store);
+  const endDate = new Date(now).toISOString().slice(0, 10);
+  const claudeRules = [{ mode: 'regex', value: '^claude(?:-|$)' }];
+  const summary = store.summary({ agent: 'all', timezone: 'UTC', endDate, days: 7, modelRules: claudeRules });
+  assert.equal(summary.summary.totalTokens, 600);
+  assert.equal(summary.days.reduce((sum, day) => sum + day.totalTokens, 0), 600);
+  assert.equal(summary.summary.activeDays, 1);
+  assert.deepEqual(summary.matchedModels.map((model) => model.key), ['claude-sonnet-4-5']);
+  assert.equal(summary.recordsByAgent.zcode, 1);
+  assert.equal(summary.recordsByAgent.claude, 2);
+  assert.equal(summary.recordsByAgent.kimi, 0);
+  assert.equal(summary.recordsByAgent.codex, 0);
+
+  const claudeOnly = store.summary({ agent: 'claude', timezone: 'UTC', endDate, days: 7, modelRules: claudeRules });
+  assert.deepEqual(claudeOnly.matchedModels.map((model) => model.key), ['claude-sonnet-4-5']);
+  // 渠道可用性始终覆盖全部 CLI，便于下拉框禁用当前厂商没有数据的渠道。
+  assert.equal(claudeOnly.recordsByAgent.zcode, 1);
+  assert.equal(claudeOnly.recordsByAgent.claude, 2);
+
+  const models = store.models({ agent: 'all', mergeSameModels: true, scope: { kind: 'range', days: 7 }, timezone: 'UTC', modelRules: claudeRules });
+  assert.equal(totalOf(models), 600);
+  assert.deepEqual(models.models.map((row) => row.modelKey), ['claude-sonnet-4-5']);
+
+  const exact = store.models({ agent: 'all', mergeSameModels: true, scope: { kind: 'range', days: 7 }, timezone: 'UTC', modelRules: [{ mode: 'exact', value: 'anthropic/claude-sonnet-4-5' }] });
+  assert.equal(totalOf(exact), 600);
+  store.close();
+});
+
+test('同一模型规则可用于多个厂商上下文，查询互不改变全局总量', () => {
+  const { store } = createStore();
+  seedBase(store);
+  const scope = { kind: 'range', days: 7 };
+  const global = store.models({ agent: 'all', mergeSameModels: true, scope, timezone: 'UTC' });
+  const firstContext = store.models({ agent: 'all', mergeSameModels: true, scope, timezone: 'UTC', modelRules: [{ mode: 'regex', value: '^glm-' }] });
+  const secondContext = store.models({ agent: 'all', mergeSameModels: true, scope, timezone: 'UTC', modelRules: [{ mode: 'exact', value: 'GLM-4.7' }] });
+  assert.equal(totalOf(firstContext), 400);
+  assert.equal(totalOf(secondContext), 400);
+  assert.equal(totalOf(global), 1400);
+  const globalSummary = store.summary({ agent: 'all', timezone: 'UTC', endDate: new Date(now).toISOString().slice(0, 10), days: 7 });
+  assert.deepEqual(globalSummary.matchedModels, []);
+  assert.equal(globalSummary.recordsByAgent, null);
+  store.close();
+});
+
 test('facade 参数校验:非法 agent/timezone/scope/days 直接拒绝', () => {
   assert.throws(() => CliUsageService.normalizeSummaryQuery({ agent: 'nope', timezone: 'UTC' }));
   assert.throws(() => CliUsageService.normalizeSummaryQuery({ agent: 'all', timezone: 'Bad/Zone' }));
@@ -196,6 +242,10 @@ test('facade 参数校验:非法 agent/timezone/scope/days 直接拒绝', () => 
   assert.throws(() => CliUsageService.normalizeModelsQuery({ agent: 'all', timezone: 'UTC', scope: { kind: 'week' } }));
   assert.throws(() => CliUsageService.normalizeModelsQuery({ agent: 'all', timezone: 'UTC' }));
   assert.throws(() => CliUsageService.normalizeModelsQuery({ agent: 'all', timezone: 'UTC', scope: { kind: 'day', date: 'oops' } }));
+  assert.throws(() => CliUsageService.normalizeSummaryQuery({ agent: 'all', timezone: 'UTC', modelRules: [{ mode: 'regex', value: '(' }] }));
+  assert.throws(() => CliUsageService.normalizeModelsQuery({ agent: 'all', timezone: 'UTC', scope: { kind: 'range', days: 30 }, modelRules: [{ mode: 'prefix', value: 'glm-' }] }));
   const okModels = CliUsageService.normalizeModelsQuery({ agent: 'all', timezone: 'UTC', scope: { kind: 'range', days: 90 } });
   assert.deepEqual(okModels.scope, { kind: 'range', days: 90 });
+  const scopedModels = CliUsageService.normalizeModelsQuery({ agent: 'all', timezone: 'UTC', scope: { kind: 'range', days: 30 }, modelRules: [{ mode: 'exact', value: 'OpenAI/GPT-5.6-Sol' }] });
+  assert.deepEqual(scopedModels.modelRules, [{ mode: 'exact', value: 'gpt-5.6-sol' }]);
 });

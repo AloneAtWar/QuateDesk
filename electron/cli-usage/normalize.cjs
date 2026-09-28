@@ -42,6 +42,47 @@ const modelDisplayName = (model) => {
   return value.trim() || '未知模型';
 };
 
+const MAX_MODEL_RULES = 20;
+const MAX_MODEL_RULE_LENGTH = 160;
+
+// IPC 与存储层共用同一套模型规则语义：精确匹配先走 canonicalModelKey，
+// 正则表达式则直接匹配规范化后的 key，并统一忽略大小写。null 表示不筛选；
+// 空数组表示显式匹配不到任何模型。
+const normalizeModelRules = (rules) => {
+  if (rules === undefined || rules === null) return null;
+  if (!Array.isArray(rules)) throw new TypeError('模型匹配规则必须是数组');
+  if (rules.length > MAX_MODEL_RULES) throw new TypeError(`模型匹配规则最多 ${MAX_MODEL_RULES} 条`);
+  return rules.map((rule) => {
+    const mode = rule?.mode;
+    const rawValue = typeof rule?.value === 'string' ? rule.value.trim() : '';
+    if (!['exact', 'regex'].includes(mode)) throw new TypeError('未知的模型匹配方式');
+    if (!rawValue) throw new TypeError('模型匹配内容不能为空');
+    if (rawValue.length > MAX_MODEL_RULE_LENGTH) throw new TypeError(`模型匹配内容最多 ${MAX_MODEL_RULE_LENGTH} 个字符`);
+    if (mode === 'exact') {
+      const value = canonicalModelKey(rawValue);
+      if (!value) throw new TypeError('精确匹配模型名无效');
+      return { mode, value };
+    }
+    try { new RegExp(rawValue, 'i'); } catch { throw new TypeError('模型匹配正则无效'); }
+    return { mode, value: rawValue };
+  });
+};
+
+const createModelRuleMatcher = (rules) => {
+  const normalized = normalizeModelRules(rules);
+  if (normalized === null) return () => true;
+  const matchers = normalized.map((rule) => rule.mode === 'exact'
+    ? (key) => key === rule.value
+    : (() => {
+        const expression = new RegExp(rule.value, 'i');
+        return (key) => expression.test(key);
+      })());
+  return (canonicalKey, rawModel = null) => {
+    const key = canonicalModelKey(canonicalKey || rawModel);
+    return Boolean(key && matchers.some((matches) => matches(key)));
+  };
+};
+
 const hmacHex = (value, salt) => crypto
   .createHmac('sha256', String(salt))
   .update(String(value))
@@ -189,6 +230,10 @@ module.exports = {
   canonicalModelKey,
   modelKeyForGrouping,
   modelDisplayName,
+  MAX_MODEL_RULES,
+  MAX_MODEL_RULE_LENGTH,
+  normalizeModelRules,
+  createModelRuleMatcher,
   hmacHex,
   safeTokenCount,
   buildUsageEvent,

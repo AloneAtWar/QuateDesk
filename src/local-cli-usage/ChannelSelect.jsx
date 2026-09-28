@@ -63,6 +63,7 @@ export default function ChannelSelect({ value, options, onChange, disabled }) {
   }, [open, allOptions, value]);
 
   const choose = (option) => {
+    if (option.disabled) return;
     onChange(option.id);
     setOpen(false);
     buttonRef.current?.focus();
@@ -72,21 +73,28 @@ export default function ChannelSelect({ value, options, onChange, disabled }) {
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
       setActiveIndex((index) => {
-        const next = event.key === 'ArrowDown' ? index + 1 : index - 1;
-        return Math.max(0, Math.min(filtered.length - 1, next));
+        const direction = event.key === 'ArrowDown' ? 1 : -1;
+        let next = index;
+        for (let count = 0; count < filtered.length; count += 1) {
+          const candidate = Math.max(0, Math.min(filtered.length - 1, next + direction));
+          if (candidate === next) break;
+          next = candidate;
+          if (!filtered[next]?.disabled) return next;
+        }
+        return index;
       });
     } else if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
       const option = filtered[activeIndex];
-      if (option) choose(option);
+      if (option && !option.disabled) choose(option);
     } else if (event.key === 'Escape') {
       event.preventDefault();
       setOpen(false);
       buttonRef.current?.focus();
     } else if (event.key === 'Home') {
-      event.preventDefault(); setActiveIndex(0);
+      event.preventDefault(); setActiveIndex(Math.max(0, filtered.findIndex((option) => !option.disabled)));
     } else if (event.key === 'End') {
-      event.preventDefault(); setActiveIndex(Math.max(0, filtered.length - 1));
+      event.preventDefault(); setActiveIndex(Math.max(0, filtered.findLastIndex((option) => !option.disabled)));
     }
   };
 
@@ -99,11 +107,14 @@ export default function ChannelSelect({ value, options, onChange, disabled }) {
       <div className="local-cli-channel-options">
         {filtered.map((option, index) => <button
           type="button" key={option.id} role="option" aria-selected={option.id === value}
-          className={`local-cli-channel-option${index === activeIndex ? ' active' : ''}${option.id === value ? ' selected' : ''}`}
-          onMouseEnter={() => setActiveIndex(index)}
+          aria-disabled={option.disabled || undefined} disabled={option.disabled}
+          title={option.disabled ? `${optionLabel(option)} · 暂无数据` : optionLabel(option)}
+          className={`local-cli-channel-option${index === activeIndex ? ' active' : ''}${option.id === value ? ' selected' : ''}${option.disabled ? ' disabled' : ''}`}
+          onMouseEnter={() => { if (!option.disabled) setActiveIndex(index); }}
           onClick={() => choose(option)}
         >
           <span className="local-cli-channel-name"><i style={{ background: option.id === 'all' ? 'var(--green-deep)' : localAgentColor(option.colorToken) }} />{optionLabel(option)}</span>
+          {option.disabled && <small>暂无数据</small>}
           {option.id === value && <Check size={11} className="local-cli-channel-check" />}
         </button>)}
         {!filtered.length && <div className="local-cli-channel-empty">没有匹配的渠道</div>}
