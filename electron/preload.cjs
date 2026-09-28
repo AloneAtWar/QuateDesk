@@ -17,6 +17,11 @@ contextBridge.exposeInMainWorld('quotaDesk', {
   getProviderUsage: (accountId, options) => ipcRenderer.invoke('usage:get', accountId, options),
   connectProviderUsage: (accountId) => ipcRenderer.invoke('usage:connect', accountId),
   disconnectProviderUsage: (accountId) => ipcRenderer.invoke('usage:disconnect', accountId),
+  // 本机 CLI 用量:只暴露聚合报告与扫描动作,不暴露路径和原始事件
+  getLocalCliUsageSummary: (options) => ipcRenderer.invoke('cliUsage:get-summary', options),
+  getLocalCliUsageModels: (options) => ipcRenderer.invoke('cliUsage:get-models', options),
+  getLocalCliUsageSources: () => ipcRenderer.invoke('cliUsage:get-sources'),
+  scanLocalCliUsage: () => ipcRenderer.invoke('cliUsage:scan'),
   clearHistory: () => ipcRenderer.invoke('history:clear'),
   exportData: (options) => ipcRenderer.invoke('data:export', options),
   importData: () => ipcRenderer.invoke('data:import'),

@@ -1,0 +1,4 @@
+{"type":"metadata","time":1782100000000}
+{"type":"usage.record","model":"kimi-code/kimi-for-coding","usage":{"inputOther":3064,"output":76,"inputCacheRead":14848,"inputCacheCreation":0},"usageScope":"turn","time":1782113184943}
+{"type":"usage.record","model":"kimi-code/kimi-for-coding","usage":{"inputOther":3064,"output":76,"inputCacheRead":14848,"inputCacheCreation":0},"usageScope":"session","time":1782113199999}
+{"type":"usage.record","model":"kimi-code/kimi-for-coding","usage":{"inputOther":100,"output":24,"inputCacheRead":10,"inputCacheCreation":5},"usageScope":"turn","time":1782113250000}

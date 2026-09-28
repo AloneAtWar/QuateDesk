@@ -81,19 +81,40 @@ export const adapterRegistry = {
 const minutesFromNow = (minutes) => new Date(Date.now() + minutes * 60_000).toISOString();
 const daysFromNow = (days) => minutesFromNow(days * 24 * 60);
 
+// 厂商页的「本机」视图只按规范化后的模型名筛选本机 CLI 记录，不把记录
+// 归因到具体账号。同一模型可以命中多个厂商（例如官方站与中转站）。
+// exact 用于固定模型 ID；regex 用于厂商模型族。未列出的内置厂商与自定义
+// 厂商默认关闭，由用户在厂商设置中显式开启。
+export const builtinLocalAnalysisDefaults = {
+  zai: { enabled: true, modelRules: [{ mode: 'regex', value: '^glm-' }] },
+  codex: { enabled: true, modelRules: [{ mode: 'regex', value: '^gpt-' }] },
+  'kimi-subscription': { enabled: true, modelRules: [{ mode: 'regex', value: '^(?:k\\d|kimi(?:-|$))' }] },
+  deepseek: { enabled: true, modelRules: [{ mode: 'regex', value: '^deepseek(?:-|$)' }] },
+  minimax: { enabled: true, modelRules: [{ mode: 'regex', value: '^minimax(?:-|$)' }] },
+  grok: { enabled: true, modelRules: [{ mode: 'regex', value: '^grok(?:-|$)' }] },
+  mimo: { enabled: true, modelRules: [{ mode: 'regex', value: '^mimo(?:-|$)' }] },
+  claude: { enabled: true, modelRules: [{ mode: 'regex', value: '^claude(?:-|$)' }] },
+  gemini: { enabled: true, modelRules: [{ mode: 'regex', value: '^gemini(?:-|$)' }] },
+};
+
+const localAnalysisDefault = (id) => {
+  const value = builtinLocalAnalysisDefaults[id];
+  return value ? { enabled: value.enabled, modelRules: value.modelRules.map((rule) => ({ ...rule })) } : undefined;
+};
+
 export const providerCatalog = [
   // Kimi 渠道（kimi-subscription）双登录：扫码登录含月订阅额度；API Key 登录只有 5 小时 / 7 天（无月额度）
-  { id: 'zai', name: 'Z.ai', legalName: 'Z.ai / 智谱', monogram: 'Z', tone: 'violet', adapter: 'zai', logo: './logos/zai.svg', website: 'https://bigmodel.cn/' },
-  { id: 'deepseek', name: 'DeepSeek', legalName: 'DeepSeek API', monogram: 'D', tone: 'blue', adapter: 'deepseek', logo: './logos/deepseek.png', website: 'https://www.deepseek.com/' },
+  { id: 'zai', name: 'Z.ai', legalName: 'Z.ai / 智谱', monogram: 'Z', tone: 'violet', adapter: 'zai', logo: './logos/zai.svg', website: 'https://bigmodel.cn/', localAnalysis: localAnalysisDefault('zai') },
+  { id: 'deepseek', name: 'DeepSeek', legalName: 'DeepSeek API', monogram: 'D', tone: 'blue', adapter: 'deepseek', logo: './logos/deepseek.png', website: 'https://www.deepseek.com/', localAnalysis: localAnalysisDefault('deepseek') },
   { id: 'wlb', name: 'wlbclub', legalName: 'wlbclub', monogram: 'W', tone: 'coral', adapter: 'wlb', website: 'https://www.wlbclub.com/' },
-  { id: 'grok', name: 'Grok', legalName: 'xAI Grok', monogram: 'G', tone: 'slate', adapter: 'grok', logo: './logos/grok.png', website: 'https://grok.com/' },
+  { id: 'grok', name: 'Grok', legalName: 'xAI Grok', monogram: 'G', tone: 'slate', adapter: 'grok', logo: './logos/grok.png', website: 'https://grok.com/', localAnalysis: localAnalysisDefault('grok') },
   { id: 'grokbot', name: 'Grok Bot', legalName: 'xAI Grok Bot', monogram: 'G', tone: 'slate', adapter: 'grokbot', logo: './logos/grokbot.png', website: 'https://x.ai/bot' },
-  { id: 'minimax', name: 'MiniMax', legalName: 'MiniMax Coding Plan', monogram: 'M', tone: 'mint', adapter: 'minimax', logo: './logos/minimax.svg', website: 'https://platform.minimaxi.com' },
-  { id: 'mimo', name: 'Xiaomi MiMo', legalName: 'Xiaomi MiMo Token Plan', monogram: 'M', tone: 'coral', adapter: 'mimo', logo: './logos/mimo.webp', website: 'https://platform.xiaomimimo.com' },
-  { id: 'claude', name: 'Claude', legalName: 'Claude Code', monogram: 'C', tone: 'coral', adapter: 'claude', logo: './logos/claude.jpg', website: 'https://claude.com/claude-code' },
-  { id: 'codex', name: 'Codex', legalName: 'OpenAI Codex', monogram: 'O', tone: 'mint', adapter: 'codex', logo: './logos/codex.svg', website: 'https://developers.openai.com/codex/' },
-  { id: 'gemini', name: 'Gemini', legalName: 'Gemini CLI', monogram: 'G', tone: 'sky', adapter: 'gemini', logo: './logos/gemini.svg', website: 'https://gemini.google.com/' },
-  { id: 'kimi-subscription', name: 'Kimi 订阅', legalName: 'Kimi for Coding 订阅', monogram: 'K', tone: 'sky', adapter: 'kimi', logo: './logos/kimi.png', website: 'https://www.kimi.com/' },
+  { id: 'minimax', name: 'MiniMax', legalName: 'MiniMax Coding Plan', monogram: 'M', tone: 'mint', adapter: 'minimax', logo: './logos/minimax.svg', website: 'https://platform.minimaxi.com', localAnalysis: localAnalysisDefault('minimax') },
+  { id: 'mimo', name: 'Xiaomi MiMo', legalName: 'Xiaomi MiMo Token Plan', monogram: 'M', tone: 'coral', adapter: 'mimo', logo: './logos/mimo.webp', website: 'https://platform.xiaomimimo.com', localAnalysis: localAnalysisDefault('mimo') },
+  { id: 'claude', name: 'Claude', legalName: 'Claude Code', monogram: 'C', tone: 'coral', adapter: 'claude', logo: './logos/claude.jpg', website: 'https://claude.com/claude-code', localAnalysis: localAnalysisDefault('claude') },
+  { id: 'codex', name: 'Codex', legalName: 'OpenAI Codex', monogram: 'O', tone: 'mint', adapter: 'codex', logo: './logos/codex.svg', website: 'https://developers.openai.com/codex/', localAnalysis: localAnalysisDefault('codex') },
+  { id: 'gemini', name: 'Gemini', legalName: 'Gemini CLI', monogram: 'G', tone: 'sky', adapter: 'gemini', logo: './logos/gemini.svg', website: 'https://gemini.google.com/', localAnalysis: localAnalysisDefault('gemini') },
+  { id: 'kimi-subscription', name: 'Kimi 订阅', legalName: 'Kimi for Coding 订阅', monogram: 'K', tone: 'sky', adapter: 'kimi', logo: './logos/kimi.png', website: 'https://www.kimi.com/', localAnalysis: localAnalysisDefault('kimi-subscription') },
   { id: 'copilot', name: 'GitHub Copilot', legalName: 'GitHub Copilot 订阅', monogram: 'G', tone: 'slate', adapter: 'copilot', logo: './logos/copilot.svg', website: 'https://github.com/features/copilot' },
 ];
 

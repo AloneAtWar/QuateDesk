@@ -2,15 +2,16 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import {
-  AlertCircle, ArrowLeft, Bell, BellOff, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, CircleGauge, CircleStop, Clock3, Database, Download, Eye, ExternalLink, Globe, HelpCircle, History, LayoutGrid,
+  AlertCircle, ArrowLeft, Bell, BellOff, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronLeft, ChevronRight, CircleGauge, CircleStop, Clock3, Database, Download, Eye, ExternalLink, Globe, HelpCircle, History, LayoutGrid,
   Ellipsis, Flame, KeyRound, Monitor, Play, Plus, Power, RefreshCw, Rows3, Settings2, ShieldCheck, SlidersHorizontal, Square, Bot,
   Pencil, Pin, QrCode, Sparkles, SunMoon, Tag, Trash2, TrendingUp, Trophy, UploadCloud, X, Zap,
 } from 'lucide-react';
-import { initialAccounts, providerCatalog, windowCatalog } from './data';
+import { builtinLocalAnalysisDefaults, initialAccounts, providerCatalog, windowCatalog } from './data';
 import { adapterDefinitions } from './adapters';
 import { clampRemainingWeight, comparePriority } from './priority-score';
 import { newApiTemplateScript } from './newapi-template';
 import { computeUsageStreaks, formatProviderUsageCost, formatProviderUsageSummaryTokens } from './provider-usage-format';
+import LocalCliUsageView from './local-cli-usage/LocalCliUsageView';
 import qrcode from 'qrcode-generator';
 import { AppShell } from './app-shell';
 import './styles.css';
@@ -129,6 +130,21 @@ const isKimiApiKeyAccount = (provider, account) => provider?.id === 'kimi-subscr
 const KIMI_API_KEY_WINDOWS = ['five_hour', 'weekly'];
 const providerFormWindows = (provider) => (isKimiApiKeyProvider(provider) ? KIMI_API_KEY_WINDOWS : providerWindowKeys(provider));
 
+const cloneLocalAnalysis = (value) => ({
+  enabled: value?.enabled === true,
+  modelRules: (Array.isArray(value?.modelRules) ? value.modelRules : [])
+    .filter((rule) => ['exact', 'regex'].includes(rule?.mode) && String(rule?.value || '').trim())
+    .map((rule) => ({ mode: rule.mode, value: String(rule.value).trim() })),
+});
+
+// 存量 state 没有 localAnalysis 时采用当前内置预设；一旦用户保存过（包括关闭），
+// 就只认显式配置，避免升级时把用户关闭的入口再次打开。
+const resolveProviderLocalAnalysis = (provider) => {
+  if (!provider) return cloneLocalAnalysis(null);
+  if (Object.prototype.hasOwnProperty.call(provider, 'localAnalysis')) return cloneLocalAnalysis(provider.localAnalysis);
+  return cloneLocalAnalysis(builtinLocalAnalysisDefaults[provider.id]);
+};
+
 // 令牌失效后可一键重新登录的订阅渠道：返回重登弹窗类型与入口文案（Kimi 扫码 / Grok 导入 / Copilot 设备码）。
 // Kimi 渠道双登录：API Key 账号（无扫码快照）失效时入口是「扫码登录」（可顺手升级为订阅模式）
 const reloginChannel = (provider, account = null) => {
@@ -211,6 +227,12 @@ const normalizeSettings = (value = {}) => {
     historyDays: [0, 3, 7, 15, 30, 60, 90].includes(Number(value.historyDays)) ? Number(value.historyDays) : 7,
     widgetScale: clampWidgetScale(value.widgetScale ?? byWidth ?? (legacySize ? legacySize / WIDGET_BASE_SIZE.width : 0.9)),
     widgetLength: clampWidgetLength(value.widgetLength ?? 0.9),
+    // 本机 CLI 用量默认不启用，首次进入页面后由用户确认开启。
+    localCliUsage: {
+      enabled: false,
+      mergeSameModels: true,
+      ...(value.localCliUsage && typeof value.localCliUsage === 'object' ? value.localCliUsage : {}),
+    },
     proxyMode: ['direct', 'system', 'manual'].includes(value.proxyMode) ? value.proxyMode : 'system',
     proxyUrl: String(value.proxyUrl ?? ''),
     periodSort5hRemaining: clampRemainingWeight(value.periodSort5hRemaining),
@@ -1211,7 +1233,7 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
   </div>;
 }
 
-function HistoryView({ account, provider, onBack, onProviderUsageState, readOnly = false, wasteWindowsOverride }) {
+function HistoryView({ account, provider, onBack, onProviderUsageState, settings, setSettings, readOnly = false, wasteWindowsOverride }) {
   const [points, setPoints] = useState(null);
   const [hiddenKeys, setHiddenKeys] = useState([]);
   const [view, setView] = useState('trend');
@@ -1228,11 +1250,17 @@ function HistoryView({ account, provider, onBack, onProviderUsageState, readOnly
   }, [provider, account, wasteWindowsOverride]);
   // 用量统计入口常驻：未连接时页内直接引导登录，登录过期也能在原位置重新连接。
   const showProviderUsageEntry = providerUsageSupported(account, provider, { readOnly });
+  const localAnalysis = useMemo(() => resolveProviderLocalAnalysis(provider), [provider]);
+  const showLocalUsageEntry = !readOnly && localAnalysis.enabled;
   const showWaste = view === 'waste' && wasteWindows.length > 0;
   const showProviderUsage = view === 'provider-usage' && showProviderUsageEntry;
+  const showLocalUsage = view === 'local-usage' && showLocalUsageEntry;
   useEffect(() => {
     if (view === 'provider-usage' && !showProviderUsageEntry) setView('trend');
   }, [view, showProviderUsageEntry]);
+  useEffect(() => {
+    if (view === 'local-usage' && !showLocalUsageEntry) setView('trend');
+  }, [view, showLocalUsageEntry]);
   useEffect(() => {
     let active = true;
     if (!window.quotaDesk?.getHistory) { setPoints([]); return undefined; }
@@ -1263,6 +1291,7 @@ function HistoryView({ account, provider, onBack, onProviderUsageState, readOnly
   const historyTabs = [
     { key: 'trend', label: '趋势' },
     ...(showProviderUsageEntry ? [{ key: 'provider-usage', label: '用量' }] : []),
+    ...(showLocalUsageEntry ? [{ key: 'local-usage', label: '本机' }] : []),
     ...(wasteWindows.length > 0 ? [{ key: 'waste', label: '浪费' }] : []),
   ];
   const historyDomId = `history-${String(account.id).replace(/[^a-zA-Z0-9_-]/g, '-')}`;
@@ -1292,7 +1321,7 @@ function HistoryView({ account, provider, onBack, onProviderUsageState, readOnly
           {historyTabs.map((tab) => <button type="button" role="tab" id={`${historyDomId}-tab-${tab.key}`} data-history-tab={tab.key} key={tab.key} tabIndex={view === tab.key ? 0 : -1} aria-controls={historyPanelId} aria-selected={view === tab.key} className={view === tab.key ? 'active' : ''} onClick={() => setView(tab.key)}>{tab.label}</button>)}
         </div>}
       </div>
-      <div className="history-tabpanel" {...(hasHistoryTabs ? { role: 'tabpanel', id: historyPanelId, 'aria-labelledby': `${historyDomId}-tab-${view}` } : {})}>{showProviderUsage ? <ProviderUsageView account={account} provider={provider} onState={onProviderUsageState} readOnly={readOnly} /> : showWaste ? <WasteView account={account} wasteWindows={wasteWindows} /> : <div className="trend-view">
+      <div className={`history-tabpanel${showLocalUsage ? ' local-usage-tabpanel' : ''}`} {...(hasHistoryTabs ? { role: 'tabpanel', id: historyPanelId, 'aria-labelledby': `${historyDomId}-tab-${view}` } : {})}>{showProviderUsage ? <ProviderUsageView account={account} provider={provider} onState={onProviderUsageState} readOnly={readOnly} /> : showLocalUsage ? <LocalCliUsageView settings={settings} setSettings={setSettings} modelRules={localAnalysis.modelRules} scopeName={provider?.name || '当前厂商'} embedded /> : showWaste ? <WasteView account={account} wasteWindows={wasteWindows} /> : <div className="trend-view">
         {points === null ? <div className="settings-empty chart-empty">正在读取历史记录…</div>
           : points.length === 0 ? <div className="settings-empty chart-empty">暂无历史数据，每次成功刷新额度后都会记录一条</div>
             : <UsageChart points={points} hiddenKeys={hiddenKeys} rangeKey={rangeKey} onRangeKeyChange={setRangeKey} />}
@@ -2067,6 +2096,8 @@ function AccountEditModalV2({ account, provider, onClose, onSave, onTestDraft, o
 function ProviderModalV2({ provider, onClose, onSave }) {
   const existing = provider || {};
   const config = existing.requestConfig || {};
+  const initialLocalAnalysis = resolveProviderLocalAnalysis(provider);
+  const builtinLocalAnalysis = builtinLocalAnalysisDefaults[existing.id] ? cloneLocalAnalysis(builtinLocalAnalysisDefaults[existing.id]) : null;
   // 专属适配厂商（Claude/Codex/Gemini/Kimi 订阅/Grok）：请求与解析内置，编辑时只保留名称/Logo/官网/浪费统计
   const cliAdapter = isCliProvider(existing);
   const [name, setName] = useState(existing.name || '');
@@ -2099,6 +2130,8 @@ function ProviderModalV2({ provider, onClose, onSave }) {
   const [configError, setConfigError] = useState('');
   const [logo, setLogo] = useState(existing.logo || '');
   const [website, setWebsite] = useState(existing.website || '');
+  const [localAnalysisEnabled, setLocalAnalysisEnabled] = useState(initialLocalAnalysis.enabled);
+  const [modelRules, setModelRules] = useState(initialLocalAnalysis.modelRules);
   // 浪费统计窗口：null = 未手动设置，跟随额度窗口自动判定；勾选后写死为数组（与 waste.cjs 的 resolveWasteWindows 对应）
   const [wasteWindows, setWasteWindows] = useState(Array.isArray(config.wasteWindows) ? config.wasteWindows.filter((key) => ['weekly', 'monthly'].includes(key)) : null);
   // 候选只限周期窗口（weekly/monthly）；没有周期窗口的厂商不显示这项配置
@@ -2125,9 +2158,20 @@ function ProviderModalV2({ provider, onClose, onSave }) {
   const submit = (event) => {
     event.preventDefault();
     setConfigError('');
+    const cleanModelRules = modelRules
+      .map((rule) => ({ mode: ['exact', 'regex'].includes(rule?.mode) ? rule.mode : 'regex', value: String(rule?.value || '').trim() }))
+      .filter((rule) => rule.value);
+    if (localAnalysisEnabled && cleanModelRules.length === 0) { setConfigError('开启本机分析后，至少需要一条模型匹配规则'); return; }
+    for (const rule of cleanModelRules) {
+      if (rule.value.length > 160) { setConfigError('模型匹配内容最多 160 个字符'); return; }
+      if (rule.mode === 'regex') {
+        try { new RegExp(rule.value, 'i'); } catch (error) { setConfigError(`模型匹配正则无效：${error.message}`); return; }
+      }
+    }
+    const localAnalysis = { enabled: localAnalysisEnabled, modelRules: cleanModelRules };
     // 专属适配厂商：不覆盖内置的请求/解析配置，只保存名称、Logo、官网与浪费统计窗口
     if (cliAdapter) {
-      onSave({ id: provider?.id, name: name || existing.name || '厂商', adapter: provider?.adapter, logo, website: String(website || '').trim(), requestConfig: { ...config, ...(wasteWindows ? { wasteWindows } : {}) } });
+      onSave({ id: provider?.id, name: name || existing.name || '厂商', adapter: provider?.adapter, logo, website: String(website || '').trim(), localAnalysis, requestConfig: { ...config, ...(wasteWindows ? { wasteWindows } : {}) } });
       return;
     }
     const windowMap = Object.fromEntries(windowMapText.split('\n').map((line) => line.trim()).filter((line) => line.includes('=')).map((line) => { const [source, target] = line.split('=').map((item) => item.trim()); return [source.toLowerCase(), target]; }));
@@ -2138,7 +2182,7 @@ function ProviderModalV2({ provider, onClose, onSave }) {
     const cleanVariables = variables.map((item) => ({ key: String(item.key || '').trim(), label: String(item.label || '').trim(), defaultValue: item.defaultValue ?? '', required: Boolean(item.required), secret: Boolean(item.secret) })).filter((item) => item.key);
     if (cleanVariables.some((item) => !/^[A-Za-z_][\w.-]*$/.test(item.key))) { setConfigError('变量名只能使用字母、数字、下划线、点和连字符，且不能以数字开头'); return; }
     const endpointVariable = cleanVariables.find((item) => item.key === 'endpoint');
-    onSave({ id: provider?.id, name: name || '新厂商', adapter: provider?.adapter || 'generic', logo, website: String(website || '').trim(), requestConfig: { ...config, adapterMode: ['grok', ...CLI_ADAPTER_MODES].includes(config.adapterMode) ? config.adapterMode : advancedEnabled ? 'script' : 'standard', endpoint: advancedEnabled ? (endpointVariable?.defaultValue || endpoint) : endpoint, method, auth, authHeader, authPrefix, authQuery, headers, body, credentialRequired: advancedEnabled ? false : credentialRequired, variables: advancedEnabled ? cleanVariables : [], script: advancedEnabled ? script.trim() : '', responseRules: advancedEnabled ? undefined : responseRules, collectionMode, listPath, windowField, defaultWindow, windowMap, totalPath, remainingPath, usedPath, percentagePath, percentageMode, availablePath, unit, resetPath, ...(wasteWindows ? { wasteWindows } : {}) } });
+    onSave({ id: provider?.id, name: name || '新厂商', adapter: provider?.adapter || 'generic', logo, website: String(website || '').trim(), localAnalysis, requestConfig: { ...config, adapterMode: ['grok', ...CLI_ADAPTER_MODES].includes(config.adapterMode) ? config.adapterMode : advancedEnabled ? 'script' : 'standard', endpoint: advancedEnabled ? (endpointVariable?.defaultValue || endpoint) : endpoint, method, auth, authHeader, authPrefix, authQuery, headers, body, credentialRequired: advancedEnabled ? false : credentialRequired, variables: advancedEnabled ? cleanVariables : [], script: advancedEnabled ? script.trim() : '', responseRules: advancedEnabled ? undefined : responseRules, collectionMode, listPath, windowField, defaultWindow, windowMap, totalPath, remainingPath, usedPath, percentagePath, percentageMode, availablePath, unit, resetPath, ...(wasteWindows ? { wasteWindows } : {}) } });
   };
   return <div className="modal-backdrop" onClick={onClose}><form className={`modal provider-modal ${advancedEnabled ? 'script-mode' : ''}`} onSubmit={submit} onClick={(event) => event.stopPropagation()}>
     <div className="modal-head"><div><h2>{provider ? '编辑厂商' : '新增厂商'}</h2></div></div>
@@ -2146,6 +2190,18 @@ function ProviderModalV2({ provider, onClose, onSave }) {
     <label className="field"><span>厂商名称</span><input required value={name} onChange={(event) => setName(event.target.value)} /></label>
     <label className="field"><span>官网地址 <small>悬停厂商图标可进入官网，留空则不提供入口</small></span><input value={website} onChange={(event) => setWebsite(event.target.value)} placeholder="https://www.example.com" /></label>
     {!cliAdapter && <Toggle checked={advancedEnabled} onChange={setAdvancedEnabled} label="高级适配脚本" description="开启后脚本独立负责请求与响应解析" />}
+    <div className="adapter-config local-analysis-config">
+      <div className="local-analysis-heading"><span className="eyebrow">本机分析</span><TitleHelp>按规范化后的模型名称筛选本机 CLI 记录。完全匹配适合固定模型 ID，正则匹配适合一组同前缀模型。记录可能同时匹配多个厂商，不代表由当前账号产生。</TitleHelp></div>
+      <Toggle checked={localAnalysisEnabled} onChange={(next) => { setLocalAnalysisEnabled(next); if (next && modelRules.length === 0) setModelRules([{ mode: 'regex', value: '' }]); }} label="在账号详情显示本机用量" description="按相关模型汇总本机 CLI 活动" />
+      {localAnalysisEnabled && <div className="model-rule-editor">
+        {modelRules.map((rule, index) => <div className="model-rule-row" key={`model-rule-${index}`}>
+          <select aria-label={`第 ${index + 1} 条模型规则的匹配方式`} value={rule.mode} onChange={(event) => setModelRules((old) => old.map((item, itemIndex) => itemIndex === index ? { ...item, mode: event.target.value } : item))}><option value="regex">正则匹配</option><option value="exact">完全匹配</option></select>
+          <input aria-label={`第 ${index + 1} 条模型规则`} value={rule.value} onChange={(event) => setModelRules((old) => old.map((item, itemIndex) => itemIndex === index ? { ...item, value: event.target.value } : item))} placeholder={rule.mode === 'regex' ? '^model-' : 'model-version'} />
+          <button type="button" className="row-icon-button danger" onClick={() => setModelRules((old) => old.filter((_item, itemIndex) => itemIndex !== index))} title="删除规则" aria-label="删除模型规则"><Trash2 size={13} /></button>
+        </div>)}
+        <div className="model-rule-actions"><button type="button" className="mini-add" onClick={() => setModelRules((old) => [...old, { mode: 'regex', value: '' }])}><Plus size={13} /> 添加规则</button>{builtinLocalAnalysis && <button type="button" className="text-button" onClick={() => { setLocalAnalysisEnabled(builtinLocalAnalysis.enabled); setModelRules(builtinLocalAnalysis.modelRules.map((rule) => ({ ...rule }))); }}>恢复默认</button>}</div>
+      </div>}
+    </div>
     {wasteCandidates.length > 0 && <div className="adapter-config"><span className="eyebrow">浪费统计</span>
       <div className="field"><span>统计窗口 <small>勾选参与周期末浪费归档的窗口，全部取消则该厂商不做浪费统计</small></span>
         <div className="window-choice">{wasteCandidates.map((key) => { const on = (wasteWindows ?? wasteCandidates).includes(key); return <button type="button" key={key} className={`window-choice-item ${on ? 'selected' : ''}`} onClick={() => toggleWasteWindow(key)}><span>{on ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>; })}</div>
@@ -3296,6 +3352,10 @@ function App() {
   const [overviewMode, setOverviewMode] = useState('rings');
   // 额度历史折线图视图：点账号卡片进入，返回按钮或右上角视图切换退出
   const [historyAccountId, setHistoryAccountId] = useState(null);
+  // 本机用量视图：标题栏刷新按钮切换为扫描本机记录。
+  const localUsageApiRef = useRef(null);
+  const [localUsageMeta, setLocalUsageMeta] = useState(null);
+  const inLocalUsageView = overviewMode === 'local-usage' && !historyAccountId;
   const [accounts, setAccounts] = useState(bridge ? [] : initialAccounts);
   const [providers, setProviders] = useState(providerCatalog);
   const [settings, setSettings] = useState(() => normalizeSettings({}));
@@ -3565,7 +3625,7 @@ function App() {
   const saveProvider = async (draft) => {
     const id = draft.id || draft.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || `provider-${Date.now()}`;
     const old = providers.find((item) => item.id === id);
-    const provider = { ...old, id, name: draft.name, legalName: draft.name, monogram: draft.name.slice(0, 1).toUpperCase(), tone: old?.tone || 'slate', adapter: draft.adapter, logo: draft.logo, website: String(draft.website || '').trim(), requestConfig: draft.requestConfig };
+    const provider = { ...old, id, name: draft.name, legalName: draft.name, monogram: draft.name.slice(0, 1).toUpperCase(), tone: old?.tone || 'slate', adapter: draft.adapter, logo: draft.logo, website: String(draft.website || '').trim(), localAnalysis: cloneLocalAnalysis(draft.localAnalysis), requestConfig: draft.requestConfig };
     delete provider.baseUrl;
     delete provider.domain;
     const nextProviders = old ? providers.map((item) => item.id === id ? provider : item) : [...providers, provider];
@@ -3585,6 +3645,12 @@ function App() {
   };
   const historyAccount = historyAccountId ? accounts.find((item) => item.id === historyAccountId) : null;
 
+  const handleGlobalRefresh = () => {
+    if (!inLocalUsageView) { refreshAll(); return; }
+    setRefreshing(true);
+    Promise.resolve(localUsageApiRef.current?.refresh?.()).finally(() => { setRefreshing(false); });
+  };
+
   // 首次引导：仅在没有账号 且 未标记完成时出现；老用户升级后已有账号 → 启动时自动补记 onboarded
   // ?onboard=1 可强制打开向导（预览 / 截图 / 调试）
   const [onboardOpen, setOnboardOpen] = useState(() => new URLSearchParams(window.location.search).get('onboard') === '1');
@@ -3600,14 +3666,15 @@ function App() {
   };
 
   const appShellControls = <>
-    <span className="last-checked" title="最后一次额度检查时间"><Clock3 size={11} />{formatChecked(lastSync)}</span>
+    <span className="last-checked" title={inLocalUsageView ? '最后一次本机用量扫描时间' : '最后一次额度检查时间'}><Clock3 size={11} />{inLocalUsageView ? (localUsageMeta?.lastScannedAt ? formatChecked(localUsageMeta.lastScannedAt) : '未扫描') : formatChecked(lastSync)}</span>
     {update && ['available', 'downloading', 'downloaded', 'error'].includes(update.status) && !(update.status === 'available' && update.version && update.version === settings.ignoredUpdateVersion) && <button className={`update-badge ${update.status}`} onClick={() => setUpdateOpen(true)} title="查看版本更新"><Download size={11} />{update.status === 'available' && `v${update.version} 可更新`}{update.status === 'downloading' && `下载中 ${update.percent || 0}%`}{update.status === 'downloaded' && '重启升级'}{update.status === 'error' && '更新失败'}</button>}
-    <button className="control-solo" onClick={refreshAll} disabled={refreshing} title="立即刷新全部账号" aria-label="立即刷新全部账号"><RefreshCw size={13} className={refreshing ? 'spinning' : ''} /></button>
-    <div className="overview-controls" aria-label="账号总览展示方式">
+    <button className="control-solo" onClick={handleGlobalRefresh} disabled={refreshing} title={inLocalUsageView ? '重新扫描本机用量' : '立即刷新全部账号'} aria-label={inLocalUsageView ? '重新扫描本机用量' : '立即刷新全部账号'}><RefreshCw size={13} className={refreshing || (inLocalUsageView && localUsageMeta?.scanning) ? 'spinning' : ''} /></button>
+    <div className="overview-controls" aria-label="全局视图">
       <button className={overviewMode === 'rings' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rings'); }} title="账号总览" aria-label="账号总览"><CircleGauge size={13} /></button>
       <button className={overviewMode === 'rows' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rows'); }} title="行式明细" aria-label="行式明细"><Rows3 size={13} /></button>
       <button className={overviewMode === 'periods' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('periods'); }} title="周期明细" aria-label="周期明细"><Clock3 size={13} /></button>
     </div>
+    <button className={`control-solo local-usage-control${inLocalUsageView ? ' active' : ''}`} onClick={() => { setHistoryAccountId(null); setOverviewMode('local-usage'); }} title="本机用量" aria-label="本机用量"><ChartNoAxesCombined size={13} /></button>
   </>;
   const appShellActions = <>
     <button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={13} /></button>
@@ -3616,8 +3683,8 @@ function App() {
 
   return <AppShell controls={appShellControls} actions={appShellActions}>
     {toast && <div className={`toast ${toast.ok ? 'ok' : 'fail'}`} role="status">{toast.ok ? <Check size={13} /> : <AlertCircle size={13} />}<span>{toast.message}</span></div>}
-    <main className="main-shell">
-      <div className="content-area">{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{onboardOpen ? <OnboardingWizard settings={settings} setSettings={setSettings} accounts={accounts} providers={providers} ccswitchAvailable={Boolean(bridge?.scanCcswitchImport) || new URLSearchParams(window.location.search).get('onboard') === '1'} onOpenImport={() => setModal('account')} onApplyCcswitch={async (keys, chosen) => {
+    <main className={`main-shell${inLocalUsageView ? ' local-usage-mode' : ''}`}>
+      <div className={`content-area${inLocalUsageView ? ' local-usage-mode' : ''}`}>{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{inLocalUsageView ? <LocalCliUsageView settings={settings} setSettings={setSettings} onApi={(api) => { localUsageApiRef.current = api; }} onMetaChange={setLocalUsageMeta} /> : onboardOpen ? <OnboardingWizard settings={settings} setSettings={setSettings} accounts={accounts} providers={providers} ccswitchAvailable={Boolean(bridge?.scanCcswitchImport) || new URLSearchParams(window.location.search).get('onboard') === '1'} onOpenImport={() => setModal('account')} onApplyCcswitch={async (keys, chosen) => {
         if (!bridge) {
           // 网页演示模式：直接把选中的模拟条目变成账号，走与真实导入一致的落库形态
           const stamp = Date.now();
@@ -3640,7 +3707,7 @@ function App() {
         const result = await bridge.applyCcswitchImport(keys);
         if (result?.state) { setAccounts(result.state.accounts || []); setProviders(result.state.providers || []); setLastSync(result.state.lastSync || new Date().toISOString()); if (result.state.runtime) setRuntime(result.state.runtime); }
         setToast({ id: Date.now(), ok: result?.imported > 0, message: result?.imported > 0 ? `已从 cc-switch 导入 ${result.imported} 个账号` : '没有导入新账号（凭据都已存在）' });
-      }} onDeleteAccount={deleteAccount} onFinish={finishOnboarding} /> : accounts.length === 0 ? <section className="empty-workspace"><div className="empty-mark"><CircleGauge size={22} /></div><div><h2>把第一份 Coding Plan 接进来</h2><p>凭据将由 Windows 加密保存，额度请求只在本机发出。</p></div><button className="primary-button" onClick={() => setModal('account')}><Plus size={15} /> 添加账号</button><button className="outline-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> 设置</button>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button" onClick={() => setModal('import-ccswitch')}><Download size={15} /> 从 cc-switch 导入</button>}</section> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} onProviderUsageState={applyProviderUsageState} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} onReorderAccounts={reorderAccounts} sortWeights={{ fiveHourRemaining: settings.periodSort5hRemaining, otherRemaining: settings.periodSortLongRemaining }} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const kind = reloginChannel(provider)?.kind || 'kimi'; setModal({ type: `${kind}-relogin`, account }); }} />}</div>
+      }} onDeleteAccount={deleteAccount} onFinish={finishOnboarding} /> : accounts.length === 0 ? <section className="empty-workspace"><div className="empty-mark"><CircleGauge size={22} /></div><div><h2>把第一份 Coding Plan 接进来</h2><p>凭据将由 Windows 加密保存，额度请求只在本机发出。</p></div><button className="primary-button" onClick={() => setModal('account')}><Plus size={15} /> 添加账号</button><button className="outline-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> 设置</button>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button" onClick={() => setModal('import-ccswitch')}><Download size={15} /> 从 cc-switch 导入</button>}</section> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} onProviderUsageState={applyProviderUsageState} settings={settings} setSettings={setSettings} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} onReorderAccounts={reorderAccounts} sortWeights={{ fiveHourRemaining: settings.periodSort5hRemaining, otherRemaining: settings.periodSortLongRemaining }} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const kind = reloginChannel(provider)?.kind || 'kimi'; setModal({ type: `${kind}-relogin`, account }); }} />}</div>
     </main>
     {settingsOpen && <SettingsDrawer accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)} openModal={setModal} onDeleteAccount={deleteAccount} onToggleAccountDisabled={toggleAccountDisabled} onTestAccount={testAccount} testingAccountId={testingAccountId} onEditProvider={editProvider} autoLaunch={autoLaunch} onToggleAutoLaunch={toggleAutoLaunch} appVersion={appVersion} update={update} onOpenUpdate={() => setUpdateOpen(true)} onCheckUpdate={onCheckUpdate} onClearHistory={clearHistory} runtime={runtime} onExportData={exportData} onImportData={importData} dataBusy={dataBusy} onReopenOnboarding={() => { setSettingsOpen(false); setHistoryAccountId(null); setOnboardOpen(true); }} />}
     {confirmState && <ConfirmModal confirm={confirmState} onClose={() => setConfirmState(null)} />}
