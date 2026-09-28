@@ -358,7 +358,12 @@ async function queryAccountOnce(account, provider, credential, fetcher = fetch, 
     const cliContext = { variables, onAuthUpdate: options.onCliAuth ? (kind, next, previous, source) => options.onCliAuth({ account, kind, next, previous, source }) : undefined };
     if (config.adapterMode === 'claude') return queryClaudeQuota(fetcher, meter, timeoutMs, cliContext);
     if (config.adapterMode === 'codex') return queryCodexQuota(fetcher, meter, timeoutMs, cliContext);
-    if (config.adapterMode === 'kimi') return queryKimiWebQuota(fetcher, meter, timeoutMs, cliContext);
+    if (config.adapterMode === 'kimi') {
+      // Kimi 同渠道双登录：无扫码快照的账号是 API Key 模式（kimi 没有 live 登录文件，
+      // resolveCliAuth 为 null 即没有快照），走 API Key 用量端点（拿不到月订阅额度）
+      if (!resolveCliAuth('kimi', variables)) return queryKimiApiKeyQuota(account, provider, credential, fetcher, meter, timeoutMs, variables);
+      return queryKimiWebQuota(fetcher, meter, timeoutMs, cliContext);
+    }
     if (config.adapterMode === 'grok') return queryGrokSubscription(fetcher, timeoutMs, cliContext);
     if (config.adapterMode === 'copilot') return queryCopilotQuota(fetcher, meter, timeoutMs, cliContext);
     if (config.adapterMode === 'grokbot') return queryGrokBotUsage(fetcher, meter, timeoutMs, cliContext);
@@ -398,6 +403,36 @@ async function queryAccountOnce(account, provider, credential, fetcher = fetch, 
   const visibleWindows = selected ? windows.filter((item) => selected.has(item.key)) : windows;
   if (!visibleWindows.length) throw new Error('接口已返回额度，但没有包含该账号选择的窗口');
   return visibleWindows;
+}
+
+// ── Kimi API Key 额度适配（kimi-subscription 渠道的 API Key 登录模式）────────
+// 同一渠道两种登录方式：有扫码快照的账号走 queryKimiWebQuota（含月订阅额度）；
+// 只有 API Key 的账号走这里——GET api.kimi.com/coding/v1/usages（Bearer Key），
+// 接口只返回 5 小时 / 7 天窗口，拿不到月订阅额度。API Key 账号扫码升级后 Key 仍
+// 保留在凭据里（storage.saveCredential 空凭据保留原值），cc-switch 导入按 Key 去重不受影响。
+const KIMI_API_USAGE_ENDPOINT = 'https://api.kimi.com/coding/v1/usages';
+
+async function queryKimiApiKeyQuota(account, provider, credential, fetcher, meter, timeoutMs, secretVariables = {}) {
+  const apiKey = String(secretVariables?.apiKey || credential || '').trim();
+  if (!apiKey) throw reauthRequiredError('该 Kimi 账号没有 API Key，也没有扫码登录：请在「设置 → 账号与凭据」中编辑该账号完成登录');
+  const endpoint = String(account.endpoint || provider?.requestConfig?.endpoint || KIMI_API_USAGE_ENDPOINT);
+  const response = await fetcher(endpoint, { method: 'GET', headers: { Accept: 'application/json', Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(timeoutMs) });
+  if (response.status === 401 || response.status === 403) throw reauthRequiredError('Kimi API Key 已失效：请在设置中编辑该账号改用扫码登录，或删除账号后重新添加');
+  if (!response.ok) throw new Error(`Kimi 额度接口返回 HTTP ${response.status}`);
+  const payload = await response.json();
+  const windows = (payload?.limits || []).map((item) => {
+    const detail = item?.detail || item || {};
+    const total = numeric(detail.limit);
+    const remaining = numeric(detail.remaining);
+    return meter('five_hour', percent(remaining, total), 100, '%', detail.resetTime, { amount: remaining, limitAmount: total });
+  });
+  if (payload?.usage) {
+    const total = numeric(payload.usage.limit);
+    const remaining = numeric(payload.usage.remaining);
+    windows.push(meter('weekly', percent(remaining, total), 100, '%', payload.usage.resetTime, { amount: remaining, limitAmount: total }));
+  }
+  if (!windows.length) throw new Error('Kimi 接口返回成功，但没有识别到额度窗口');
+  return windows;
 }
 
 // ── Xiaomi MiMo Token Plan 额度专属适配 ─────────────────────────────────────

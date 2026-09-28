@@ -66,12 +66,15 @@ const hostOf = (url) => {
   catch { return raw.toLowerCase().replace(/^https?:\/\//, '').split('/')[0].replace(/^www\./, ''); }
 };
 
-// 内置厂商域名别名：cc-switch 里配的 baseUrl 域名与额度接口域名不一定相同
+// 内置厂商域名别名：cc-switch 里配的 baseUrl 域名与额度接口域名不一定相同。
+// kimi 的 API Key 条目（如 ANTHROPIC_BASE_URL=api.kimi.com/coding）导入到
+// kimi-subscription 渠道：API Key 模式无月额度，可在设置中对该账号扫码登录补全。
 const BUILTIN_HOST_ALIASES = {
   zai: ['bigmodel.cn', 'api.z.ai', 'z.ai'],
   deepseek: ['deepseek.com'],
   wlb: ['wlbclub.com'],
   minimax: ['minimaxi.com', 'minimax.io'],
+  'kimi-subscription': ['api.kimi.com', 'kimi.com'],
 };
 
 // 厂商匹配：先按当前厂商列表（含自定义厂商）的接口域名匹配，再叠加内置别名；

@@ -17,7 +17,8 @@ const createStore = () => {
 };
 
 const DAY = 86_400_000;
-const now = Date.UTC(2026, 8, 22, 12); // 2026-09-22T12:00Z
+// 相对区间测试必须跟随运行日，避免固定夹具在数日后滑出“近 7 天”。
+const now = Date.now();
 
 const event = (overrides) => buildUsageEvent({
   eventKey: `k:${overrides.agent}:${overrides.session || 'sess-1'}:${overrides.model || 'm'}:${overrides.at}`,
@@ -53,7 +54,7 @@ test('聚合总数 = 各渠道同区间之和;total >= classified,差额进 extr
   const all = store.models({ agent: 'all', mergeSameModels: true, scope: { kind: 'range', days: 7 }, timezone: 'UTC' });
   const byAgent = AGENT_ORDER.map((agent) => totalOf(store.models({ agent, mergeSameModels: false, scope: { kind: 'range', days: 7 }, timezone: 'UTC' })));
   assert.equal(totalOf(all), byAgent.reduce((sum, value) => sum + value, 0));
-  const glm = all.models.find((row) => row.displayName.includes('GLM'));
+  const glm = all.models.find((row) => row.modelKey === 'glm-4.7');
   assert.ok(glm.extraTokens >= 5); // 20 - 15 的差额进入 extra
   for (const row of all.models) {
     assert.ok(row.totalTokens >= row.inputTokens + row.cacheReadTokens + row.cacheWriteTokens + row.outputTokens);
@@ -167,9 +168,10 @@ test('重扫/重复写入后总数不变(幂等 UPSERT)', () => {
 test('day scope:单日模型查询与该日 summary 对齐', () => {
   const { store } = createStore();
   seedBase(store);
-  const report = store.models({ agent: 'all', mergeSameModels: true, scope: { kind: 'day', date: '2026-09-21' }, timezone: 'UTC' });
-  assert.equal(report.range.start, '2026-09-21');
-  assert.equal(report.range.end, '2026-09-21');
+  const previousDate = new Date(now - DAY).toISOString().slice(0, 10);
+  const report = store.models({ agent: 'all', mergeSameModels: true, scope: { kind: 'day', date: previousDate }, timezone: 'UTC' });
+  assert.equal(report.range.start, previousDate);
+  assert.equal(report.range.end, previousDate);
   // zcode glm + zcode sonnet + claude sonnet ×2 = 800
   assert.equal(totalOf(report), 800);
   store.close();

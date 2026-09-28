@@ -1,8 +1,10 @@
-const { app, BrowserWindow, ipcMain, Menu, nativeImage, net, Notification, screen, session, shell, Tray } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, screen, session, shell, Tray } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
 const crypto = require('node:crypto');
 const { DesktopStore } = require('./storage.cjs');
+const { REMOTE_PORT, createRemoteViewServer } = require('./remote-view.cjs');
 const { queryAccount, authStatusForPollError } = require('./poller.cjs');
 const { clampRetentionDays } = require('./history.cjs');
 const { resolveWasteWindows } = require('./waste.cjs');
@@ -10,6 +12,7 @@ const { builtinConfigs } = require('./builtin-configs.cjs');
 const { scanCcswitch } = require('./ccswitch.cjs');
 const { mergeMainOwnedUsageConnections } = require('./provider-usage-state.cjs');
 const { createCliUsageService } = require('./cli-usage/index.cjs');
+const { buildExportPackage, validateExportPackage, mergeImportPackage } = require('./import-export.cjs');
 const { CLI_KINDS, SNAPSHOT_KEY, readLiveAuth, cliIdentity, resolveCliAuth, authVersionMatches, writeLiveIfCurrent, fetchWithCliAuth, COPILOT_CLIENT_ID, COPILOT_DEVICE_CODE_URL, COPILOT_TOKEN_URL, COPILOT_SCOPE } = require('./cli-auth.cjs');
 const {
   fetchDeepSeekUsage,
@@ -51,6 +54,8 @@ let quitting = false;
 let nextPollAt = null;
 let pollStartedAt = null;
 let pollInProgress = false;
+let remoteViewServer = null;
+let remoteViewError = '';
 const sentReminders = new Set();
 const providerUsageLoginFlows = new Map();
 const providerUsageRecoveryFlows = new Map();
@@ -103,6 +108,53 @@ const distPath = path.join(__dirname, '..', 'dist', 'index.html');
 const preloadPath = path.join(__dirname, 'preload.cjs');
 const appIconPngPath = path.join(__dirname, '..', 'dist', 'logo.png');
 const appIconSvgPath = path.join(__dirname, '..', 'dist', 'quota-desk.svg');
+const remoteLocalUrl = (port) => `http://127.0.0.1:${port}/remote.html`;
+const isPrivateIPv4 = (address) => {
+  const [first, second] = address.split('.').map(Number);
+  return first === 10 || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168);
+};
+const remoteLanUrls = (port) => {
+  const addresses = Object.values(os.networkInterfaces()).flatMap((entries) => entries || [])
+    .filter((entry) => entry.family === 'IPv4' && !entry.internal && isPrivateIPv4(entry.address))
+    .map((entry) => entry.address);
+  const unique = [...new Set(addresses)];
+  const priority = (address) => address.startsWith('192.168.') ? 0 : address.startsWith('10.') ? 1 : 2;
+  return unique.sort((a, b) => priority(a) - priority(b)).map((address) => `http://${address}:${port}/remote.html`);
+};
+async function startRemoteView() {
+  if (remoteViewServer) return;
+  const config = store.loadRemoteAccess();
+  if (!config.enabled) return;
+  // Create the device-pairing invitation key when remote access is first enabled.
+  if (!config.pairingKey) {
+    config.pairingKey = crypto.randomBytes(32).toString('base64url');
+    store.saveRemoteAccess(config);
+  }
+  try {
+    remoteViewServer = await createRemoteViewServer({
+      store,
+      distDir: path.join(__dirname, '..', 'dist'),
+      port: config.port,
+      authorizeToken: (token) => store.isRemoteTokenAuthorized(token),
+      pairDevice: (request) => store.pairRemoteDevice(request),
+      getHistory: (accountId) => {
+        const points = store.loadHistory()[accountId] || [];
+        const days = historyRetentionDays();
+        return days === 0 ? points : points.filter((point) => Date.parse(point.at) >= Date.now() - days * 86_400_000);
+      },
+      getCycles: (accountId) => store.getCycles(accountId),
+      getUsage: (accountId) => queryProviderUsage(accountId, { days: 365 }),
+    });
+    remoteViewError = '';
+  } catch (error) {
+    remoteViewError = `本地服务启动失败：${error.message}`;
+  }
+}
+
+async function remoteViewStatus() {
+  const config = store.loadRemoteAccess();
+  return { enabled: config.enabled, running: Boolean(remoteViewServer), error: remoteViewError, pairingKey: config.pairingKey, devices: store.listRemoteDevices(), readOnly: true, localUrl: remoteLocalUrl(config.port), lanUrls: remoteLanUrls(config.port), port: config.port };
+}
 
 // 开机自启由操作系统的登录项管理,作为唯一事实来源,不写入应用状态
 const getAutoLaunch = () => app.getLoginItemSettings().openAtLogin;
@@ -389,22 +441,27 @@ const migrateProvider = (provider) => {
   const seededVariables = !builtin && builtinConfig?.adapterMode === 'script' && !provider.requestConfig?.variables?.some((item) => item.key === 'endpoint')
     ? { ...provider, requestConfig: { ...provider.requestConfig, variables: builtinConfig.variables } }
     : provider;
+  // Kimi 双登录改造：给存量 kimi-subscription 渠道补上 API Key 用量端点
+  // （API Key 表单的默认接口地址 + cc-switch 导入的域名匹配）
+  const kimiEndpointSeeded = provider.id === 'kimi-subscription' && builtinConfig?.endpoint && provider.requestConfig?.endpoint !== builtinConfig.endpoint
+    ? { ...seededVariables, requestConfig: { ...seededVariables.requestConfig, endpoint: builtinConfig.endpoint } }
+    : seededVariables;
   // MiMo 窗口改版：存量 state 的 requestConfig.windows 还是旧的 ['mimo_plan'] 时，
   // 刷新为内置的周期窗口（包月 monthly「1个月」/ 包年 yearly「1年」）；旧配置的
   // wasteWindows 是空数组（当时明确不做浪费统计），一并刷新为内置预设参与浪费统计
   const mimoWindowsStale = provider.id === 'mimo' && Array.isArray(provider.requestConfig?.windows) && provider.requestConfig.windows.includes('mimo_plan');
   const refreshedWindows = mimoWindowsStale && builtinConfig?.windows
     ? {
-        ...seededVariables,
+        ...kimiEndpointSeeded,
         requestConfig: {
-          ...seededVariables.requestConfig,
+          ...kimiEndpointSeeded.requestConfig,
           windows: builtinConfig.windows,
-          ...(Array.isArray(seededVariables.requestConfig?.wasteWindows) && !seededVariables.requestConfig.wasteWindows.length
+          ...(Array.isArray(kimiEndpointSeeded.requestConfig?.wasteWindows) && !kimiEndpointSeeded.requestConfig.wasteWindows.length
             ? { wasteWindows: builtinConfig.wasteWindows }
             : {}),
         },
       }
-    : seededVariables;
+    : kimiEndpointSeeded;
   const website = provider.website === undefined ? (builtinWebsites[provider.id] ?? '') : provider.website;
   const migrated = builtin ? { ...provider, website, baseUrl: undefined, domain: undefined, requestConfig: builtin, logo } : { ...refreshedWindows, website, baseUrl: undefined, domain: undefined, logo };
   // 浪费统计预设补齐：存量 state 的 requestConfig 还没有 wasteWindows 字段时用内置预设；
@@ -1362,7 +1419,7 @@ function createMainWindow() {
     backgroundColor: themeColors(savedTheme()).main, title: 'Quota Desk', icon: loadAppIcon(), autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: preloadPath },
   });
-  mainWindow.loadFile(distPath);
+  mainWindow.loadFile(distPath, process.argv.includes('--onboard') ? { query: { onboard: '1' } } : undefined);
   // Windows 上只有一个真正生效的置顶层，主窗口置顶后与浮窗同层、激活即会盖到浮窗上；
   // 主窗口显示/被激活时把浮窗压回自己上方，保证自家浮窗永不被主界面挡住
   mainWindow.on('show', () => {
@@ -1490,6 +1547,42 @@ const formatWindowSummary = (windows) => (windows || [])
   .map((item) => `${windowSummaryLabels[item.key] || item.key} ${item.unit === '%' ? `${Math.round(Number(item.remaining) || 0)}%` : `${item.amount ?? item.remaining}${item.unit ? ` ${item.unit}` : ''}`}`)
   .join(' · ') || '没有可用额度窗口';
 
+// 数据备份只把用户新增的厂商写入文件；内置厂商会由当前版本迁移逻辑自动补齐。
+const builtinProviderIds = new Set([...Object.keys(builtinConfigs), ...Object.keys(builtinLogos), 'wlb']);
+const exportFileStamp = () => new Date().toISOString().replace(/[:.]/g, '-').replace(/Z$/, '');
+const dataDialogOwner = () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined);
+const accountSecretMap = (accounts) => {
+  const stored = store.loadCredentials();
+  return Object.fromEntries((accounts || [])
+    .filter((account) => Object.prototype.hasOwnProperty.call(stored, account.id))
+    .map((account) => [account.id, store.getSecrets(account.id)]));
+};
+const restoredUsageConnections = (accounts, importedIds) => (accounts || []).map((account) => {
+  if (!importedIds.has(account.id) || account.usageConnection || !PROVIDER_USAGE_CONFIGS[account.providerId]) return account;
+  const auth = readProviderUsageAuth(account.id);
+  if (!auth) return account;
+  return {
+    ...account,
+    usageConnection: {
+      provider: account.providerId,
+      mode: 'official-account',
+      status: 'connected',
+      connectedAt: auth.connectedAt || new Date().toISOString(),
+      checkedAt: null,
+      lastError: null,
+      revision: 1,
+    },
+  };
+});
+const importStatsText = (stats = {}) => [
+  `新增账号 ${Number(stats.importedAccounts ?? stats.accounts ?? 0)} 个`,
+  `跳过重复账号 ${Number(stats.duplicateAccounts || 0)} 个`,
+  `新增厂商 ${Number(stats.importedProviders ?? stats.providers ?? 0)} 个`,
+  `跳过重复厂商 ${Number(stats.duplicateProviders || 0)} 个`,
+  `合并历史点 ${Number(stats.importedHistory ?? stats.history ?? 0)} 条`,
+  `合并周期档案 ${Number(stats.importedCycles ?? stats.cycles ?? 0)} 条`,
+].join('，');
+
 function registerIpc() {
   ipcMain.handle('state:load', () => {
     const state = migrateState(store.loadState());
@@ -1528,6 +1621,153 @@ function registerIpc() {
   ipcMain.handle('quota:poll-all', () => pollState());
   ipcMain.handle('quota:poll-account', (_event, accountId) => pollState([accountId]));
   ipcMain.handle('history:get', (_event, accountId) => store.getHistory(String(accountId || ''), historyRetentionDays()));
+  ipcMain.handle('remote:get-status', () => remoteViewStatus());
+  ipcMain.handle('remote:set-enabled', async (_event, enabled) => {
+    const previous = store.loadRemoteAccess();
+    const pairingKey = previous.pairingKey || crypto.randomBytes(32).toString('base64url');
+    const next = { ...previous, enabled: Boolean(enabled), pairingKey };
+    store.saveRemoteAccess(next);
+    if (next.enabled) {
+      await startRemoteView();
+      if (!remoteViewServer) {
+        const failure = remoteViewError || '局域网服务启动失败';
+        store.saveRemoteAccess({ ...next, enabled: false });
+        throw new Error(failure);
+      }
+    }
+    else {
+      if (remoteViewServer) await new Promise((resolve) => remoteViewServer.close(resolve));
+      remoteViewServer = null;
+      remoteViewError = '';
+    }
+    return remoteViewStatus();
+  });
+  ipcMain.handle('remote:set-port', async (_event, value) => {
+    const port = Number(value);
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('访问端口必须是 1024–65535 之间的整数');
+    const previous = store.loadRemoteAccess();
+    if (port === previous.port) return remoteViewStatus();
+    const next = { ...previous, port };
+    store.saveRemoteAccess(next);
+    if (remoteViewServer) await new Promise((resolve) => remoteViewServer.close(resolve));
+    remoteViewServer = null;
+    remoteViewError = '';
+    if (next.enabled) await startRemoteView();
+    if (next.enabled && !remoteViewServer) {
+      const failure = remoteViewError || '局域网服务启动失败';
+      store.saveRemoteAccess(previous);
+      remoteViewError = '';
+      await startRemoteView();
+      const recovery = remoteViewServer ? `已恢复到原端口 ${previous.port}` : `恢复原端口 ${previous.port} 也失败：${remoteViewError}`;
+      throw new Error(`端口 ${port} 无法启动：${failure}；${recovery}`);
+    }
+    return remoteViewStatus();
+  });
+  ipcMain.handle('remote:rotate-pairing-key', async () => {
+    const previous = store.loadRemoteAccess();
+    store.saveRemoteAccess({ ...previous, pairingKey: crypto.randomBytes(32).toString('base64url') });
+    return remoteViewStatus();
+  });
+  ipcMain.handle('remote:remove-device', (_event, deviceId) => {
+    if (typeof deviceId !== 'string' || !deviceId) throw new Error('缺少设备标识');
+    store.removeRemoteDevice(deviceId);
+    return remoteViewStatus();
+  });
+  ipcMain.handle('data:export', async (_event, options = {}) => {
+    const state = migrateState(store.loadState());
+    if (!state) throw new Error('桌面状态尚未初始化');
+    const includeCredentials = options?.includeCredentials !== false;
+    const pkg = buildExportPackage(
+      cleanState(state),
+      store.loadHistory(),
+      store.loadCycles(),
+      includeCredentials ? accountSecretMap(state.accounts) : null,
+      { includeCredentials, builtinProviderIds },
+    );
+    const result = await dialog.showSaveDialog(dataDialogOwner(), {
+      title: '导出 Quota Desk 数据',
+      defaultPath: path.join(app.getPath('documents'), `Quota-Desk-backup-${exportFileStamp()}.json`),
+      filters: [{ name: 'Quota Desk 数据', extensions: ['json'] }, { name: '所有文件', extensions: ['*'] }],
+    });
+    if (result.canceled || !result.filePath) return { canceled: true };
+    try {
+      const tempPath = `${result.filePath}.tmp`;
+      fs.writeFileSync(tempPath, JSON.stringify(pkg, null, 2), 'utf8');
+      fs.renameSync(tempPath, result.filePath);
+    } catch (error) {
+      try { fs.rmSync(`${result.filePath}.tmp`, { force: true }); } catch {}
+      throw new Error(`导出数据失败：${error.message}`);
+    }
+    const accounts = (pkg.state?.accounts || []).length;
+    const providers = (pkg.state?.providers || []).length;
+    const historyPoints = Object.values(pkg.history || {}).reduce((sum, points) => sum + (Array.isArray(points) ? points.length : 0), 0);
+    return { ok: true, path: result.filePath, counts: { accounts, providers, historyPoints, includesCredentials: Boolean(pkg.credentials) } };
+  });
+  ipcMain.handle('data:import', async () => {
+    const result = await dialog.showOpenDialog(dataDialogOwner(), {
+      title: '导入 Quota Desk 数据',
+      properties: ['openFile'],
+      filters: [{ name: 'Quota Desk 数据', extensions: ['json'] }, { name: '所有文件', extensions: ['*'] }],
+    });
+    if (result.canceled || !result.filePaths?.[0]) return { canceled: true };
+    let payload;
+    try {
+      payload = JSON.parse(fs.readFileSync(result.filePaths[0], 'utf8'));
+    } catch (error) {
+      throw new Error(`无法读取数据文件：${error.message}`);
+    }
+    const validation = validateExportPackage(payload, { builtinProviderIds });
+    if (!validation.ok) throw new Error(`数据文件无效：${validation.errors.join('；')}`);
+    const current = migrateState(store.loadState()) || { accounts: [], providers: [], settings: {}, lastSync: new Date().toISOString() };
+    const merged = mergeImportPackage(
+      cleanState(current),
+      store.loadHistory(),
+      store.loadCycles(),
+      payload,
+      { builtinProviderIds, currentCredentials: accountSecretMap(current.accounts) },
+    );
+    const credentialIdsBeforeImport = new Set(Object.keys(store.loadCredentials()));
+    const stats = merged.stats || {};
+    const confirm = await dialog.showMessageBox(dataDialogOwner(), {
+      type: 'question',
+      title: '确认导入数据',
+      message: '将合并 Quota Desk 数据',
+      detail: `${importStatsText(stats)}。当前数据会保留，重复项目不会覆盖。${payload.credentials ? '\n文件包含账号凭据，请确认文件来源可信。' : ''}`,
+      buttons: ['导入', '取消'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (confirm.response !== 0) return { canceled: true, stats };
+    const importedCredentials = payload.credentials || {};
+    let credentialsFailed = 0;
+    for (const [sourceId, secret] of Object.entries(importedCredentials)) {
+      const accountId = merged.accountIdMap?.[sourceId];
+      if (!accountId || credentialIdsBeforeImport.has(accountId)) continue;
+      if (!secret || (!String(secret.credential || '').trim() && !Object.values(secret.variables || {}).some((value) => String(value || '').trim()))) continue;
+      try { store.saveCredential(accountId, secret.credential || '', secret.variables || {}); credentialIdsBeforeImport.add(accountId); }
+      catch (error) { credentialsFailed += 1; console.warn('[Quota Desk] 导入账号凭据失败', accountId, error.message); }
+    }
+    store.saveHistory(merged.history);
+    store.saveCycles(merged.cycles);
+    const importedIds = new Set((payload.state?.accounts || []).map((account) => merged.accountIdMap?.[account.id]).filter(Boolean));
+    const saved = store.saveState(cleanState({
+      ...merged.state,
+      accounts: restoredUsageConnections(merged.state.accounts, importedIds).map((account) => importedIds.has(account.id) && !current.accounts.some((item) => item.id === account.id)
+        ? { ...account, status: 'warning', lastError: '等待首次刷新', lastChecked: null }
+        : account),
+      settings: current.settings,
+      lastSync: new Date().toISOString(),
+    }));
+    const savedIds = new Set((saved.accounts || []).map((account) => account.id));
+    store.pruneCyclesAccounts([...savedIds]);
+    applyProxySetting();
+    schedulePolling();
+    refreshLiveIdentities();
+    sendState(saved);
+    refreshTray();
+    return { ok: true, path: result.filePaths[0], stats: { ...stats, credentialsFailed }, state: { ...saved, runtime: runtimeStatus() } };
+  });
   ipcMain.handle('usage:get', async (_event, accountId, options = {}) => queryProviderUsage(String(accountId || ''), options));
   ipcMain.handle('usage:connect', async (_event, accountId) => connectProviderUsage(String(accountId || '')));
   ipcMain.handle('usage:disconnect', (_event, accountId) => {
@@ -1882,8 +2122,12 @@ function registerIpc() {
       const customTags = Array.isArray(options?.tags) ? options.tags.map((tag) => String(tag).trim()).filter(Boolean) : null;
       // 自动生成的标识（… 尾号）跟随新登录更新，用户手填的标识不动
       const nextIdentity = (!target.identity || target.identity.startsWith('…')) ? (identity.display || target.identity) : target.identity;
+      // API Key 账号扫码升级为订阅模式：补上月订阅窗口（API Key 保留用于 cc-switch 导入去重）
+      const upgradedWindowKeys = target.cliAuthSource !== 'snapshot' && !(target.windowKeys || []).includes('monthly')
+        ? [...(target.windowKeys?.length ? target.windowKeys : ['five_hour', 'weekly']), 'monthly']
+        : null;
       const updatedAccounts = (state.accounts || []).map((account) => account.id === reloginId
-        ? { ...account, identity: nextIdentity, ...(customName ? { name: customName } : {}), ...(customTags ? { tags: customTags } : {}), cliAuthSource: 'snapshot', cliFingerprint: identity.fingerprint, status: 'active', lastError: null }
+        ? { ...account, ...(upgradedWindowKeys ? { windowKeys: upgradedWindowKeys } : {}), identity: nextIdentity, ...(customName ? { name: customName } : {}), ...(customTags ? { tags: customTags } : {}), cliAuthSource: 'snapshot', cliFingerprint: identity.fingerprint, status: 'active', lastError: null }
         : account);
       const saved = store.saveState(cleanState({ ...state, accounts: updatedAccounts }));
       sendState(saved);
@@ -2058,6 +2302,7 @@ function registerIpc() {
     }
     const nextAccounts = [...(state.accounts || [])];
     const importedIds = [];
+    let kimiApiKeyImported = 0;
     for (const candidate of scan.candidates) {
       if (!selected.has(candidate.key)) continue;
       const provider = providers.find((item) => item.id === candidate.providerId);
@@ -2087,7 +2332,10 @@ function registerIpc() {
       }
       if (usedKeys.has(candidate.apiKey)) continue;
       usedKeys.add(candidate.apiKey);
-      const windows = provider.requestConfig?.windows?.length ? provider.requestConfig.windows : ['five_hour', 'weekly', 'monthly', 'balance'];
+      // Kimi API Key 账号：usages 接口只有 5 小时 / 7 天窗口，不给月订阅留空窗口
+      const isKimiKey = candidate.providerId === 'kimi-subscription';
+      if (isKimiKey) kimiApiKeyImported += 1;
+      const windows = isKimiKey ? ['five_hour', 'weekly'] : (provider.requestConfig?.windows?.length ? provider.requestConfig.windows : ['five_hour', 'weekly', 'monthly', 'balance']);
       store.saveCredential(id, candidate.apiKey);
       importedIds.push(id);
       nextAccounts.push({
@@ -2106,7 +2354,8 @@ function registerIpc() {
     const saved = store.saveState(cleanState({ ...state, accounts: nextAccounts }));
     sendState(saved);
     if (importedIds.length) await pollState(importedIds).catch(() => {});
-    return { imported: importedIds.length, state: migrateState(store.loadState()) };
+    // kimiApiKeyImported：本次导入的 Kimi API Key 账号数，前端据此提示「无法获取月额度」
+    return { imported: importedIds.length, kimiApiKeyImported, state: migrateState(store.loadState()) };
   });
   ipcMain.handle('update:get-status', () => updateStatus);
   ipcMain.handle('update:check', () => checkForUpdates(true));
@@ -2174,6 +2423,7 @@ else {
     if (state?.settings?.widget !== false) createWidgetWindow();
     createTray();
     schedulePolling();
+    await startRemoteView();
     setupAutoUpdater();
     if (state?.settings?.autoUpdate !== false) checkForUpdates();
     scheduleUpdateChecks();
@@ -2184,6 +2434,7 @@ else {
 
 app.on('before-quit', () => {
   quitting = true;
+  remoteViewServer?.close();
   if (pollTimer) clearInterval(pollTimer);
   if (updateCheckTimer) clearInterval(updateCheckTimer);
   cliUsage?.dispose();
