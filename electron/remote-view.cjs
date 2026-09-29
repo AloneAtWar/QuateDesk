@@ -10,6 +10,14 @@ const HISTORY_FIELDS = ['remaining', 'amount', 'limit', 'unit', 'resetAt'];
 const CONTENT_TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp' };
 // 本机预览：仅当请求来自电脑本机回环地址时允许免配对码换只读令牌
 const isLoopbackRequest = (request) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(String(request.socket?.remoteAddress || ''));
+// Host 白名单:DNS rebinding 会把外部域名解析到本机,浏览器视其为同源,仅靠 socket 地址拦不住。
+// Host 不是本机地址的 API 请求必须携带有效令牌(经内网穿透/自定义域名访问的已配对设备靠令牌放行)
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
+const normalizeHost = (host) => {
+  const value = String(host || '').trim().toLowerCase();
+  const bracket = /^\[(.+)\](?::\d+)?$/.exec(value);
+  return bracket ? `[${bracket[1]}]` : value.replace(/:\d+$/, '');
+};
 
 const pick = (source, fields) => Object.fromEntries(fields.filter((field) => source?.[field] !== undefined).map((field) => [field, source[field]]));
 const safeText = (value, max = 120) => String(value ?? '').slice(0, max);
@@ -196,7 +204,8 @@ function handleCliUsage({ pathname, url, request, response, cliUsage }) {
   return json(response, 404, { error: 'not_found' });
 }
 
-function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, pairLocalPreview, getHistory, getCycles, getUsage, cliUsage, port = REMOTE_PORT }) {
+function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, pairLocalPreview, getHistory, getCycles, getUsage, cliUsage, port = REMOTE_PORT, allowedHosts = [] }) {
+  const hostAllowlist = new Set([...LOOPBACK_HOSTS, ...[].concat(allowedHosts)].map(normalizeHost));
   const server = http.createServer((request, response) => {
     setHeaders(response);
     if (!['GET', 'HEAD', 'PATCH', 'POST'].includes(request.method)) return json(response, 405, { error: 'method_not_supported' });
@@ -213,9 +222,10 @@ function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, pa
         if (!/^application\/json(?:;|$)/i.test(String(request.headers['content-type'] || ''))) return json(response, 415, { error: 'json_required' });
         readJsonBody(request, 4096).then((body) => {
           try {
-            // 本机预览:电脑自己在 127.0.0.1 打开远程页,不需要配对码与设备信息
+            // 本机预览:电脑自己在 127.0.0.1 打开远程页,不需要配对码与设备信息;
+            // Host 也必须是回环地址,防止外部域名经 DNS rebinding 冒充本机换取预览令牌
             if (body?.localPreview === true) {
-              if (!isLoopbackRequest(request) || typeof pairLocalPreview !== 'function') return json(response, 403, { error: 'local_preview_unavailable' });
+              if (!isLoopbackRequest(request) || !LOOPBACK_HOSTS.has(normalizeHost(request.headers.host)) || typeof pairLocalPreview !== 'function') return json(response, 403, { error: 'local_preview_unavailable' });
               return json(response, 200, pairLocalPreview());
             }
             return json(response, 200, pairDevice(body));
@@ -228,7 +238,9 @@ function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, pa
         return;
       }
       const providedToken = /^Bearer (\S+)$/.exec(String(request.headers.authorization || ''))?.[1] || '';
-      if (typeof authorizeToken !== 'function' || !authorizeToken(providedToken)) return json(response, 401, { error: 'unauthorized' });
+      const tokenAuthorized = typeof authorizeToken === 'function' && authorizeToken(providedToken, { loopback: isLoopbackRequest(request) });
+      if (!hostAllowlist.has(normalizeHost(request.headers.host)) && !tokenAuthorized) return json(response, 421, { error: 'host_not_allowed' });
+      if (!tokenAuthorized) return json(response, 401, { error: 'unauthorized' });
       if (request.method === 'POST' && pathname !== '/api/cli-usage/scan') return json(response, 405, { error: 'method_not_supported' });
       if (request.method === 'PATCH') {
         return pathname === '/api/settings'

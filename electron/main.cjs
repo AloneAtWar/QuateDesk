@@ -147,6 +147,14 @@ const remoteLanUrls = (port) => {
   const priority = (address) => address.startsWith('192.168.') ? 0 : address.startsWith('10.') ? 1 : 2;
   return unique.sort((a, b) => priority(a) - priority(b)).map((address) => `http://${address}:${port}/remote.html`);
 };
+// 远程服务 Host 白名单:本机全部网卡地址 + 回环。非白名单 Host 的 API 请求必须携带有效令牌
+const remoteHostAllowlist = () => {
+  const names = new Set(['127.0.0.1', 'localhost', '[::1]']);
+  for (const entries of Object.values(os.networkInterfaces())) {
+    for (const entry of entries || []) names.add(entry.family === 'IPv6' ? `[${entry.address}]` : entry.address);
+  }
+  return [...names];
+};
 async function startRemoteView() {
   if (remoteViewServer) return;
   const config = store.loadRemoteAccess();
@@ -161,9 +169,10 @@ async function startRemoteView() {
       store,
       distDir: path.join(__dirname, '..', 'dist'),
       port: config.port,
-      authorizeToken: (token) => store.isRemoteTokenAuthorized(token),
+      authorizeToken: (token, { loopback } = {}) => store.isRemoteTokenAuthorized(token, { loopback }),
       pairDevice: (request) => store.pairRemoteDevice(request),
       pairLocalPreview: () => store.pairLocalPreview(),
+      allowedHosts: remoteHostAllowlist(),
       getHistory: (accountId) => {
         const points = store.loadHistory()[accountId] || [];
         const days = historyRetentionDays();

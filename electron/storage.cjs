@@ -6,6 +6,9 @@ const { appendHistoryPoint, pruneHistory } = require('./history.cjs');
 const { extractCycles, mergeCycles, purgeGhostCycles } = require('./waste.cjs');
 const { REMOTE_PORT } = require('./remote-view.cjs');
 
+// 本机预览允许同时存活的会话令牌数:多个预览标签页并存,超出后最旧的先失效
+const LOCAL_PREVIEW_TOKEN_LIMIT = 3;
+
 const readJson = (filePath, fallback) => {
   try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); }
   catch { return fallback; }
@@ -27,6 +30,7 @@ class DesktopStore {
     this.cyclesPath = path.join(root, 'cycles.json');
     this.remoteAccessPath = path.join(root, 'remote-access.json');
     this.windowStatePath = path.join(root, 'window-state.json');
+    this.localPreviewTokenHashes = [];
   }
 
   // 主窗口尺寸/位置记忆：与 state.json 分开存放，避免渲染进程整体保存 state 时把它冲掉
@@ -64,7 +68,8 @@ class DesktopStore {
     return {
       enabled: Boolean(saved.enabled),
       pairingKey: decrypt(saved.pairingKey),
-      devices: Array.isArray(saved.devices) ? saved.devices.filter((device) => device && typeof device.id === 'string' && /^[\w-]{1,128}$/.test(device.id) && /^[a-f\d]{64}$/i.test(device.tokenHash || '')).map((device) => ({
+      // 旧版本会把「本机预览」写进设备列表,读入时直接丢弃,不进配对设备
+      devices: Array.isArray(saved.devices) ? saved.devices.filter((device) => device && device.id !== 'local-preview' && typeof device.id === 'string' && /^[\w-]{1,128}$/.test(device.id) && /^[a-f\d]{64}$/i.test(device.tokenHash || '')).map((device) => ({
         id: device.id,
         name: String(device.name || '未命名设备').replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 60) || '未命名设备',
         tokenHash: device.tokenHash.toLowerCase(),
@@ -92,12 +97,13 @@ class DesktopStore {
     });
   }
 
-  isRemoteTokenAuthorized(token) {
-    const config = this.loadRemoteAccess();
+  // 设备令牌全局有效;本机预览令牌只存哈希于进程内存,且仅回环连接可用
+  isRemoteTokenAuthorized(token, { loopback = false } = {}) {
     const digest = crypto.createHash('sha256').update(String(token || '')).digest('hex');
-    return config.devices.some((device) => {
+    const hashes = [...this.loadRemoteAccess().devices.map((device) => device.tokenHash), ...(loopback ? this.localPreviewTokenHashes : [])];
+    return hashes.some((hash) => {
       const left = Buffer.from(digest, 'hex');
-      const right = Buffer.from(device.tokenHash, 'hex');
+      const right = Buffer.from(hash, 'hex');
       return left.length === right.length && crypto.timingSafeEqual(left, right);
     });
   }
@@ -117,14 +123,13 @@ class DesktopStore {
     return { token, deviceId: device.id, deviceName: device.name };
   }
 
-  // 本机预览专用设备:同一台电脑经 127.0.0.1 打开远程页时免配对码换取只读令牌。
-  // 每次预览轮换令牌,设备列表里始终只有一条「本机预览」。
+  // 本机预览:同一台电脑经 127.0.0.1 打开远程页时免配对码换取只读令牌。
+  // 令牌哈希只存进程内存,不落盘、不占用配对设备列表;保留最近几张,多个预览标签页不会互相顶掉
   pairLocalPreview() {
-    const config = this.loadRemoteAccess();
     const token = crypto.randomBytes(32).toString('base64url');
-    const device = { id: 'local-preview', name: '本机预览', tokenHash: crypto.createHash('sha256').update(token).digest('hex'), pairedAt: new Date().toISOString() };
-    this.saveRemoteAccess({ ...config, devices: [...config.devices.filter((item) => item.id !== 'local-preview'), device] });
-    return { token, deviceId: device.id, deviceName: device.name };
+    this.localPreviewTokenHashes.push(crypto.createHash('sha256').update(token).digest('hex'));
+    if (this.localPreviewTokenHashes.length > LOCAL_PREVIEW_TOKEN_LIMIT) this.localPreviewTokenHashes.splice(0, this.localPreviewTokenHashes.length - LOCAL_PREVIEW_TOKEN_LIMIT);
+    return { token, deviceId: 'local-preview', deviceName: '本机预览' };
   }
 
   removeRemoteDevice(id) {
