@@ -49,6 +49,9 @@ contextBridge.exposeInMainWorld('quotaDesk', {
   togglePin: () => ipcRenderer.invoke('window:toggle-pin'),
   getPin: () => ipcRenderer.invoke('window:get-pin'),
   closeMainWindow: () => ipcRenderer.invoke('window:close-main'),
+  resetWindowSize: () => ipcRenderer.invoke('window:reset-size'),
+  toggleMaximize: () => ipcRenderer.invoke('window:toggle-maximize'),
+  getMaximized: () => ipcRenderer.invoke('window:get-maximized'),
   moveWidget: (deltaX, deltaY) => ipcRenderer.send('widget:move', { deltaX, deltaY }),
   getVersion: () => ipcRenderer.invoke('app:get-version'),
   getAutoLaunch: () => ipcRenderer.invoke('app:get-auto-launch'),
@@ -66,5 +69,10 @@ contextBridge.exposeInMainWorld('quotaDesk', {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on('state:updated', listener);
     return () => ipcRenderer.removeListener('state:updated', listener);
+  },
+  onMaximizedChange: (callback) => {
+    const listener = (_event, maximized) => callback(maximized);
+    ipcRenderer.on('window:maximized', listener);
+    return () => ipcRenderer.removeListener('window:maximized', listener);
   },
 });

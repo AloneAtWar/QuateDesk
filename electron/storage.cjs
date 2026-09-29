@@ -26,7 +26,12 @@ class DesktopStore {
     this.historyPath = path.join(root, 'history.json');
     this.cyclesPath = path.join(root, 'cycles.json');
     this.remoteAccessPath = path.join(root, 'remote-access.json');
+    this.windowStatePath = path.join(root, 'window-state.json');
   }
+
+  // 主窗口尺寸/位置记忆：与 state.json 分开存放，避免渲染进程整体保存 state 时把它冲掉
+  loadMainWindowState() { return readJson(this.windowStatePath, null); }
+  saveMainWindowState(bounds) { writeJson(this.windowStatePath, bounds); return bounds; }
 
   loadState() { return readJson(this.statePath, null); }
   saveState(state) { writeJson(this.statePath, state); return state; }

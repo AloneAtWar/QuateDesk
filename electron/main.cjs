@@ -41,7 +41,10 @@ const {
 } = require('./provider-usage.cjs');
 
 app.setName('Quota Desk');
-app.setAppUserModelId('com.quotadesk.app');
+// 开发模式用独立 AUMID：Electron 首次弹通知时会按当前 exe 自建开始菜单快捷方式，
+// dev 下建出来的是指向 electron.exe 的「Electron.lnk」，与正式版同 ID 会抢占任务栏
+// 分组，导致打包版在任务栏显示成 Electron 默认原子图标。
+app.setAppUserModelId(process.defaultApp ? 'com.quotadesk.dev' : 'com.quotadesk.app');
 app.setPath('userData', path.join(app.getPath('appData'), 'Quota Desk'));
 
 // 启动诊断日志:排障用,记录启动路径上的关键节点与渲染进程错误。
@@ -95,6 +98,8 @@ const ZAI_USAGE_TIMEZONE_OFFSET_SEC = 8 * 60 * 60;
 // Windows 显示缩放非 100% 时，反复 setPosition 会因 DIP/物理像素换算误差把窗口
 // 越拖越大，所以拖动时也必须用固定宽高走 setBounds。
 const WIDGET_BASE_SIZE = { width: 350, height: 52 };
+// 主窗口默认尺寸，同时也是允许的最小尺寸：界面按 520×470 设计，更小会挤压布局
+const MAIN_WINDOW_MIN = { width: 520, height: 470 };
 const clampWidgetScale = (value) => {
   const scale = Math.round(Number(value) * 20) / 20;
   return Number.isFinite(scale) ? Math.min(3, Math.max(0.8, scale)) : 1;
@@ -1297,7 +1302,7 @@ const notifyWaste = (state, account, provider) => {
     // 点击通知呼起主窗口。Windows Toast 的点击激活依赖开始菜单快捷方式上登记的
     // AppUserModelID（NSIS 安装自带；便携版/开发模式没有该快捷方式，点击不响应属系统限制）
     const notification = new Notification({ title: rule.label || '额度即将刷新', body: `${provider.name} · ${account.name} · ${Math.round(item.remaining)}% · ${Math.ceil(remainingMs / 60_000)} 分钟后刷新。` });
-    notification.on('click', () => { mainWindow?.show(); mainWindow?.focus(); });
+    notification.on('click', () => showMainWindow());
     notification.show();
   }
 };
@@ -1426,20 +1431,57 @@ function schedulePolling() {
   }, minutes * 60_000);
 }
 
+// 上次会话的主窗口尺寸/位置与最大化状态：显示器已拔掉（窗口落在屏幕外）时视为无效
+const savedMainWindowState = () => {
+  const saved = store?.loadMainWindowState?.();
+  if (!saved) return null;
+  const raw = saved.bounds && typeof saved.bounds === 'object' ? saved.bounds : saved; // 兼容只存过 bounds 的旧格式
+  const x = Math.round(Number(raw.x));
+  const y = Math.round(Number(raw.y));
+  const width = Math.round(Number(raw.width));
+  const height = Math.round(Number(raw.height));
+  if (![x, y, width, height].every(Number.isFinite) || width < MAIN_WINDOW_MIN.width || height < MAIN_WINDOW_MIN.height) return null;
+  const reachable = screen.getAllDisplays().some((display) => {
+    const area = display.workArea;
+    return x < area.x + area.width - 60 && x + width > area.x + 60 && y < area.y + area.height - 30 && y + height > area.y + 30;
+  });
+  return reachable ? { bounds: { x, y, width, height }, maximized: saved.maximized === true } : null;
+};
+
+// 用户拖拽边缘/移动/最大化后记住窗口状态，下次启动恢复；getNormalBounds 在最大化时也返回普通尺寸
+let saveMainWindowBoundsTimer = null;
+const persistMainWindowBounds = () => {
+  if (saveMainWindowBoundsTimer) clearTimeout(saveMainWindowBoundsTimer);
+  saveMainWindowBoundsTimer = setTimeout(() => {
+    saveMainWindowBoundsTimer = null;
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    try { store.saveMainWindowState({ bounds: mainWindow.getNormalBounds(), maximized: mainWindow.isMaximized() }); } catch { /* 磁盘异常时放弃本次记忆 */ }
+  }, 600);
+};
+
+// 从托盘/二次启动唤起窗口：最小化状态下要先还原再显示
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
 function createMainWindow() {
   const area = screen.getPrimaryDisplay().workArea;
-  const width = 520;
-  const height = 470;
+  const saved = savedMainWindowState();
+  const width = saved?.bounds.width ?? MAIN_WINDOW_MIN.width;
+  const height = saved?.bounds.height ?? MAIN_WINDOW_MIN.height;
   mainWindow = new BrowserWindow({
-    width, height, minWidth: width, minHeight: height, maxWidth: width, maxHeight: height,
-    resizable: false, maximizable: false, minimizable: false, movable: true, show: false,
+    width, height, minWidth: MAIN_WINDOW_MIN.width, minHeight: MAIN_WINDOW_MIN.height,
+    resizable: true, maximizable: true, minimizable: true, movable: true, show: false,
     frame: false,
-    x: area.x + area.width - width,
-    y: area.y + area.height - height,
-    skipTaskbar: true,
+    x: saved?.bounds.x ?? area.x + area.width - width,
+    y: saved?.bounds.y ?? area.y + area.height - height,
     backgroundColor: themeColors(savedTheme()).main, title: 'Quota Desk', icon: loadAppIcon(), autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: preloadPath },
   });
+  if (saved?.maximized) mainWindow.maximize();
   mainWindow.loadFile(distPath, process.argv.includes('--onboard') ? { query: { onboard: '1' } } : undefined)
     .catch((error) => startupLog('loadFile 失败', String(error)));
   // Windows 上只有一个真正生效的置顶层,主窗口置顶后与浮窗同层、激活即会盖到浮窗上;
@@ -1489,6 +1531,15 @@ function createMainWindow() {
   });
   mainWindow.on('close', (event) => { if (!quitting) { event.preventDefault(); mainWindow.hide(); } });
   mainWindow.on('closed', () => { mainWindow = null; });
+  // 窗口尺寸/位置变化 → 记住窗口状态（内容布局由渲染层响应式适配，标题栏大小恒定）
+  mainWindow.on('resize', persistMainWindowBounds);
+  mainWindow.on('move', persistMainWindowBounds);
+  // 最大化状态同步给标题栏按钮（双击标题栏/Aero 吸附等系统途径变化也要刷新图标）
+  const sendMaximizedState = () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:maximized', mainWindow.isMaximized());
+  };
+  mainWindow.on('maximize', () => { sendMaximizedState(); persistMainWindowBounds(); });
+  mainWindow.on('unmaximize', () => { sendMaximizedState(); persistMainWindowBounds(); });
 }
 
 // Electron 43 回归：alwaysOnTop 构造参数与默认 'floating' 级别的 setAlwaysOnTop(true)
@@ -1571,7 +1622,7 @@ function loadAppIcon() {
 function buildTrayMenu() {
   const autoUpdate = store?.loadState()?.settings?.autoUpdate !== false;
   return Menu.buildFromTemplate([
-    { label: '打开 Quota Desk', click: () => { mainWindow?.show(); mainWindow?.focus(); } },
+    { label: '打开 Quota Desk', click: () => showMainWindow() },
     { label: '立即刷新额度', click: () => pollState().catch(() => {}) },
     { label: '显示 / 隐藏浮窗', click: () => setWidgetVisible(!widgetWindow?.isVisible()) },
     { type: 'separator' },
@@ -1591,7 +1642,7 @@ function createTray() {
   tray = new Tray(createTrayIcon());
   tray.setToolTip('Quota Desk');
   refreshTray();
-  tray.on('double-click', () => { mainWindow?.show(); mainWindow?.focus(); });
+  tray.on('double-click', () => showMainWindow());
 }
 
 const windowSummaryLabels = { five_hour: '5小时', daily: '1天', weekly: '7天', monthly: '1个月', balance: '余额' };
@@ -1873,11 +1924,30 @@ function registerIpc() {
   });
   ipcMain.handle('widget:set-visible', (_event, visible) => setWidgetVisible(Boolean(visible)));
   ipcMain.handle('widget:get-visible', () => Boolean(widgetWindow?.isVisible()));
-  ipcMain.handle('window:open-main', () => { mainWindow?.show(); mainWindow?.focus(); return true; });
+  ipcMain.handle('window:open-main', () => { showMainWindow(); return true; });
   // Electron 43 默认级别的 setAlwaysOnTop 不生效，置顶/取消固定都要显式传级别（见 ensureWidgetOnTop 注释）
   ipcMain.handle('window:toggle-pin', () => { if (!mainWindow) return false; const next = !mainWindow.isAlwaysOnTop(); mainWindow.setAlwaysOnTop(next, 'screen-saver'); if (next) ensureWidgetOnTop(); return next; });
   ipcMain.handle('window:get-pin', () => Boolean(mainWindow?.isAlwaysOnTop()));
   ipcMain.handle('window:close-main', () => { mainWindow?.hide(); return true; });
+  ipcMain.handle('window:toggle-maximize', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return false;
+    if (mainWindow.isMaximized()) mainWindow.unmaximize(); else mainWindow.maximize();
+    return mainWindow.isMaximized();
+  });
+  ipcMain.handle('window:get-maximized', () => Boolean(mainWindow?.isMaximized()));
+  // 恢复默认窗口大小：退出最大化后回到 520×470 并锚回工作区右下角（与首次启动一致）
+  ipcMain.handle('window:reset-size', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return false;
+    if (mainWindow.isMaximized()) mainWindow.unmaximize();
+    const area = screen.getPrimaryDisplay().workArea;
+    mainWindow.setBounds({
+      x: area.x + area.width - MAIN_WINDOW_MIN.width,
+      y: area.y + area.height - MAIN_WINDOW_MIN.height,
+      width: MAIN_WINDOW_MIN.width,
+      height: MAIN_WINDOW_MIN.height,
+    });
+    return true;
+  });
   ipcMain.handle('app:get-version', () => app.getVersion());
   ipcMain.handle('app:get-auto-launch', () => getAutoLaunch());
   ipcMain.handle('app:set-auto-launch', (_event, enabled) => { const result = setAutoLaunch(enabled); refreshTray(); return result; });
@@ -2459,8 +2529,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', async () => {
     startupLog('second-instance: 唤醒已有实例窗口');
     if (!mainWindow) return;
-    mainWindow.show();
-    mainWindow.focus();
+    showMainWindow();
     try {
       // 空白判定:root 无子节点,或整页没有可渲染文本(有 DOM 但没画出来),都强制 reload
       const probe = await mainWindow.webContents.executeJavaScript('`${document.getElementById("root")?.childElementCount || 0}:${(document.body?.innerText || "").trim().length}`');
@@ -2491,7 +2560,7 @@ if (!app.requestSingleInstanceLock()) {
     scheduleUpdateChecks();
     startupLog('ready: 启动流程完成');
     pollState().catch((error) => console.error('[Quota Desk] initial poll failed', error.message));
-    app.on('activate', () => mainWindow?.show());
+    app.on('activate', () => showMainWindow());
   });
 }
 

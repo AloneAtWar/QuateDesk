@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import {
-  AlertCircle, ArrowLeft, Bell, BellOff, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronLeft, ChevronRight, CircleGauge, CircleStop, Clock3, Database, Download, Eye, ExternalLink, Globe, HelpCircle, History, LayoutGrid,
+  AppWindow, AlertCircle, ArrowLeft, Bell, BellOff, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronLeft, ChevronRight, CircleGauge, CircleStop, Clock3, Copy, Database, Download, Eye, ExternalLink, Globe, HelpCircle, History, LayoutGrid,
   Ellipsis, Flame, KeyRound, Monitor, Play, Plus, Power, RefreshCw, Rows3, Settings2, ShieldCheck, SlidersHorizontal, Square, Bot,
   Pencil, Pin, QrCode, Sparkles, SunMoon, Tag, Trash2, TrendingUp, Trophy, UploadCloud, X, Zap,
 } from 'lucide-react';
@@ -625,9 +625,33 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
   const [hoverGap, setHoverGap] = useState(null);
   // 自定义窗口：滚轮 / 平移后不再属于任一预设时使用；选中预设时忽略此值
   const [view, setView] = useState(null);
+  const chartRootRef = useRef(null);
   const svgRef = useRef(null);
   const dragRef = useRef(null);
-  const W = 470; const H = 184;
+  // 图表同时跟随容器宽、高：小窗保持原来的 470×184 基线，宽屏历史页会获得更高的绘图区，
+  // 避免最大化后只把一条很扁的折线横向拉长。
+  const [chartSize, setChartSize] = useState({ width: 470, height: 184 });
+  useEffect(() => {
+    const root = chartRootRef.current;
+    const el = svgRef.current;
+    if (!root || !el || typeof ResizeObserver === 'undefined') return undefined;
+    const measure = () => {
+      const width = Math.round(el.getBoundingClientRect().width);
+      // 详情条、操作提示和内边距大约占 58px；只有父布局确实分配了额外高度时才放大绘图区。
+      const availableHeight = root.clientHeight > 300 ? root.clientHeight - 58 : 184;
+      const height = Math.min(1400, Math.max(184, Math.round(availableHeight)));
+      if (!Number.isFinite(width) || width < 300) return;
+      setChartSize((old) => {
+        const next = { width: Math.min(4000, width), height };
+        return old.width === next.width && old.height === next.height ? old : next;
+      });
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(root);
+    measure();
+    return () => observer.disconnect();
+  }, []);
+  const W = chartSize.width; const H = chartSize.height;
   const PAD = { l: 36, r: 12, t: 14, b: 24 };
   const innerW = W - PAD.l - PAD.r;
   const innerH = H - PAD.t - PAD.b;
@@ -680,7 +704,7 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  }, [fullStart, fullEnd, samples.length, shown?.start, shown?.end]);
+  }, [fullStart, fullEnd, samples.length, shown?.start, shown?.end, W]);
   // 图例开关：隐藏的线不参与绘制；兜底不允许全部隐藏
   const seriesKeys = allKeys.filter((key) => !hiddenKeys.includes(key));
   const visibleKeys = seriesKeys.length ? seriesKeys : allKeys;
@@ -767,7 +791,7 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
     setView(presetView(preset.ms, fullStart, fullEnd));
     onRangeKeyChange?.(preset.id);
   };
-  return <div className={`usage-chart ${shown ? 'zoomed' : ''}`}>
+  return <div ref={chartRootRef} className={`usage-chart ${shown ? 'zoomed' : ''}`}>
     <div className="chart-detail">
       <div className="chart-detail-main">{hoverPoint ? <>
         <b>{formatChartStamp(hoverPoint.at)}</b>
@@ -1006,17 +1030,24 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
   const heatmapWrapRef = useRef(null);
   const [cellPx, setCellPx] = useState(8);
   const [cellH, setCellH] = useState(8);
+  const [cellGap, setCellGap] = useState(2);
   useEffect(() => {
     const el = heatmapWrapRef.current;
     if (!el) return undefined;
     const measure = () => {
-      // 可用宽度 = 容器 clientWidth − 自身左右 padding(4×2) − 星期列(10) − 星期列与网格的列间距(7)
-      const avail = el.clientWidth - 8 - 10 - 7;
-      const w = Math.min(12, Math.max(5, Math.floor(avail / weekCount)));
-      // 可用高度 = clientHeight − 上下 padding(5×2) − 边框(2) − 月份行(10) − 行距(3)
-      const h = Math.min(Math.round(w * 1.75), Math.max(w, Math.floor((el.clientHeight - 10 - 2 - 10 - 3) / 7)));
+      // 可用宽度 = 容器 clientWidth − 自身左右 padding(4×2) − 星期列(实际宽度,宽屏会加宽) − 列间距(7)
+      const weekdayCol = el.querySelector('.provider-heatmap-weekdays')?.offsetWidth ?? 10;
+      const avail = el.clientWidth - 8 - weekdayCol - 7;
+      // 宽屏铺满：格子随容器放宽（封顶 44px），并按格子大小留 2-3px 间距，避免大格连成一片
+      const rough = Math.floor(avail / weekCount);
+      const gap = rough >= 18 ? 3 : rough >= 10 ? 2 : 0;
+      const w = Math.min(44, Math.max(5, Math.floor((avail - (weekCount - 1) * gap) / weekCount)));
+      // 行高吃满外框剩余高度(外框 flex:1 占满视图余量,高度不随格子变化,无反馈环);
+      // 双重封顶:绝对 96px + 宽度 2.5 倍,防止矮宽/巨高窗口下格子被拉成竖条
+      const h = Math.min(96, Math.round(w * 2.5), Math.max(w, Math.floor((el.clientHeight - 10 - 2 - 10 - 3 - 6 * gap) / 7)));
       setCellPx(w);
       setCellH(h);
+      setCellGap(gap);
     };
     measure();
     if (typeof ResizeObserver === 'undefined') return undefined;
@@ -1215,9 +1246,9 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
       </div>
     </div>
     <div className="provider-heatmap-scroll" role="grid" tabIndex={0} aria-label="近 1 年每日用量热力图，方向键选择日期" ref={heatmapWrapRef} onKeyDown={handleHeatmapKey}>
-      <div className="provider-heatmap-board" ref={heatmapRef} style={{ '--hm-cell': `${cellPx}px`, '--hm-cell-h': `${cellH}px` }}>
+      <div className="provider-heatmap-board" ref={heatmapRef} style={{ '--hm-cell': `${cellPx}px`, '--hm-cell-h': `${cellH}px`, '--hm-gap': `${cellGap}px` }}>
         <span className="provider-heatmap-corner" aria-hidden="true" />
-        <div className="provider-heatmap-months" aria-hidden="true" style={{ width: `${weekCount * cellPx}px` }}>{monthMarkers.map((item) => <span key={item.key} style={{ left: `${(item.column - 1) * cellPx}px` }}>{item.label}</span>)}</div>
+        <div className="provider-heatmap-months" aria-hidden="true" style={{ width: `${weekCount * cellPx + (weekCount - 1) * cellGap}px` }}>{monthMarkers.map((item) => <span key={item.key} style={{ left: `${(item.column - 1) * (cellPx + cellGap)}px` }}>{item.label}</span>)}</div>
         <div className="provider-heatmap-weekdays" aria-hidden="true"><span>一</span><span /><span>三</span><span /><span>五</span><span /><span>日</span></div>
         <div className="provider-heatmap-grid" role="rowgroup" aria-label={`${copy.display} 每日${metric === 'cost' ? '花费' : 'Token'}热力图`}>
           {heatmapCells.map((day, index) => day
@@ -1711,6 +1742,7 @@ function SettingsDrawer({ variant = 'desktop', accounts, providers, settings, se
       <SharedSettingsPanel settings={settings} setSettings={setSettings} />
        <section className="drawer-section"><div className="drawer-section-title"><Globe size={16} /><span>远程查看</span></div><RemoteViewSettings /></section>
       <section className="drawer-section"><div className="drawer-section-title"><Monitor size={16} /><span>桌面浮窗</span><TitleHelp>长度只调整横向宽度（60%–150%）。浮窗会展示账号的全部额度窗口（含 1M）；空间不足时会逐级收起：标签先缩成小圆点再隐藏，倒计时按周期从长到短逐个隐藏，最后才收起最长周期的额度。只有一个额度窗口的账号通常不用收起任何内容；名称放不下时会显示省略号，悬停可查看完整内容。</TitleHelp></div><Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" description="固定在桌面顶层，双击展开主窗口" /><label className="size-slider"><span>大小</span><input type="range" min={80} max={300} step={5} value={Math.round(clampWidgetScale(settings.widgetScale) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetScale: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetScale(settings.widgetScale) * 100)}%</b></label><label className="size-slider"><span>长度</span><input type="range" min={Math.round(WIDGET_MIN_LENGTH * 100)} max={Math.round(WIDGET_MAX_LENGTH * 100)} step={5} value={Math.round(clampWidgetLength(settings.widgetLength) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetLength: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetLength(settings.widgetLength) * 100)}%</b></label><button type="button" className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetScale: 0.9, widgetLength: 0.9 }))}>恢复默认大小与长度</button><div className="widget-setting-preview"><div style={{ width: Math.round(WIDGET_BASE_SIZE.width * clampWidgetLength(settings.widgetLength)), maxWidth: '100%', margin: '0 auto' }}>{(() => { const previewAccount = accounts.find((item) => !item.disabled) ?? accounts[0]; return <WidgetRow account={previewAccount} provider={providers.find((item) => item.id === previewAccount?.providerId)} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} />; })()}</div></div><button className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetPreview: true }))}><Eye size={15} /> 预览并调整</button></section>
+       {window.quotaDesk?.resetWindowSize && <section className="drawer-section"><div className="drawer-section-title"><AppWindow size={16} /><span>主窗口</span></div><div className="setting-select"><span><b>窗口大小</b><small>拖动窗口边缘自由调整（最小 520 × 470），内容自动多列铺开；大小会被记住</small></span><button className="outline-button" onClick={() => window.quotaDesk.resetWindowSize()}>恢复默认大小</button></div></section>}
        <section className="drawer-section"><div className="drawer-section-title"><Database size={16} /><span>数据管理</span><TitleHelp><span>额度历史：每次成功刷新后记录一条；超过保留时长的记录会自动清理；选择“永久”时，超过 30 天的记录会自动降采样为每小时一条，删除账号也会一并删除该账号的历史。</span><br /><span>数据导入与导出：导出包含账号信息、账号凭据、自定义厂商、额度历史和周期档案；导入会合并数据并跳过重复账号与厂商。导出文件含敏感凭据，请妥善保管。</span></TitleHelp></div><div className="setting-select"><span><b>保留时长</b><small>每次成功刷新后记录一条，用于账号卡片的趋势图</small></span><select value={settings.historyDays} onChange={(event) => setSettings((old) => ({ ...old, historyDays: Number(event.target.value) }))}><option value={3}>3 天</option><option value={7}>7 天（默认）</option><option value={15}>15 天</option><option value={30}>30 天</option><option value={60}>60 天</option><option value={90}>3 个月（最长）</option><option value={0}>永久</option></select></div><button className="outline-button full" onClick={onClearHistory}><Trash2 size={14} /> 清除全部历史记录</button><div className="data-transfer-actions"><button type="button" className="outline-button" disabled={Boolean(dataBusy)} onClick={onExportData}><Download size={14} /> {dataBusy === 'export' ? '正在导出…' : '导出数据'}</button><button type="button" className="outline-button" disabled={Boolean(dataBusy)} onClick={onImportData}><UploadCloud size={14} /> {dataBusy === 'import' ? '正在导入…' : '导入数据'}</button></div></section>
        <section className="drawer-section"><div className="drawer-section-title"><ShieldCheck size={16} /><span>账号与凭据</span><button className="mini-add" onClick={() => openModal('account')}><Plus size={14} /> 添加账号</button></div><div className="settings-list">{accounts.length === 0 && <div className="settings-empty">还没有账号</div>}{accounts.map((account) => <AccountRow key={account.id} account={account} provider={providers.find((item) => item.id === account.providerId)} testing={testingAccountId === account.id} onEdit={(item) => openModal({ type: 'account-edit', account: item })} onTest={onTestAccount} onToggleDisabled={onToggleAccountDisabled} onDelete={onDeleteAccount} />)}</div>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button full drawer-import-button" onClick={() => openModal('import-ccswitch')}><Download size={14} /> 从 cc-switch 导入账号</button>}</section>
       <section className="drawer-section"><div className="drawer-section-title"><LayoutGrid size={16} /><span>厂商适配器</span><button className="mini-add" onClick={() => openModal('provider')}><Plus size={14} /> 新增厂商</button></div><div className="settings-list providers-list">{providers.map((provider) => <div className="settings-account" key={provider.id}><Logo provider={provider} size="sm" /><div><b title={provider.name}>{provider.name}</b><small>{provider.requestConfig?.adapterMode === 'script' ? '脚本适配' : ['grok', 'grokbot'].includes(provider.requestConfig?.adapterMode) ? '专属适配' : '标准映射'}</small></div><button className="row-icon-button" title="编辑厂商" aria-label={`编辑 ${provider.name}`} onClick={() => onEditProvider(provider)}><Pencil size={13} /></button><span className="adapter-state"><Check size={13} /></span></div>)}</div></section>
@@ -3320,6 +3352,13 @@ function App() {
   const bridge = window.quotaDesk;
   const [pinned, setPinned] = useState(false);
   useEffect(() => { if (bridge?.getPin) bridge.getPin().then(setPinned).catch(() => {}); }, [bridge]);
+  // 最大化状态：按钮点击/双击标题栏/Aero 吸附都会在主进程侧变化，以广播为准同步图标
+  const [maximized, setMaximized] = useState(false);
+  useEffect(() => {
+    if (!bridge?.getMaximized) return undefined;
+    bridge.getMaximized().then((value) => setMaximized(Boolean(value))).catch(() => {});
+    return bridge.onMaximizedChange?.((value) => setMaximized(Boolean(value)));
+  }, [bridge]);
   const [update, setUpdate] = useState(null);
   const [updateOpen, setUpdateOpen] = useState(false);
   const [autoLaunch, setAutoLaunch] = useState(false);
@@ -3681,7 +3720,7 @@ function App() {
   </>;
   const appShellActions = <>
     <button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={13} /></button>
-    {bridge && <><button className={pinned ? 'active' : ''} title={pinned ? '取消固定' : '固定在桌面最前面'} aria-label="固定在桌面最前面" onClick={async () => setPinned(await bridge.togglePin())}><Pin size={13} /></button><button title="关闭到托盘" aria-label="关闭到托盘" onClick={() => bridge.closeMainWindow()}><X size={14} /></button></>}
+    {bridge && <><button className={pinned ? 'active' : ''} title={pinned ? '取消固定' : '固定在桌面最前面'} aria-label="固定在桌面最前面" onClick={async () => setPinned(await bridge.togglePin())}><Pin size={13} /></button><button title={maximized ? '还原' : '最大化'} aria-label={maximized ? '还原' : '最大化'} onClick={async () => setMaximized(Boolean(await bridge.toggleMaximize()))}>{maximized ? <Copy size={12} /> : <Square size={11} />}</button><button title="关闭到托盘" aria-label="关闭到托盘" onClick={() => bridge.closeMainWindow()}><X size={14} /></button></>}
   </>;
 
   return <AppShell controls={appShellControls} actions={appShellActions}>

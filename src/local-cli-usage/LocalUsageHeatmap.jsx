@@ -19,6 +19,7 @@ export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate,
   const wrapRef = useRef(null);
   const [cellPx, setCellPx] = useState(8);
   const [cellH, setCellH] = useState(8);
+  const [cellGap, setCellGap] = useState(2);
 
   // 近 1 年整幅铺满:列宽由容器宽度决定,行高吃满纵向空间(与官方用量页同口径)
   const weekCount = useMemo(() => {
@@ -32,11 +33,19 @@ export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate,
     const el = wrapRef.current;
     if (!el) return undefined;
     const measure = () => {
-      const avail = el.clientWidth - 8 - 10 - 7;
-      const w = Math.min(12, Math.max(5, Math.floor(avail / weekCount)));
-      const h = Math.min(Math.round(w * 1.75), Math.max(w, Math.floor((el.clientHeight - 10 - 2 - 10 - 3) / 7)));
+      // 星期列宽度随断点变化，从 DOM 读实际值
+      const weekdayCol = el.querySelector('.provider-heatmap-weekdays')?.offsetWidth ?? 10;
+      const avail = el.clientWidth - 8 - weekdayCol - 7;
+      // 宽屏铺满：格子随容器放宽（封顶 44px），并按格子大小留 2-3px 间距，避免大格连成一片
+      const rough = Math.floor(avail / weekCount);
+      const gap = rough >= 18 ? 3 : rough >= 10 ? 2 : 0;
+      const w = Math.min(44, Math.max(5, Math.floor((avail - (weekCount - 1) * gap) / weekCount)));
+      // 行高吃满外框剩余高度(外框 flex:1 占满视图余量,高度不随格子变化,无反馈环);
+      // 双重封顶:绝对 96px + 宽度 2.5 倍,防止矮宽/巨高窗口下格子被拉成竖条
+      const h = Math.min(96, Math.round(w * 2.5), Math.max(w, Math.floor((el.clientHeight - 10 - 2 - 10 - 3 - 6 * gap) / 7)));
       setCellPx(w);
       setCellH(h);
+      setCellGap(gap);
     };
     measure();
     if (typeof ResizeObserver === 'undefined') return undefined;
@@ -109,9 +118,9 @@ export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate,
       </div>
     </div>
     <div className="provider-heatmap-scroll local-cli-heatmap-scroll" role="grid" tabIndex={0} aria-label="近 1 年本机 CLI Token 热力图,方向键选择日期" ref={wrapRef} onKeyDown={handleKey}>
-      <div className="provider-heatmap-board" ref={heatmapRef} style={{ '--hm-cell': `${cellPx}px`, '--hm-cell-h': `${cellH}px` }}>
+      <div className="provider-heatmap-board" ref={heatmapRef} style={{ '--hm-cell': `${cellPx}px`, '--hm-cell-h': `${cellH}px`, '--hm-gap': `${cellGap}px` }}>
         <span className="provider-heatmap-corner" aria-hidden="true" />
-        <div className="provider-heatmap-months" aria-hidden="true" style={{ width: `${weekCount * cellPx}px` }}>{monthMarkers.map((item) => <span key={item.key} style={{ left: `${(item.column - 1) * cellPx}px` }}>{item.label}</span>)}</div>
+        <div className="provider-heatmap-months" aria-hidden="true" style={{ width: `${weekCount * cellPx + (weekCount - 1) * cellGap}px` }}>{monthMarkers.map((item) => <span key={item.key} style={{ left: `${(item.column - 1) * (cellPx + cellGap)}px` }}>{item.label}</span>)}</div>
         <div className="provider-heatmap-weekdays" aria-hidden="true"><span>一</span><span /><span>三</span><span /><span>五</span><span /><span>日</span></div>
         <div className="provider-heatmap-grid" role="rowgroup" aria-label="每日 Token 热力图">
           {cells.map((day, index) => day

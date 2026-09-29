@@ -26,7 +26,11 @@ html.remote-page, body.remote-page { width: 100%; min-width: 0; overflow-x: hidd
 .remote-view-title { margin-bottom: 9px; }
 .remote-view-title .health-summary { color: var(--muted); font-size: 10px; }
 .remote-main > .view-stack { gap: 16px; }
-.remote-main .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: start; }
+.remote-main .overview-grid { gap: 10px; align-items: flex-start; justify-content: flex-start; }
+/* 手机/小平板保持两列卡片；桌面宽度回落到 styles.css 的多列弹性卡片 */
+@media (max-width: 899px) {
+  .remote-main .overview-grid > .overview-card { flex: 1 1 calc(50% - 10px); max-width: none; }
+}
 .remote-main .overview-card { min-width: 0; }
 .remote-main .account-identity, .remote-main .account-copy, .remote-main .overview-body, .remote-main .overview-meters, .remote-main .overview-meter { min-width: 0; }
 .remote-main > .history-view { width: min(100%, 760px); margin: 0 auto; }
@@ -69,7 +73,8 @@ html.remote-page, body.remote-page { width: 100%; min-width: 0; overflow-x: hidd
   .remote-titlebar .control-solo, .remote-title-theme { width: 30px; height: 30px; }
   .remote-title-action { width: 30px; height: 30px; }
   .remote-main { min-height: calc(100dvh - 46px); padding: 7px 8px 18px; }
-  #remote-root .remote-main .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 7px; }
+  #remote-root .remote-main .overview-grid { gap: 7px; }
+  #remote-root .remote-main .overview-grid > .overview-card { flex: 1 1 calc(50% - 7px); }
   .remote-main .overview-card { height: 190px; padding: 6px; border-radius: 9px; }
   .remote-main .overview-head { gap: 4px; }
   .remote-main .account-identity { gap: 5px; }
@@ -106,7 +111,8 @@ html.remote-page, body.remote-page { width: 100%; min-width: 0; overflow-x: hidd
   .remote-titlebar .last-checked { display: none; }
   .remote-titlebar .titlebar-drag { min-width: 18px; flex: 0 0 18px; }
   .remote-titlebar .titlebar-drag b { display: none; }
-  #remote-root .remote-main .overview-grid { grid-template-columns: 1fr !important; gap: 8px; }
+  #remote-root .remote-main .overview-grid { gap: 8px; }
+  #remote-root .remote-main .overview-grid > .overview-card { flex-basis: 100%; }
   .remote-main .overview-card { height: 152px; padding: 9px; }
   .remote-main .overview-body { gap: 10px; }
   .remote-main .concentric-rings { width: 69px; height: 69px; }
