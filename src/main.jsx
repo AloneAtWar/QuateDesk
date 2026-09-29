@@ -1285,7 +1285,8 @@ function HistoryView({ account, provider, onBack, onProviderUsageState, settings
   // 用量统计入口常驻：未连接时页内直接引导登录，登录过期也能在原位置重新连接。
   const showProviderUsageEntry = providerUsageSupported(account, provider, { readOnly });
   const localAnalysis = useMemo(() => resolveProviderLocalAnalysis(provider), [provider]);
-  const showLocalUsageEntry = !readOnly && localAnalysis.enabled;
+  // 远程查看(只读)也展示本机页签:数据本身只读,远程页会传自己的本机用量会话设置
+  const showLocalUsageEntry = localAnalysis.enabled;
   const showWaste = view === 'waste' && wasteWindows.length > 0;
   const showProviderUsage = view === 'provider-usage' && showProviderUsageEntry;
   const showLocalUsage = view === 'local-usage' && showLocalUsageEntry;
@@ -1568,7 +1569,8 @@ function RemoteViewSettings() {
     finally { setBusy(''); }
   };
   const pairingLink = status?.running && activeLanUrl && status?.pairingKey ? `${activeLanUrl}#pair=${encodeURIComponent(status.pairingKey)}` : '';
-  const previewLink = status?.running && status?.localUrl && status?.pairingKey ? `${status.localUrl}#pair=${encodeURIComponent(status.pairingKey)}` : '';
+  // 本机预览走 127.0.0.1:远程页检测到回环会自动换取预览令牌,链接不再携带配对密钥
+  const previewLink = status?.running && status?.localUrl ? status.localUrl : '';
   const qrImage = useMemo(() => {
     if (!pairingLink) return '';
     try { const qr = qrcode(0, 'M'); qr.addData(pairingLink); qr.make(); return qr.createDataURL(4, 6); }
@@ -1606,7 +1608,7 @@ function RemoteViewSettings() {
       <small className="drawer-help">电脑需保持运行。跨网络访问由你使用的 VPN 或内网穿透提供。</small>
     </>}
     <div className="remote-mobile-download">手机可以通过 <a href="https://github.com/AloneAtWar/QuotaDesk-Android/releases/latest" onClick={(event) => { event.preventDefault(); bridge.openExternal(event.currentTarget.href); }}>此处</a> 下载 Android 安装包。</div>
-    {status && (pairingLink || hasPairedDevices) && <div className={`remote-setting-actions${pairingLink ? '' : ' single'}`}>
+    {status && (pairingLink || previewLink || hasPairedDevices) && <div className={`remote-setting-actions${pairingLink ? '' : ' single'}`}>
       <button type="button" className="primary-button remote-qr-button" onClick={() => setQrOpen(true)}><QrCode size={15} />配对信息</button>
       {pairingLink && <button type="button" className="outline-button remote-qr-button" disabled={!previewLink} onClick={() => bridge.openExternal(previewLink)}><Eye size={15} />预览</button>}
     </div>}

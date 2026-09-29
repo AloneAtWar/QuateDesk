@@ -163,6 +163,7 @@ async function startRemoteView() {
       port: config.port,
       authorizeToken: (token) => store.isRemoteTokenAuthorized(token),
       pairDevice: (request) => store.pairRemoteDevice(request),
+      pairLocalPreview: () => store.pairLocalPreview(),
       getHistory: (accountId) => {
         const points = store.loadHistory()[accountId] || [];
         const days = historyRetentionDays();
@@ -170,6 +171,7 @@ async function startRemoteView() {
       },
       getCycles: (accountId) => store.getCycles(accountId),
       getUsage: (accountId) => queryProviderUsage(accountId, { days: 365 }),
+      cliUsage,
     });
     remoteViewError = '';
   } catch (error) {

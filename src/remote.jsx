@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AlertCircle, ArrowUpRight, CircleGauge, Clock3, KeyRound, LockKeyhole, Moon, RefreshCw, Rows3, ShieldCheck, Sun, WifiOff } from 'lucide-react';
+import { AlertCircle, ArrowUpRight, ChartNoAxesCombined, CircleGauge, Clock3, KeyRound, LockKeyhole, Moon, RefreshCw, Rows3, ShieldCheck, Sun, WifiOff } from 'lucide-react';
 import { HistoryView, StatusView } from './main.jsx';
+import LocalCliUsageView from './local-cli-usage/LocalCliUsageView';
 import { AppShell } from './app-shell';
 import { initialAccounts, providerCatalog } from './data';
 import './styles.css';
@@ -16,6 +17,8 @@ const DEVICE_NAME_KEY = 'quota-desk-remote-device-name-v1';
 const THEME_KEY = 'quota-desk-remote-theme-v1';
 const MODE_KEY = 'quota-desk-remote-mode-v1';
 const SNAPSHOT_REFRESH_MS = 15_000;
+// 电脑本机打开远程页(设置 → 远程查看 → 预览):免配对码、免设备信息
+const IS_LOOPBACK = ['127.0.0.1', '::1', 'localhost'].includes(location.hostname);
 
 function defaultDeviceName() {
   const userAgent = navigator.userAgent || '';
@@ -116,6 +119,21 @@ const demoUsage = (account) => {
   };
 };
 
+// dev 演示态的本机用量桩:只够看布局,不发起请求
+const demoLocalCliSources = [
+  { agent: 'zcode', displayName: 'ZCode', colorToken: 'cyan', status: 'ok', records: 312 },
+  { agent: 'claude', displayName: 'Claude Code', colorToken: 'coral', status: 'ok', records: 96 },
+];
+const demoLocalCliSummary = () => {
+  const today = new Date();
+  const days = Array.from({ length: 300 }, (_, index) => {
+    const date = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - (299 - index))).toISOString().slice(0, 10);
+    const totalTokens = Math.random() > 0.15 ? Math.round((0.3 + Math.random() * 2.2) * 1_000_000) : 0;
+    return { date, totalTokens, sessions: totalTokens ? 1 + Math.floor(Math.random() * 6) : 0 };
+  });
+  return { days, summary: { totalTokens: days.reduce((sum, day) => sum + day.totalTokens, 0), peakTokens: Math.max(...days.map((day) => day.totalTokens)), currentStreakDays: 5, longestStreakDays: 42, activeDays: days.filter((day) => day.totalTokens > 0).length }, matchedModels: [], recordsByAgent: null };
+};
+
 function Pairing({ onConnect, pairingKey, message, theme, setTheme }) {
   const [input, setInput] = useState('');
   const [deviceName, setDeviceName] = useState(() => localStorage.getItem(DEVICE_NAME_KEY) || defaultDeviceName());
@@ -148,8 +166,34 @@ function App() {
   const [mode, setMode] = useState(() => localStorage.getItem(MODE_KEY) || 'rings');
   const [now, setNow] = useState(Date.now());
   const [theme, setTheme] = useState(() => localStorage.getItem(THEME_KEY) || 'dark');
+  // 本机用量在远程页是只读会话:设置不落库,仅本页生效(合并同名模型开关等)
+  const [localCliSettings, setLocalCliSettings] = useState({ localCliUsage: { enabled: true, mergeSameModels: true } });
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
+
+  // 回环访问(设置 → 远程查看 → 预览):直接换取本机预览令牌,跳过配对表单;
+  // 已存令牌失效(401)时也回到这里自动重换,而不是让本机用户填配对表单
+  const [previewConnecting, setPreviewConnecting] = useState(IS_LOOPBACK && !initialConnection.token && !initialConnection.pairingKey);
+  useEffect(() => {
+    if (!previewConnecting) return undefined;
+    let active = true;
+    fetch('/api/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', body: JSON.stringify({ localPreview: true }) })
+      .then(async (response) => {
+        const result = await response.json().catch(() => ({}));
+        if (!active) return;
+        if (!response.ok) throw new Error(result.message || '本机预览连接失败');
+        setLoading(true);
+        setToken(result.token);
+        setPreviewConnecting(false);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setPairError(error.message || '本机预览连接失败,请确认 Quota Desk 正在运行');
+        setPreviewConnecting(false);
+        setLoading(false);
+      });
+    return () => { active = false; };
+  }, [previewConnecting]);
 
   useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem(THEME_KEY, theme); }, [theme]);
   useEffect(() => { localStorage.setItem(MODE_KEY, mode); }, [mode]);
@@ -163,7 +207,13 @@ function App() {
         setSnapshot(data); setConnectionError(''); setPairError(''); setNow(Date.now());
       } catch (error) {
         if (!active) return;
-        if (error.unauthorized) { localStorage.removeItem(TOKEN_KEY); setToken(''); setSnapshot(null); setPairError(error.message); }
+        if (error.unauthorized) {
+          localStorage.removeItem(TOKEN_KEY);
+          setToken('');
+          setSnapshot(null);
+          if (IS_LOOPBACK) { setPreviewConnecting(true); return; }
+          setPairError(error.message);
+        }
         else setConnectionError('无法连接电脑，请确认 Quota Desk 已开启局域网访问，且设备能够访问二维码中的地址');
       } finally { if (active) setLoading(false); }
     };
@@ -182,21 +232,46 @@ function App() {
   }, [token]);
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 60_000); return () => clearInterval(timer); }, []);
 
+  const isDemo = import.meta.env.DEV && token === 'demo';
   const bridge = useMemo(() => ({
     getHistory: (accountId) => {
       const account = snapshotRef.current?.accounts?.find((item) => item.id === accountId);
-      if (import.meta.env.DEV && token === 'demo' && account) return Promise.resolve(demoHistory(account).points);
+      if (isDemo && account) return Promise.resolve(demoHistory(account).points);
       return requestJson(`/api/history?accountId=${encodeURIComponent(accountId)}&days=0`, token).then((result) => result.points || []);
     },
-    getCycles: (accountId) => import.meta.env.DEV && token === 'demo'
+    getCycles: (accountId) => isDemo
       ? Promise.resolve([])
       : requestJson(`/api/cycles?accountId=${encodeURIComponent(accountId)}`, token).then((result) => result.cycles || []),
     getProviderUsage: (accountId) => {
       const account = snapshotRef.current?.accounts?.find((item) => item.id === accountId);
-      if (import.meta.env.DEV && token === 'demo' && account) return Promise.resolve(demoUsage(account));
+      if (isDemo && account) return Promise.resolve(demoUsage(account));
       return requestJson(`/api/usage?accountId=${encodeURIComponent(accountId)}`, token);
     },
-  }), [token]);
+    // 本机用量:与桌面端 preload 相同的四个 API,走远程服务只读镜像
+    getLocalCliUsageSources: () => (isDemo ? Promise.resolve(demoLocalCliSources) : requestJson('/api/cli-usage/sources', token)),
+    getLocalCliUsageSummary: (query) => {
+      if (isDemo) return Promise.resolve(demoLocalCliSummary());
+      const params = new URLSearchParams({
+        agent: query?.agent || 'all',
+        timezone: query?.timezone || '',
+        ...(query?.modelRules ? { modelRules: JSON.stringify(query.modelRules) } : {}),
+      });
+      return requestJson(`/api/cli-usage/summary?${params}`, token);
+    },
+    getLocalCliUsageModels: (query) => {
+      if (isDemo) return Promise.resolve({ models: [] });
+      const params = new URLSearchParams({
+        agent: query?.agent || 'all',
+        timezone: query?.timezone || '',
+        merge: query?.mergeSameModels === false ? 'false' : 'true',
+        kind: query?.scope?.kind === 'range' ? 'range' : 'day',
+        ...(query?.scope?.kind === 'range' ? { days: String(query.scope.days ?? 30) } : { date: query?.scope?.date || '' }),
+        ...(query?.modelRules ? { modelRules: JSON.stringify(query.modelRules) } : {}),
+      });
+      return requestJson(`/api/cli-usage/models?${params}`, token);
+    },
+    scanLocalCliUsage: () => (isDemo ? Promise.resolve(demoLocalCliSources) : requestJson('/api/cli-usage/scan', token, { method: 'POST' })),
+  }), [token, isDemo]);
   window.quotaDesk = bridge;
 
   const connect = async (value, deviceName) => {
@@ -227,18 +302,25 @@ function App() {
   const selectedProvider = providers.find((provider) => provider.id === selectedAccount?.providerId);
   const readOnly = true;
 
+  if (previewConnecting) return <AppShell variant="remote">
+    <main className="main-shell content-area remote-main">
+      <div className="remote-loading"><RefreshCw size={23} className="spinning" /><span>正在连接本机预览…</span></div>
+    </main>
+  </AppShell>;
   if (!token || pairingKey) return <Pairing pairingKey={pairingKey} onConnect={connect} message={pairError} theme={theme} setTheme={setTheme} />;
+  const inLocalUsageView = mode === 'local-usage' && !selectedAccountId;
   const shellControls = <>
     <span className="last-checked" title="最后一次额度检查时间"><Clock3 size={11} />{lastSync ? new Date(lastSync).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '尚未检查'}</span>
     <button type="button" className="control-solo" onClick={() => location.reload()} title="重新读取电脑数据" aria-label="重新读取电脑数据"><RefreshCw size={13} /></button>
     <div className="overview-controls" aria-label="额度展示方式">{[['rings', '账号总览', CircleGauge], ['rows', '行式明细', Rows3], ['periods', '周期明细', Clock3]].map(([key, label, Icon]) => <button type="button" key={key} className={mode === key && !selectedAccountId ? 'active' : ''} onClick={() => { setSelectedAccountId(null); setMode(key); }} title={label} aria-label={label}><Icon size={13} /></button>)}</div>
+    <button type="button" className={`control-solo local-usage-control${inLocalUsageView ? ' active' : ''}`} onClick={() => { setSelectedAccountId(null); setMode('local-usage'); }} title="本机用量" aria-label="本机用量"><ChartNoAxesCombined size={13} /></button>
     <button type="button" className="remote-title-theme" onClick={() => setTheme((old) => old === 'dark' ? 'light' : 'dark')} aria-label={theme === 'dark' ? '切换亮色主题' : '切换暗色主题'}>{theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}</button>
   </>;
   return <AppShell variant="remote" controls={shellControls}>
-    <main className="main-shell content-area remote-main">
+    <main className={`main-shell content-area remote-main${inLocalUsageView ? ' local-usage-mode' : ''}`}>
       {connectionError && <div className="remote-banner offline" role="status"><WifiOff size={18} /><span>{connectionError}{snapshot ? '，下方保留本次读取的数据。' : '。'}</span></div>}
       {loading && !snapshot ? <div className="remote-loading"><RefreshCw size={23} className="spinning" /><span>正在读取电脑上的额度</span></div> : snapshot ? <>
-        {selectedAccount ? <HistoryView key={selectedAccount.id} account={selectedAccount} provider={selectedProvider} onBack={() => setSelectedAccountId(null)} readOnly wasteWindowsOverride={selectedAccount.wasteWindows} /> : <>
+        {selectedAccount ? <HistoryView key={selectedAccount.id} account={selectedAccount} provider={selectedProvider} onBack={() => setSelectedAccountId(null)} settings={localCliSettings} setSettings={setLocalCliSettings} readOnly wasteWindowsOverride={selectedAccount.wasteWindows} /> : inLocalUsageView ? <LocalCliUsageView settings={localCliSettings} setSettings={setLocalCliSettings} /> : <>
           <StatusView accounts={accounts} providers={providers} mode={mode} readOnly onOpenHistory={(account) => setSelectedAccountId(account.id)} lastSync={lastSync} reminderRules={snapshot.settings?.alerts === false ? [] : snapshot.settings?.reminderRules || []} sortWeights={{ fiveHourRemaining: snapshot.settings?.periodSort5hRemaining, otherRemaining: snapshot.settings?.periodSortLongRemaining }} testResults={{}} />
         </>}
       </> : !loading && <div className="remote-empty"><WifiOff size={23} /><strong>暂时无法读取额度</strong><span>请确认电脑正在运行并可通过配对地址访问</span></div>}

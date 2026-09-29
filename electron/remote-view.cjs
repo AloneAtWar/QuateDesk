@@ -2,11 +2,14 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { resolveWasteWindows } = require('./waste.cjs');
+const { CliUsageService } = require('./cli-usage/index.cjs');
 
 const REMOTE_PORT = 43187;
 const WINDOW_FIELDS = ['key', 'remaining', 'used', 'total', 'unit', 'resetAt', 'available', 'amount', 'limitAmount'];
 const HISTORY_FIELDS = ['remaining', 'amount', 'limit', 'unit', 'resetAt'];
 const CONTENT_TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp' };
+// 本机预览：仅当请求来自电脑本机回环地址时允许免配对码换只读令牌
+const isLoopbackRequest = (request) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(String(request.socket?.remoteAddress || ''));
 
 const pick = (source, fields) => Object.fromEntries(fields.filter((field) => source?.[field] !== undefined).map((field) => [field, source[field]]));
 const safeText = (value, max = 120) => String(value ?? '').slice(0, max);
@@ -145,7 +148,55 @@ const json = (response, status, body) => {
   response.end(JSON.stringify(body));
 };
 
-function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, getHistory, getCycles, getUsage, port = REMOTE_PORT }) {
+// 本机用量查询参数 → CliUsageService 校验入参;modelRules 以 JSON 查询参数传入
+const parseModelRulesParam = (url) => {
+  const raw = url.searchParams.get('modelRules');
+  if (raw == null || raw === '') return undefined;
+  if (raw.length > 4096) throw new Error('模型规则过长');
+  try { return JSON.parse(raw); } catch { throw new Error('模型规则格式无效'); }
+};
+
+// /api/cli-usage/*：只读镜像桌面端本机用量(聚合计数,不含对话内容)
+function handleCliUsage({ pathname, url, request, response, cliUsage }) {
+  const run = (promise) => Promise.resolve(promise).then((result) => json(response, 200, result)).catch((error) => {
+    if (error?.name === 'CliUsageError') return json(response, 400, { error: 'cli_usage_invalid', message: error.message });
+    json(response, 502, { error: 'cli_usage_unavailable' });
+  });
+  if (request.method === 'POST' && pathname === '/api/cli-usage/scan') {
+    return run(cliUsage.scan().then(() => cliUsage.getSources()));
+  }
+  if (request.method !== 'GET') return json(response, 405, { error: 'method_not_supported' });
+  if (pathname === '/api/cli-usage/sources') return run(cliUsage.getSources());
+  if (pathname === '/api/cli-usage/summary') {
+    let query;
+    try {
+      query = CliUsageService.normalizeSummaryQuery({
+        agent: url.searchParams.get('agent') || 'all',
+        timezone: url.searchParams.get('timezone') || '',
+        endDate: url.searchParams.get('endDate'),
+        modelRules: parseModelRulesParam(url),
+      });
+    } catch (error) { return json(response, 400, { error: 'cli_usage_invalid', message: error.message }); }
+    return run(cliUsage.getSummary(query));
+  }
+  if (pathname === '/api/cli-usage/models') {
+    const kind = url.searchParams.get('kind');
+    let query;
+    try {
+      query = CliUsageService.normalizeModelsQuery({
+        agent: url.searchParams.get('agent') || 'all',
+        timezone: url.searchParams.get('timezone') || '',
+        mergeSameModels: url.searchParams.get('merge') !== 'false',
+        scope: kind === 'day' ? { kind, date: url.searchParams.get('date') } : kind === 'range' ? { kind, days: url.searchParams.get('days') } : null,
+        modelRules: parseModelRulesParam(url),
+      });
+    } catch (error) { return json(response, 400, { error: 'cli_usage_invalid', message: error.message }); }
+    return run(cliUsage.getModels(query));
+  }
+  return json(response, 404, { error: 'not_found' });
+}
+
+function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, pairLocalPreview, getHistory, getCycles, getUsage, cliUsage, port = REMOTE_PORT }) {
   const server = http.createServer((request, response) => {
     setHeaders(response);
     if (!['GET', 'HEAD', 'PATCH', 'POST'].includes(request.method)) return json(response, 405, { error: 'method_not_supported' });
@@ -161,7 +212,14 @@ function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, ge
         if (typeof pairDevice !== 'function') return json(response, 503, { error: 'pairing_unavailable' });
         if (!/^application\/json(?:;|$)/i.test(String(request.headers['content-type'] || ''))) return json(response, 415, { error: 'json_required' });
         readJsonBody(request, 4096).then((body) => {
-          try { return json(response, 200, pairDevice(body)); }
+          try {
+            // 本机预览:电脑自己在 127.0.0.1 打开远程页,不需要配对码与设备信息
+            if (body?.localPreview === true) {
+              if (!isLoopbackRequest(request) || typeof pairLocalPreview !== 'function') return json(response, 403, { error: 'local_preview_unavailable' });
+              return json(response, 200, pairLocalPreview());
+            }
+            return json(response, 200, pairDevice(body));
+          }
           catch (error) {
             const invalidPayload = /设备标识|设备名称/.test(error.message || '');
             return json(response, invalidPayload ? 400 : 403, { error: invalidPayload ? 'invalid_pairing_request' : 'pairing_key_invalid', message: error.message || '配对失败' });
@@ -169,9 +227,9 @@ function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, ge
         }).catch((error) => json(response, error.message === 'body_too_large' ? 413 : error.message === 'invalid_json' ? 400 : 500, { error: error.message || 'pairing_failed' }));
         return;
       }
-      if (request.method === 'POST') return json(response, 405, { error: 'method_not_supported' });
       const providedToken = /^Bearer (\S+)$/.exec(String(request.headers.authorization || ''))?.[1] || '';
       if (typeof authorizeToken !== 'function' || !authorizeToken(providedToken)) return json(response, 401, { error: 'unauthorized' });
+      if (request.method === 'POST' && pathname !== '/api/cli-usage/scan') return json(response, 405, { error: 'method_not_supported' });
       if (request.method === 'PATCH') {
         return pathname === '/api/settings'
           ? json(response, 403, { error: 'read_only' })
@@ -206,6 +264,10 @@ function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, ge
           return json(response, 200, publicUsage(data));
         }).catch(() => json(response, 502, { error: 'usage_unavailable' }));
         return;
+      }
+      if (pathname.startsWith('/api/cli-usage/')) {
+        if (!cliUsage || typeof cliUsage.getSummary !== 'function') return json(response, 503, { error: 'cli_usage_unavailable' });
+        return handleCliUsage({ pathname, url, request, response, cliUsage });
       }
       return json(response, 404, { error: 'not_found' });
     }

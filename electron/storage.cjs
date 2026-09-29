@@ -117,6 +117,16 @@ class DesktopStore {
     return { token, deviceId: device.id, deviceName: device.name };
   }
 
+  // 本机预览专用设备:同一台电脑经 127.0.0.1 打开远程页时免配对码换取只读令牌。
+  // 每次预览轮换令牌,设备列表里始终只有一条「本机预览」。
+  pairLocalPreview() {
+    const config = this.loadRemoteAccess();
+    const token = crypto.randomBytes(32).toString('base64url');
+    const device = { id: 'local-preview', name: '本机预览', tokenHash: crypto.createHash('sha256').update(token).digest('hex'), pairedAt: new Date().toISOString() };
+    this.saveRemoteAccess({ ...config, devices: [...config.devices.filter((item) => item.id !== 'local-preview'), device] });
+    return { token, deviceId: device.id, deviceName: device.name };
+  }
+
   removeRemoteDevice(id) {
     const config = this.loadRemoteAccess();
     this.saveRemoteAccess({ ...config, devices: config.devices.filter((device) => device.id !== id) });

@@ -23,6 +23,8 @@ html.remote-page, body.remote-page { width: 100%; min-width: 0; overflow-x: hidd
 .remote-settings-access p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
 .remote-interactive-badge { padding: 4px 7px; border-radius: 5px; color: var(--green-deep); background: var(--green-bg); font-size: 9px; white-space: nowrap; }
 .remote-main { width: 100%; max-width: none; min-height: calc(100dvh - 40px); padding: 8px 14px 20px; flex: 1 0 auto; overflow: visible; }
+/* 本机用量视图(远程只读):与桌面端同一条高度链,让热力图按剩余空间撑满 */
+.remote-main.local-usage-mode > .local-cli-page { flex: 1 1 auto; min-height: 0; }
 .remote-view-title { margin-bottom: 9px; }
 .remote-view-title .health-summary { color: var(--muted); font-size: 10px; }
 .remote-main > .view-stack { gap: 16px; }
