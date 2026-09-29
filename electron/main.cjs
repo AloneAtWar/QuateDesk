@@ -44,6 +44,26 @@ app.setName('Quota Desk');
 app.setAppUserModelId('com.quotadesk.app');
 app.setPath('userData', path.join(app.getPath('appData'), 'Quota Desk'));
 
+// 启动诊断日志:排障用,记录启动路径上的关键节点与渲染进程错误。
+// 追加写 userData/startup-debug.log,超过 512KB 重开;写失败静默降级,绝不影响启动。
+const startupLogPath = path.join(app.getPath('userData'), 'startup-debug.log');
+const startupLog = (...args) => {
+  const line = `[${new Date().toISOString()}] ${args.map((item) => (typeof item === 'string' ? item : JSON.stringify(item))).join(' ')}\n`;
+  try {
+    try { if (fs.statSync(startupLogPath).size > 512 * 1024) fs.unlinkSync(startupLogPath); } catch { /* 不存在或读取失败都按追加处理 */ }
+    fs.appendFileSync(startupLogPath, line);
+  } catch { /* 磁盘不可写时只留控制台 */ }
+  console.log('[startup]', ...args);
+};
+process.on('uncaughtException', (error) => startupLog('uncaughtException', error?.stack || String(error)));
+process.on('unhandledRejection', (reason) => startupLog('unhandledRejection', String(reason)));
+// 渲染进程连崩自愈的最后手段:重启并禁用硬件加速
+if (process.argv.includes('--qd-no-gpu')) {
+  app.disableHardwareAcceleration();
+  startupLog('boot: 已禁用 GPU 硬件加速(--qd-no-gpu)');
+}
+startupLog(`boot v${app.getVersion()} electron=${process.versions.electron} chrome=${process.versions.chrome} node=${process.versions.node} cwd=${process.cwd()}`);
+
 let mainWindow;
 let widgetWindow;
 let tray;
@@ -56,6 +76,7 @@ let pollStartedAt = null;
 let pollInProgress = false;
 let remoteViewServer = null;
 let remoteViewError = '';
+let rendererCrashCount = 0;
 const sentReminders = new Set();
 const providerUsageLoginFlows = new Map();
 const providerUsageRecoveryFlows = new Map();
@@ -1419,9 +1440,10 @@ function createMainWindow() {
     backgroundColor: themeColors(savedTheme()).main, title: 'Quota Desk', icon: loadAppIcon(), autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: preloadPath },
   });
-  mainWindow.loadFile(distPath, process.argv.includes('--onboard') ? { query: { onboard: '1' } } : undefined);
-  // Windows 上只有一个真正生效的置顶层，主窗口置顶后与浮窗同层、激活即会盖到浮窗上；
-  // 主窗口显示/被激活时把浮窗压回自己上方，保证自家浮窗永不被主界面挡住
+  mainWindow.loadFile(distPath, process.argv.includes('--onboard') ? { query: { onboard: '1' } } : undefined)
+    .catch((error) => startupLog('loadFile 失败', String(error)));
+  // Windows 上只有一个真正生效的置顶层,主窗口置顶后与浮窗同层、激活即会盖到浮窗上;
+  // 主窗口显示/被激活时把浮窗压回自己上方,保证自家浮窗永不被主界面挡住
   mainWindow.on('show', () => {
     if (!mainWindow.isAlwaysOnTop()) return;
     mainWindow.setAlwaysOnTop(true, 'screen-saver');
@@ -1429,12 +1451,42 @@ function createMainWindow() {
     ensureWidgetOnTop();
   });
   mainWindow.on('focus', () => { if (mainWindow.isAlwaysOnTop()) ensureWidgetOnTop(); });
-  mainWindow.webContents.on('did-fail-load', (_event, code, description, url) => console.error('[Quota Desk] load failed', code, description, url));
-  mainWindow.webContents.on('render-process-gone', (_event, details) => console.error('[Quota Desk] renderer gone', details.reason));
-  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
-    if (level >= 2) console.error('[Quota Desk] renderer', message, sourceId || '', line || '');
+  mainWindow.webContents.on('did-finish-load', () => { rendererCrashCount = 0; startupLog('renderer: did-finish-load'); });
+  mainWindow.webContents.on('did-fail-load', (_event, code, description, url) => startupLog('renderer: did-fail-load', code, description, url));
+  // 渲染进程崩溃自愈:白屏的根因多半是环境性崩溃(缓存损坏/DLL 注入/GPU 驱动),
+  // 原实现崩了就永久白屏且实例占锁,后续双击只唤醒死窗口。
+  // 恢复阶梯:1 次 → 忽略缓存 reload;2 次 → 销毁重建窗口;3 次 → 禁 GPU 重启。
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    startupLog('renderer: render-process-gone', details?.reason, JSON.stringify(details?.exitCode ?? null));
+    if (quitting) return;
+    rendererCrashCount += 1;
+    const currentWindow = mainWindow;
+    if (rendererCrashCount >= 3) {
+      startupLog('renderer: 连续崩溃 3 次,带 --qd-no-gpu 重启应用');
+      app.relaunch({ args: [...process.argv.slice(1), '--qd-no-gpu'] });
+      app.exit(0);
+      return;
+    }
+    setTimeout(() => {
+      try {
+        if (rendererCrashCount >= 2 && currentWindow && !currentWindow.isDestroyed()) {
+          startupLog('renderer: 二次崩溃,销毁并重建主窗口');
+          currentWindow.destroy();
+          createMainWindow();
+        } else if (currentWindow && !currentWindow.isDestroyed()) {
+          startupLog('renderer: 尝试 reloadIgnoringCache 恢复');
+          currentWindow.webContents.reloadIgnoringCache();
+        }
+      } catch (error) { startupLog('renderer: 恢复动作失败', String(error)); }
+    }, 1000);
   });
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    if (level >= 2) startupLog('renderer: console-error', String(message).slice(0, 300), sourceId || '', line || '');
+  });
+  mainWindow.once('ready-to-show', () => {
+    startupLog('renderer: ready-to-show, GPU=', JSON.stringify(app.getGPUFeatureStatus()));
+    mainWindow.show();
+  });
   mainWindow.on('close', (event) => { if (!quitting) { event.preventDefault(); mainWindow.hide(); } });
   mainWindow.on('closed', () => { mainWindow = null; });
 }
@@ -2398,18 +2450,27 @@ function registerIpc() {
   cliUsage.registerIpc(ipcMain);
 }
 
-if (!app.requestSingleInstanceLock()) app.quit();
-else {
+if (!app.requestSingleInstanceLock()) {
+  // 已有实例(常驻托盘)持有锁:本次双击的进程直接退出,由旧实例接管显示。
+  // 白屏排查时这条日志用于区分"新进程没起来"还是"旧实例窗口空白"。
+  startupLog('single-instance: 已有实例持锁,本进程退出');
+  app.quit();
+} else {
   app.on('second-instance', async () => {
+    startupLog('second-instance: 唤醒已有实例窗口');
     if (!mainWindow) return;
     mainWindow.show();
     mainWindow.focus();
     try {
-      const len = await mainWindow.webContents.executeJavaScript('document.getElementById("root")?.childElementCount || 0');
-      if (len === 0) mainWindow.webContents.reload();
-    } catch { mainWindow.webContents.reload(); }
+      // 空白判定:root 无子节点,或整页没有可渲染文本(有 DOM 但没画出来),都强制 reload
+      const probe = await mainWindow.webContents.executeJavaScript('`${document.getElementById("root")?.childElementCount || 0}:${(document.body?.innerText || "").trim().length}`');
+      startupLog('second-instance: root/text =', probe);
+      const [rootCount, textLength] = probe.split(':').map(Number);
+      if (!rootCount || !textLength) mainWindow.webContents.reload();
+    } catch (error) { startupLog('second-instance: 检查失败,强制 reload', String(error)); mainWindow.webContents.reload(); }
   });
   app.whenReady().then(async () => {
+    startupLog('ready: 初始化开始');
     store = new DesktopStore();
     cliUsage = createCliUsageService({ dbPath: path.join(app.getPath('userData'), 'cli-usage.sqlite') });
     store.purgeAllCycles();
@@ -2417,6 +2478,7 @@ else {
     applyProxySetting();
     refreshLiveIdentities();
     registerIpc();
+    startupLog('ready: IPC 已注册,创建主窗口');
     createMainWindow();
     const state = store.loadState();
     cliUsage?.applySettings(state?.settings);
@@ -2427,6 +2489,7 @@ else {
     setupAutoUpdater();
     if (state?.settings?.autoUpdate !== false) checkForUpdates();
     scheduleUpdateChecks();
+    startupLog('ready: 启动流程完成');
     pollState().catch((error) => console.error('[Quota Desk] initial poll failed', error.message));
     app.on('activate', () => mainWindow?.show());
   });
@@ -2434,6 +2497,7 @@ else {
 
 app.on('before-quit', () => {
   quitting = true;
+  startupLog('quit: before-quit');
   remoteViewServer?.close();
   if (pollTimer) clearInterval(pollTimer);
   if (updateCheckTimer) clearInterval(updateCheckTimer);
