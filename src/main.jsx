@@ -1066,8 +1066,9 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
 
   const hasCost = providerUsageHasMetric(data, 'cost');
   const hasTokens = providerUsageHasMetric(data, 'tokens');
-  // 参考图没有指标切换：热力图固定按金额着色，账号没有金额数据时才退回 Token
-  const metric = hasCost ? 'cost' : 'tokens';
+  // 参考图没有指标切换：热力图优先按 Token 着色（DeepSeek 等同时有金额数据的
+  // 厂商也与其他厂商页统一口径），账号没有 Token 数据时才退回金额
+  const metric = hasTokens ? 'tokens' : 'cost';
   // 花费卡片：DeepSeek 摘要的 totalCost 是账号累计花费；拿不到时退回区间累计
   const accountTotalCost = providerUsageHasNumber(data.summary?.totalCost) ? data.summary.totalCost : null;
   const rangeCostExact = providerUsageHasNumber(data.summary?.rangeCost) ? data.summary.rangeCost : null;
@@ -1159,7 +1160,9 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
   const computedStreaks = computeUsageStreaks(sortedDays);
   const streakDays = providerUsageHasNumber(data.summary?.currentStreakDays) ? Number(data.summary.currentStreakDays) : computedStreaks.current;
   const longestStreak = providerUsageHasNumber(data.summary?.longestStreakDays) ? Number(data.summary.longestStreakDays) : computedStreaks.longest;
-  const peakTokens = providerUsageHasNumber(data.summary?.peakDailyTokens) ? Number(data.summary.peakDailyTokens) : null;
+  const peakTokens = providerUsageHasNumber(data.summary?.peakDailyTokens)
+    ? Number(data.summary.peakDailyTokens)
+    : (hasTokens ? (sortedDays.reduce((max, day) => Math.max(max, Number(day?.tokens) || 0), 0) || null) : null);
   const peakCost = providerUsageHasNumber(data.summary?.peakDailyCost) ? Number(data.summary.peakDailyCost) : null;
   const peakIsCost = metric === 'cost' && peakCost !== null;
   const peakReady = peakIsCost || peakTokens !== null;
