@@ -11,7 +11,7 @@ const {
 
 const SCHEMA_VERSION = '1';
 
-const AGENT_ORDER = ['zcode', 'kimi', 'claude', 'codex'];
+const AGENT_ORDER = ['zcode', 'kimi', 'claude', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'openclaw', 'hermes'];
 
 const UPSERT_EVENT_SQL = `
 INSERT INTO usage_events (
@@ -155,6 +155,25 @@ ON CONFLICT(agent, root_id, file_key) DO UPDATE SET
   countSourceFiles(agent) {
     const row = this.db.prepare('SELECT COUNT(*) AS files FROM source_files WHERE agent = ?').get(agent);
     return Number(row?.files || 0);
+  }
+
+  // ---- 定向删除 ----------------------------------------------------------
+  // 仅供"整文件重算"型 adapter 使用(copilot 的 OTel/session-state 对账、
+  // opencode/openclaw 的聚合与迁移覆盖):按 agent + 事件键前缀 + 可选的
+  // 会话(单个或集合)/模型/时间上界删除历史行,配合重发实现撤回与替换。
+  deleteEvents(agent, { eventKeyPrefix = null, sessionKey = null, sessionKeys = null, canonicalModelKey = null, beforeMs = null } = {}) {
+    const clauses = ['agent = ?'];
+    const params = [agent];
+    if (eventKeyPrefix !== null) { clauses.push('event_key LIKE ? ESCAPE \'\\\''); params.push(`${eventKeyPrefix.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`); }
+    if (sessionKey !== null) { clauses.push('session_key = ?'); params.push(sessionKey); }
+    if (Array.isArray(sessionKeys) && sessionKeys.length) {
+      clauses.push(`session_key IN (${sessionKeys.map(() => '?').join(',')})`);
+      params.push(...sessionKeys);
+    }
+    if (canonicalModelKey !== null) { clauses.push('canonical_model_key = ?'); params.push(canonicalModelKey); }
+    if (beforeMs !== null) { clauses.push('occurred_at_ms <= ?'); params.push(beforeMs); }
+    const row = this.db.prepare(`DELETE FROM usage_events WHERE ${clauses.join(' AND ')}`).run(...params);
+    return Number(row?.changes || 0);
   }
 
   // ---- 扫描记录 ----------------------------------------------------------

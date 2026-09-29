@@ -954,3 +954,39 @@ scanLocalCliUsage: () => ipcRenderer.invoke('cliUsage:scan'),
 - renderer、设置文件和 `cli-usage.sqlite` 都不包含会话正文、代码、命令、凭据或完整项目路径。
 - `npm test` 与 `npm run build` 通过，主窗口暗色/亮色截图与 v6 概念图结构一致。
 
+
+## 15. 第二批渠道（2026-09 对齐 ccusage）
+
+第一批四渠道验证了适配器架构后，第二批按 [ccusage](https://github.com/ccusage/ccusage) 的 Rust 适配器逐家移植了六个 CLI，解析语义（字段口径、缓存拆分、去重与对账）与其保持一致。
+
+### 15.1 数据来源与解析要点
+
+| 渠道 | 数据来源 | 格式 | 关键语义 |
+| --- | --- | --- | --- |
+| Copilot CLI | `~/.copilot/otel/**/*.jsonl`、`~/.copilot/session-state/*/events.jsonl`、`COPILOT_OTEL_FILE_EXPORTER_PATH` | OTel JSONL + shutdown 快照 | 四类 OTel 记录按 chat span > inference log > agent turn log > agent summary span 优先级、按 traceId/responseId 抑制；session-state 是 (session, model) 累计快照，续会 shutdown 做差分；两源对账撤回早于 shutdown 的 OTel 行；`-1m`/`-1m-internal` 模型后缀剥掉 |
+| Gemini CLI | `~/.gemini/tmp`（递归 `.json`/`.jsonl`） | 会话调试日志 | direct（`type:"gemini"`）与 stats 两条路径；stats 的 `cached` 是 input 子集要扣除，direct 按 total 是否含 cached 判定；thoughts 经 total 缺口进 extra；jsonl 内 direct 事件按 id 后到覆盖（流式快照） |
+| Grok CLI | `~/.grok/sessions/<url编码cwd>/<sessionId>/updates.jsonl` + 兄弟 `summary.json` | JSONL | 只取 `turn_completed`；`modelUsage` 优先，缺省回退 summary 默认模型；`cachedRead`/`cacheCreation` 是 inputTokens 子集需扣除；`agentTimestampMs` 优先于外层 Unix 秒；项目取 summary.cwd 或 URL 解码目录名 |
+| OpenCode | `~/.local/share/opencode/opencode.db` | SQLite | message 表（逐消息，modelID/providerID 必填）→ session_message 事件表（v2，fork 拷贝行跳过）→ session/session_v2 聚合只兜底无消息行的会话；会话出现消息行后撤回聚合事件；项目取 session.directory |
+| OpenClaw | `~/.openclaw`（含 clawdbot/moltbot/moldbot）递归会话 JSONL（含 `.jsonl.deleted.*`/`.jsonl.reset.*`）+ `agents/*/agent/openclaw-agent.sqlite` | JSONL + SQLite | `model_change`/`model-snapshot` 行维护当前模型；assistant 消息 usage；JSONL 与 SQLite 迁移副本按内容身份共用事件键，自然覆盖不双计 |
+| Hermes Agent | `~/.hermes/state.db` | SQLite | `sessions` 表每会话一行累计值；`started_at` 秒/毫秒自适应；reasoning 经 total 缺口进 extra；provider 归一化 |
+
+env 覆盖与 ccusage 一致：`COPILOT_HOME`、`OPENCODE_DATA_DIR`、`HERMES_HOME`、`OPENCLAW_DIR`、`GEMINI_DATA_DIR`、`GROK_HOME`（逗号分隔支持多根）。
+
+### 15.2 架构扩展：定向删除与延迟撤回
+
+增量 UPSERT（取 MAX）只能表达"值增长"，无法表达撤回。第二批引入两个能力：
+
+- `store.deleteEvents(agent, { eventKeyPrefix, sessionKey, sessionKeys, canonicalModelKey, beforeMs })`：按事件键前缀 + 可选会话/模型/时间上界做定向删除。
+- `ctx.deferDeleteEvents(predicate)`：适配器在生成器尾部登记，worker 在**本次扫描全部事件落库（含最后一批）之后**执行。直接在生成器尾部调用 `ctx.deleteEvents` 会被"最后一批 upsert"复活，必须走延迟队列。
+
+三个使用方：copilot 的 OTel↔session-state 对账、opencode 的聚合撤回（会话出现消息行）、以及各"整文件重算"型适配器在重发前清理该文件旧事件键。整文件重算（gemini/openclaw/copilot）的原因：跨行状态（当前模型、trace 上下文）与按 id 后到覆盖无法用字节游标增量重建；文件体量小且事件键稳定，UPSERT 幂等。
+
+### 15.3 模型与展示
+
+- 渠道身份色轮换使用现有调色板：copilot=coral、gemini=mint、grok=amber、opencode=coral、openclaw=mint、hermes=amber（仅彩色圆点，复用 CSS 变量）。
+- 事件不落金额；ccusage 的定价/成本字段（如 Grok `costUsdTicks`、OpenCode `cost`）不进入本索引，留待后续"API 等价估算"。
+- Gemini/OpenClaw 日志不含工程目录，projectKey 为空；Grok/OpenCode 有真实 cwd/directory，照常 HMAC 入库。
+
+### 15.4 测试
+
+`tests/local-cli-usage-new-adapters.test.cjs` 覆盖：缓存拆分与 total 缺口回填、grok 重复行/多模型 turn、gemini 流式 id 收敛与 stats.models、openclaw 状态跟踪与迁移去重、hermes 秒/毫秒自适应、opencode 三层来源与聚合撤回、copilot 优先级抑制与 shutdown 差分对账、持久化无绝对路径/正文。fixtures 位于 `tests/fixtures/cli-usage/`（SQLite 场景在测试内联建库）。

@@ -70,6 +70,53 @@ const detectCodexRoots = () => {
   return [buildRoot(path.join(homeDir(), '.codex'), '~/.codex')];
 };
 
+// 逗号分隔的多根目录覆盖:逐段建根,不存在的段照常返回(exists=false),
+// 与 ccusage 各 adapter 的 env 语义保持一致
+const splitCommaDirs = (raw) => raw.split(',').map((item) => item.trim()).filter(Boolean);
+
+const detectCopilotRoots = () => {
+  const override = envValue('COPILOT_HOME');
+  if (override) return splitCommaDirs(override).map((item) => buildRoot(item, '$COPILOT_HOME'));
+  return [buildRoot(path.join(homeDir(), '.copilot'), '~/.copilot')];
+};
+
+// OpenCode:OPENCODE_DATA_DIR(可多根)> XDG_DATA_HOME > ~/.local/share;
+// Windows 安装同样落在 ~/.local/share(opencode 自带 xdg 风格布局)
+const detectOpencodeRoots = () => {
+  const override = envValue('OPENCODE_DATA_DIR');
+  if (override) return splitCommaDirs(override).map((item) => buildRoot(item, '$OPENCODE_DATA_DIR'));
+  const xdg = envValue('XDG_DATA_HOME');
+  const dataHome = xdg && path.isAbsolute(xdg) ? xdg : path.join(homeDir(), '.local', 'share');
+  return [buildRoot(path.join(dataHome, 'opencode'), '~/.local/share/opencode')];
+};
+
+const detectHermesRoots = () => {
+  const override = envValue('HERMES_HOME');
+  if (override) return splitCommaDirs(override).map((item) => buildRoot(item, '$HERMES_HOME'));
+  return [buildRoot(path.join(homeDir(), '.hermes'), '~/.hermes')];
+};
+
+// OpenClaw:官方目录之外保留三个历史改名目录(clawdbot/moltbot/moldbot)
+const detectOpenclawRoots = () => {
+  const override = envValue('OPENCLAW_DIR');
+  if (override) return splitCommaDirs(override).map((item) => buildRoot(item, '$OPENCLAW_DIR'));
+  const labels = ['.openclaw', '.clawdbot', '.moltbot', '.moldbot'];
+  const roots = labels.map((label) => buildRoot(path.join(homeDir(), label), `~/${label}`));
+  return roots.filter((root) => root.exists);
+};
+
+const detectGeminiRoots = () => {
+  const override = envValue('GEMINI_DATA_DIR');
+  if (override) return splitCommaDirs(override).map((item) => buildRoot(item, '$GEMINI_DATA_DIR'));
+  return [buildRoot(path.join(homeDir(), '.gemini', 'tmp'), '~/.gemini/tmp')];
+};
+
+const detectGrokRoots = () => {
+  const override = envValue('GROK_HOME');
+  if (override) return splitCommaDirs(override).map((item) => buildRoot(item, '$GROK_HOME'));
+  return [buildRoot(path.join(homeDir(), '.grok'), '~/.grok')];
+};
+
 module.exports = {
   homeDir,
   envValue,
@@ -80,4 +127,10 @@ module.exports = {
   detectKimiRoots,
   detectClaudeRoots,
   detectCodexRoots,
+  detectCopilotRoots,
+  detectOpencodeRoots,
+  detectHermesRoots,
+  detectOpenclawRoots,
+  detectGeminiRoots,
+  detectGrokRoots,
 };

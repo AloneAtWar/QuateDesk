@@ -1,0 +1,2 @@
+{"type":"custom","customType":"model-snapshot","data":{"modelId":"claude-opus-4.6","provider":"anthropic"}}
+{"type":"message","id":"e3","timestamp":1774000100000,"message":{"role":"assistant","usage":{"input":100,"output":50,"cacheRead":30,"cacheWrite":10}}}

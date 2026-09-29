@@ -9,6 +9,12 @@ const adapters = {
   kimi: require('./adapters/kimi.cjs'),
   claude: require('./adapters/claude.cjs'),
   codex: require('./adapters/codex.cjs'),
+  copilot: require('./adapters/copilot.cjs'),
+  gemini: require('./adapters/gemini.cjs'),
+  grok: require('./adapters/grok.cjs'),
+  opencode: require('./adapters/opencode.cjs'),
+  openclaw: require('./adapters/openclaw.cjs'),
+  hermes: require('./adapters/hermes.cjs'),
 };
 
 const BATCH_SIZE = 500;
@@ -65,11 +71,16 @@ class CliUsageWorker {
         for (const root of roots) {
           rootResults.set(root.rootId, { status: root.exists ? 'ready' : 'missing', warning: null, files: 0 });
           if (!root.exists) continue;
+          // 延迟撤回:适配器在生成器尾部登记,全部事件落库(含最后一批)后执行,
+          // 避免"先删后补写"把已撤回的行复活
+          const deferredDeletes = [];
           const ctx = {
             hmac: (value) => this.store.hmac(value),
             getFileState: (rootId, fileKey) => this.store.getFileState(id, rootId, fileKey),
             saveFileState: (rootId, fileKey, state) => this.store.saveFileState(id, rootId, fileKey, state),
             markRoot: (rootId, status, warning) => { rootResults.set(rootId, { status, warning, files: rootResults.get(rootId)?.files || 0 }); },
+            deleteEvents: (predicate) => this.store.deleteEvents(id, predicate),
+            deferDeleteEvents: (predicate) => deferredDeletes.push(predicate),
           };
           try {
             let batch = [];
@@ -78,6 +89,7 @@ class CliUsageWorker {
               if (batch.length >= BATCH_SIZE) { upserted += this.store.upsertEvents(batch); batch = []; }
             }
             if (batch.length) upserted += this.store.upsertEvents(batch);
+            for (const predicate of deferredDeletes) this.store.deleteEvents(id, predicate);
           } catch (error) {
             lastError = sanitizeError(error);
             ok = false;

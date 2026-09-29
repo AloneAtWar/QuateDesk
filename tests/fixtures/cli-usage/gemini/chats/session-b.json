@@ -1,0 +1,8 @@
+{
+  "sessionId": "sess-b",
+  "startTime": "2026-09-01T00:00:00.000Z",
+  "messages": [
+    { "type": "user", "content": "hi" },
+    { "type": "gemini", "timestamp": "2026-09-01T00:01:00.000Z", "tokens": { "input": 100, "output": 20, "cached": 40, "thoughts": 10, "total": 130 }, "model": "gemini-2.5-flash" }
+  ]
+}

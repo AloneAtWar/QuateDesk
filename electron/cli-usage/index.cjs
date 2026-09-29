@@ -6,7 +6,7 @@ const {
   isValidTimeZone, isValidDateString, localDateString, normalizeModelRules,
 } = require('./normalize.cjs');
 
-const AGENT_IDS = ['zcode', 'kimi', 'claude', 'codex'];
+const AGENT_IDS = ['zcode', 'kimi', 'claude', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'openclaw', 'hermes'];
 const RANGE_DAYS = [7, 30, 90, 365];
 const QUERY_TIMEOUT_MS = 30_000;
 const SCAN_TIMEOUT_MS = 300_000;

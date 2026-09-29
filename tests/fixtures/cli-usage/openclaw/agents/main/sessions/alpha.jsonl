@@ -1,0 +1,4 @@
+{"type":"model_change","modelId":"gpt-5.2","provider":"openai","message":"not-an-object"}
+{"type":"message","id":"e1","timestamp":"2026-03-22T04:40:26.348Z","message":{"role":"assistant","usage":{"input":10,"output":20}}}
+{"type":"message","id":"e2","message":{"role":"assistant","usage":{"totalTokens":222},"timestamp":1774000000000}}
+{"type":"message","message":{"role":"user","usage":{"input":999}}}
