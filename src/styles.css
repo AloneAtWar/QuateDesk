@@ -768,8 +768,10 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .row-icon-button.stop:hover { color: var(--coral-deep); background: var(--coral-bg-2); }
 .row-icon-button.play { color: var(--green-deep); }
 .row-icon-button.play:hover { background: var(--green-bg); }
-/* 浮窗：全部账号均已停用时的占位 */
-.widget-all-disabled { display: flex; align-items: center; gap: 6px; width: 100%; color: var(--widget-chip-sub); font-size: 11px; }
+/* 浮窗占位：无账号 / 全部停用——沿用 widget-row 卡片，内容整体居中
+   占满整条；加号做成圆形徽章（绿色强调），引导双击添加 */
+.widget-placeholder { justify-content: center; gap: 7px; color: var(--widget-chip-sub); font-size: 11px; }
+.widget-placeholder-icon { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; color: var(--widget-live); background: var(--widget-chip); }
 /* 应用内操作确认弹窗（替代系统级 window.confirm）：字号沿用「添加账号」等普通弹窗的规范（标题 18px / 正文 12px / 按钮 11px） */
 .confirm-modal .modal-head h2 { font-size: 18px; }
 .confirm-modal .confirm-message { margin: 0; color: var(--ink-soft); font-size: 12px; line-height: 1.65; }

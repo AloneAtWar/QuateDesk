@@ -2257,7 +2257,9 @@ function ProviderModalV2({ provider, onClose, onSave }) {
 }
 
 function WidgetApp() {
-  const [accounts, setAccounts] = useState(window.quotaDesk ? [] : initialAccounts);
+  // accounts 三态：null＝桌面状态还没加载回来（保持空壳，避免老用户启动时闪占位文案）；
+  // []＝确认一个账号都没有（显示占位）；非空＝正常轮播
+  const [accounts, setAccounts] = useState(window.quotaDesk ? null : initialAccounts);
   const [providers, setProviders] = useState(providerCatalog);
   const [settings, setSettings] = useState({ widgetTagLimit: '2' });
   useEffect(() => { document.documentElement.dataset.theme = settings.theme === 'light' ? 'light' : 'dark'; }, [settings.theme]);
@@ -2266,16 +2268,17 @@ function WidgetApp() {
   useEffect(() => {
     let unsubscribe;
     window.quotaDesk?.loadState().then((state) => {
-      if (state?.accounts?.length) setAccounts(state.accounts);
-      if (state?.providers?.length) setProviders(state.providers);
-      if (state?.settings) setSettings(state.settings);
+      if (!state) return;
+      setAccounts(state.accounts || []);
+      if (state.providers?.length) setProviders(state.providers);
+      if (state.settings) setSettings(state.settings);
     });
     if (window.quotaDesk) unsubscribe = window.quotaDesk.onStateUpdated((state) => { setAccounts(state.accounts || []); setProviders(state.providers || []); setSettings(state.settings || {}); });
     return () => unsubscribe?.();
   }, []);
   const lastWheelAt = useRef(0);
-  // 停用账号不在浮窗轮播：只统计未停用的；全部停用时显示占位（和“还没有账号”的空白区分开）
-  const activeAccounts = accounts.filter((item) => !item.disabled);
+  // 停用账号不在浮窗轮播：只统计未停用的；全部停用时显示占位（和「还没有账号」的占位区分开）
+  const activeAccounts = (accounts || []).filter((item) => !item.disabled);
   const activeCount = activeAccounts.length;
   useEffect(() => { const timer = setInterval(() => { if (Date.now() - lastWheelAt.current < 10000) return; setIndex((value) => (value + 1) % Math.max(activeCount, 1)); }, 6000); return () => clearInterval(timer); }, [activeCount]);
   const cycleAccount = (direction) => { lastWheelAt.current = Date.now(); setIndex((value) => (value + direction + Math.max(activeCount, 1)) % Math.max(activeCount, 1)); };
@@ -2284,9 +2287,11 @@ function WidgetApp() {
   const startDrag = (event) => { if (event.button !== 0) return; dragRef.current = { active: true, moved: false, x: event.screenX, y: event.screenY }; event.currentTarget.setPointerCapture?.(event.pointerId); };
   const moveDrag = (event) => { const drag = dragRef.current; if (!drag.active) return; const deltaX = event.screenX - drag.x; const deltaY = event.screenY - drag.y; if (!deltaX && !deltaY) return; drag.moved ||= Math.abs(deltaX) + Math.abs(deltaY) > 2; drag.x = event.screenX; drag.y = event.screenY; window.quotaDesk?.moveWidget(deltaX, deltaY, event.screenX, event.screenY); };
   const stopDrag = () => { dragRef.current.active = false; };
-  return <div className="widget-window-shell" title="拖动移动，双击展开，滚轮切换账号，右键打开菜单" onWheel={(event) => cycleAccount(event.deltaY > 0 ? 1 : -1)} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag} onDoubleClick={() => { if (!dragRef.current.moved) window.quotaDesk?.openMainWindow(); }}><WidgetScaledRow scale={clampWidgetScale(settings.widgetScale)} length={clampWidgetLength(settings.widgetLength)}>{account || accounts.length === 0
+  return <div className="widget-window-shell" title="拖动移动，双击展开，滚轮切换账号，右键打开菜单" onWheel={(event) => cycleAccount(event.deltaY > 0 ? 1 : -1)} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag} onDoubleClick={() => { if (!dragRef.current.moved) window.quotaDesk?.openMainWindow(); }}><WidgetScaledRow scale={clampWidgetScale(settings.widgetScale)} length={clampWidgetLength(settings.widgetLength)}>{account
         ? <WidgetRow account={account} provider={provider} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} />
-        : <div className="widget-all-disabled"><CircleStop size={12} /><span>所有账号均已停用</span></div>}</WidgetScaledRow></div>;
+        : accounts === null ? null
+        : accounts.length === 0 ? <div className="widget-row widget-placeholder"><span className="widget-placeholder-icon"><Plus size={11} /></span><span>还没有账号 · 双击去添加</span></div>
+        : <div className="widget-row widget-placeholder"><CircleStop size={12} /><span>所有账号均已停用</span></div>}</WidgetScaledRow></div>;
 }
 
 function ImportCcswitchModal({ onClose, onApplied }) {
