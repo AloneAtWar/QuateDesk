@@ -1595,7 +1595,8 @@ function applyWidgetSize(scale, length) {
   const size = widgetWindowSize(widgetScale, widgetLength);
   if (!widgetWindow || widgetWindow.isDestroyed()) return widgetScale;
   const bounds = widgetWindow.getBounds();
-  const area = screen.getPrimaryDisplay().workArea;
+  // 按窗口当前所在显示器钳制，副屏上的浮窗调整大小时不会被拽回主屏
+  const area = screen.getDisplayMatching(bounds).workArea;
   const x = Math.max(area.x, Math.min(area.x + area.width - size.width, bounds.x + bounds.width - size.width));
   const y = Math.max(area.y, Math.min(area.y + area.height - size.height, bounds.y + bounds.height - size.height));
   widgetWindow.setBounds({ x, y, width: size.width, height: size.height });
@@ -2515,14 +2516,18 @@ function registerIpc() {
     shell.openExternal(target);
     return true;
   });
-  ipcMain.on('widget:move', (_event, { deltaX, deltaY }) => {
+  ipcMain.on('widget:move', (_event, { deltaX, deltaY, pointerX, pointerY }) => {
     if (!widgetWindow || widgetWindow.isDestroyed()) return;
     const dx = Math.round(Number(deltaX) || 0);
     const dy = Math.round(Number(deltaY) || 0);
     if (!dx && !dy) return;
     const size = widgetWindowSize(widgetScale, widgetLength);
     const bounds = widgetWindow.getBounds();
-    const area = screen.getDisplayMatching(bounds).workArea;
+    // 钳制目标取鼠标指针所在显示器而非窗口所在显示器：按窗口 bounds 会形成死锁（窗口永远越不过
+    // 当前屏幕边界，getDisplayMatching 也就永远返回同一块屏），导致浮窗无法跨显示器拖动。
+    const area = Number.isFinite(pointerX) && Number.isFinite(pointerY)
+      ? screen.getDisplayNearestPoint({ x: Math.round(pointerX), y: Math.round(pointerY) }).workArea
+      : screen.getDisplayMatching(bounds).workArea;
     const x = Math.max(area.x, Math.min(area.x + area.width - size.width, bounds.x + dx));
     const y = Math.max(area.y, Math.min(area.y + area.height - size.height, bounds.y + dy));
     widgetWindow.setBounds({ x, y, width: size.width, height: size.height });

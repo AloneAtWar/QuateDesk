@@ -52,7 +52,7 @@ contextBridge.exposeInMainWorld('quotaDesk', {
   resetWindowSize: () => ipcRenderer.invoke('window:reset-size'),
   toggleMaximize: () => ipcRenderer.invoke('window:toggle-maximize'),
   getMaximized: () => ipcRenderer.invoke('window:get-maximized'),
-  moveWidget: (deltaX, deltaY) => ipcRenderer.send('widget:move', { deltaX, deltaY }),
+  moveWidget: (deltaX, deltaY, pointerX, pointerY) => ipcRenderer.send('widget:move', { deltaX, deltaY, pointerX, pointerY }),
   getVersion: () => ipcRenderer.invoke('app:get-version'),
   getAutoLaunch: () => ipcRenderer.invoke('app:get-auto-launch'),
   setAutoLaunch: (enabled) => ipcRenderer.invoke('app:set-auto-launch', enabled),
