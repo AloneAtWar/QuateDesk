@@ -7,7 +7,12 @@ const fs = require('fs');
 const path = require('path');
 
 const packageJson = require('../package.json');
-const outputDir = path.resolve(__dirname, '..', packageJson.build?.directories?.output || 'release');
+// --out <dir> 可覆盖输出目录（dist:test 打到 release-test/ 时复用本预检）
+const args = process.argv.slice(2);
+const outIndex = args.indexOf('--out');
+const outputDir = outIndex >= 0 && args[outIndex + 1]
+  ? path.resolve(args[outIndex + 1])
+  : path.resolve(__dirname, '..', packageJson.build?.directories?.output || 'release');
 const version = packageJson.version;
 
 // 这些错误码说明文件被进程占用（或无写权限），而不是「不存在」之类的正常情况

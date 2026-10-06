@@ -12,13 +12,15 @@
     "test": "node --test",
     "dev": "vite",
     "dev:lan": "vite --host 0.0.0.0",
+    "dev:desktop": "node build/dev-desktop.cjs",
     "build": "vite build",
     "preview": "vite preview",
     "desktop": "npm run build && electron .",
     "dist": "node build/preflight.cjs && npm run build && electron-builder",
     "dist:win": "node build/preflight.cjs && npm run build && electron-builder --win",
     "dist:mac": "node build/preflight.cjs && npm run build && electron-builder --mac",
-    "dist:linux": "node build/preflight.cjs && npm run build && electron-builder --linux"
+    "dist:linux": "node build/preflight.cjs && npm run build && electron-builder --linux",
+    "dist:test": "node build/preflight.cjs --out release-test/build && npm run build && electron-builder --win portable --publish never --config build/dist-test-config.cjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",

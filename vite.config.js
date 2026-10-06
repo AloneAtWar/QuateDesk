@@ -22,6 +22,19 @@ export default defineConfig({
   plugins: [
     react(),
     {
+      // dev:desktop 时页面从开发服务器加载，Vite 的 HMR WebSocket（ws://localhost:*）
+      // 会被 index.html 的 CSP 拦掉导致热更新失效；这里仅在 dev server 下放宽 connect-src，
+      // 构建产物里的 CSP 原样保留
+      name: 'dev-hmr-csp',
+      apply: 'serve',
+      transformIndexHtml: {
+        order: 'post',
+        handler(html) {
+          return html.replace('connect-src https:;', 'connect-src https: ws://localhost:*;');
+        },
+      },
+    },
+    {
       name: 'electron-no-crossorigin',
       transformIndexHtml: {
         order: 'post',

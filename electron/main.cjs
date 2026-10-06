@@ -40,12 +40,22 @@ const {
   shouldUseCachedUsage,
 } = require('./provider-usage.cjs');
 
+// 构建口味标记由 dist:test 打包时通过 electron-builder extraMetadata 注入应用内的
+// package.json；dev（electron .）与正式打包都不带该字段。测试版据此启用独立
+// AUMID / 数据目录，可与正式版并排运行、互不抢任务栏与托盘。
+const IS_TEST_BUILD = require('../package.json').qdBuildFlavor === 'test';
 app.setName('Quota Desk');
 // 开发模式用独立 AUMID：Electron 首次弹通知时会按当前 exe 自建开始菜单快捷方式，
 // dev 下建出来的是指向 electron.exe 的「Electron.lnk」，与正式版同 ID 会抢占任务栏
 // 分组，导致打包版在任务栏显示成 Electron 默认原子图标。
-app.setAppUserModelId(process.defaultApp ? 'com.quotadesk.dev' : 'com.quotadesk.app');
-app.setPath('userData', path.join(app.getPath('appData'), 'Quota Desk'));
+app.setAppUserModelId(process.defaultApp ? 'com.quotadesk.dev' : IS_TEST_BUILD ? 'com.quotadesk.app.test' : 'com.quotadesk.app');
+// 非正式构建一律用独立数据目录，与正式版并排运行互不干扰（单实例锁按数据目录区分，
+// 正式版常驻运行也不挡开发/测试实例），也避免半成品代码污染真实数据。
+// 需要贴着真实数据排查时，退出正式版后加 --qd-share-data 启动即可共享。
+const userDataDirName = IS_TEST_BUILD ? 'Quota Desk Test' : process.defaultApp ? 'Quota Desk Dev' : 'Quota Desk';
+const shareRealData = process.argv.includes('--qd-share-data');
+if (shareRealData) app.setPath('userData', path.join(app.getPath('appData'), 'Quota Desk'));
+else app.setPath('userData', path.join(app.getPath('appData'), userDataDirName));
 
 // 启动诊断日志:排障用,记录启动路径上的关键节点与渲染进程错误。
 // 追加写 userData/startup-debug.log,超过 512KB 重开;写失败静默降级,绝不影响启动。
@@ -131,6 +141,18 @@ const themeColors = (theme) => (theme === 'light'
 const savedTheme = () => (store?.loadState()?.settings?.theme === 'light' ? 'light' : 'dark');
 const RELEASES_URL = 'https://github.com/AloneAtWar/QuateDesk/releases';
 const distPath = path.join(__dirname, '..', 'dist', 'index.html');
+// dev:desktop 开发模式由 build/dev-desktop.cjs 注入 QD_DEV_URL，渲染页改吃 Vite 开发
+// 服务器（HMR 热更新）；不注入时行为不变（加载打包产物）。
+const devServerUrl = process.env.QD_DEV_URL || '';
+const loadAppPage = (window, query = {}) => {
+  if (devServerUrl) {
+    const url = new URL(devServerUrl);
+    for (const [key, value] of Object.entries(query)) url.searchParams.set(key, String(value));
+    return window.loadURL(url.toString());
+  }
+  return window.loadFile(distPath, Object.keys(query).length ? { query } : undefined);
+};
+if (devServerUrl) startupLog(`dev: 渲染页走 Vite 开发服务器 ${devServerUrl}`);
 const preloadPath = path.join(__dirname, 'preload.cjs');
 const appIconPngPath = path.join(__dirname, '..', 'dist', 'logo.png');
 const appIconSvgPath = path.join(__dirname, '..', 'dist', 'quota-desk.svg');
@@ -200,10 +222,11 @@ const setAutoLaunch = (enabled) => {
   return getAutoLaunch();
 };
 
-// 自动更新:仅在打包后的应用里加载 electron-updater;开发模式没有 app-update.yml,检查必失败
+// 自动更新:仅在打包后的应用里加载 electron-updater;开发模式没有 app-update.yml,检查必失败。
+// 测试版也不接更新:它没有自己的发布通道,放任检查会把正式版安装包拉下来装
 let autoUpdater = null;
 let updateStatus = { status: 'idle' };
-if (app.isPackaged) {
+if (app.isPackaged && !IS_TEST_BUILD) {
   try {
     ({ autoUpdater } = require('electron-updater'));
     autoUpdater.autoDownload = false; // 由用户看过更新说明后手动触发下载
@@ -292,7 +315,11 @@ function backgroundUpdateCheckAllowed() {
 }
 
 function checkForUpdates(manual = false) {
-  if (!autoUpdater) return false;
+  // 没有更新器的环境（dev / 测试版）：手动检查也要给出明确反馈，而不是点了没动静
+  if (!autoUpdater) {
+    if (manual) sendUpdateStatus({ status: 'error', errorKind: 'check', manual: true, message: IS_TEST_BUILD ? '测试版不支持应用内更新' : '当前环境不支持应用内更新' });
+    return false;
+  }
   if (updateCheckInFlight) {
     // 检查进行中：手动请求把这次检查升级为手动，让进行中的结果直接反馈给用户
     if (manual) manualUpdateCheck = true;
@@ -1478,6 +1505,24 @@ function showMainWindow() {
   mainWindow.focus();
 }
 
+// F12 / Ctrl+Shift+I 切换 DevTools，不随启动自动弹出；打包版同样可用，方便现场排障。
+// 设置里的「打开调试面板」走 devtools:toggle，行为与此一致
+function enableDevToolsShortcut(window) {
+  window.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return;
+    if (input.key !== 'F12' && !(input.control && input.shift && input.key.toLowerCase() === 'i')) return;
+    event.preventDefault();
+    toggleDevTools(window);
+  });
+}
+
+function toggleDevTools(window) {
+  if (!window || window.isDestroyed()) return false;
+  if (window.webContents.isDevToolsOpened()) window.webContents.closeDevTools();
+  else window.webContents.openDevTools({ mode: 'detach' });
+  return true;
+}
+
 function createMainWindow() {
   const area = screen.getPrimaryDisplay().workArea;
   const saved = savedMainWindowState();
@@ -1493,8 +1538,9 @@ function createMainWindow() {
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: preloadPath },
   });
   if (saved?.maximized) mainWindow.maximize();
-  mainWindow.loadFile(distPath, process.argv.includes('--onboard') ? { query: { onboard: '1' } } : undefined)
-    .catch((error) => startupLog('loadFile 失败', String(error)));
+  loadAppPage(mainWindow, process.argv.includes('--onboard') ? { onboard: '1' } : {})
+    .catch((error) => startupLog('加载主页面失败', String(error)));
+  enableDevToolsShortcut(mainWindow);
   // Windows 上只有一个真正生效的置顶层,主窗口置顶后与浮窗同层、激活即会盖到浮窗上;
   // 主窗口显示/被激活时把浮窗压回自己上方,保证自家浮窗永不被主界面挡住
   mainWindow.on('show', () => {
@@ -1575,7 +1621,8 @@ function createWidgetWindow() {
     backgroundColor: themeColors(savedTheme()).widget, title: 'Quota Desk 浮窗',
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: preloadPath },
   });
-  widgetWindow.loadFile(distPath, { query: { widget: '1' } });
+  loadAppPage(widgetWindow, { widget: '1' });
+  enableDevToolsShortcut(widgetWindow);
   widgetWindow.once('ready-to-show', () => { widgetWindow.showInactive(); ensureWidgetOnTop(); });
   // 系统恢复可见（显示桌面还原等）时同样补一次置顶
   widgetWindow.on('show', ensureWidgetOnTop);
@@ -1960,7 +2007,9 @@ function registerIpc() {
     });
     return true;
   });
-  ipcMain.handle('app:get-version', () => app.getVersion());
+  // 测试版在版本号上带 -test 后缀,设置页里肉眼就能分清当前跑的是哪个构建
+  ipcMain.handle('app:get-version', () => (IS_TEST_BUILD ? `${app.getVersion()}-test` : app.getVersion()));
+  ipcMain.handle('devtools:toggle', () => toggleDevTools(mainWindow));
   ipcMain.handle('app:get-auto-launch', () => getAutoLaunch());
   ipcMain.handle('app:set-auto-launch', (_event, enabled) => { const result = setAutoLaunch(enabled); refreshTray(); return result; });
   ipcMain.handle('app:set-auto-update', (_event, enabled) => { setAutoUpdateEnabled(Boolean(enabled)); return true; });

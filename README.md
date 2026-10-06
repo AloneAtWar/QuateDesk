@@ -197,9 +197,12 @@ Quota Desk 可以读取本机 `~/.cc-switch/cc-switch.db`，列出能够识别�
 ```bash
 npm install
 npm test
-npm run dev
-npm run desktop
+npm run dev          # 纯浏览器预览（无桌面能力）
+npm run desktop      # 构建后在 Electron 里跑（无热更新）
+npm run dev:desktop  # Vite 热更新 + 真 Electron（日常调试首选）
 ```
+
+`dev:desktop` 会同时启动 Vite 开发服务器和 Electron：渲染代码改动即时热更新，`electron/` 主进程代码改动自动重启应用。托盘、浮窗、通知、DPAPI 等桌面能力全部可用；图标与「远程查看」页面仍取自上次 `npm run build` 的 `dist/`。开发实例默认使用独立数据目录 `%APPDATA%\Quota Desk Dev`（可与常驻的正式版并排运行，首次是空数据，可在设置里用「导出/导入数据」把正式数据导一份过来），加 `--qd-share-data` 启动则直接共享正式数据目录（此时需先退出正式版）。
 
 生成安装包：
 
@@ -208,6 +211,16 @@ npm run dist:win
 npm run dist:mac
 npm run dist:linux
 ```
+
+本地打一个「测试版」便携 exe（不进 CI、不发布，输出到 `release-test/`）：
+
+```bash
+npm run dist:test
+```
+
+测试版是独立的应用身份（Quota Desk Test），数据目录也是独立的 `%APPDATA%\Quota Desk Test`，可与正式版并排运行；需要贴着真实数据排查时可加 `--qd-share-data` 参数启动以共享正式数据目录。测试版禁用应用内更新，设置页版本号带 `-test` 后缀。
+
+调试面板在所有构建里都可用（不随启动自动弹出）：主窗口按 `F12` 或 `Ctrl+Shift+I` 切换，也可在「设置 → 系统与更新 → 打开调试面板」打开。
 
 项目使用 Electron、React 和 Vite 构建，额度数据只在本机处理。
 
