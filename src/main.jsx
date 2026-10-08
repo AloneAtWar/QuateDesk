@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import {
@@ -12,6 +12,7 @@ import { clampRemainingWeight, comparePriority } from './priority-score';
 import { newApiTemplateScript } from './newapi-template';
 import { computeUsageStreaks, formatProviderUsageCost, formatProviderUsageSummaryTokens } from './provider-usage-format';
 import LocalCliUsageView from './local-cli-usage/LocalCliUsageView';
+import StatisticsView from './statistics/StatisticsView';
 import qrcode from 'qrcode-generator';
 import { AppShell } from './app-shell';
 import './styles.css';
@@ -345,7 +346,7 @@ const providerUsageToday = (timezoneOffsetSec = 8 * 60 * 60) => {
 // 服务端用量固定展示近 1 年（与主进程 deepSeekDateRange 的上限一致），不提供范围切换
 const PROVIDER_USAGE_RANGE_DAYS = 365;
 
-function Logo({ provider, size = 'md', interactive = true }) {
+export function Logo({ provider, size = 'md', interactive = true }) {
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [provider?.logo]);
   const site = interactive ? providerWebsite(provider) : '';
@@ -3401,10 +3402,18 @@ function App() {
   const [overviewMode, setOverviewMode] = useState('rings');
   // 额度历史折线图视图：点账号卡片进入，返回按钮或右上角视图切换退出
   const [historyAccountId, setHistoryAccountId] = useState(null);
-  // 本机用量视图：标题栏刷新按钮切换为扫描本机记录。
+  // 共享统计入口：刷新只读取当前统计内容，不触发账号额度检查。
+  const [statisticsMode, setStatisticsMode] = useState('local-usage');
   const localUsageApiRef = useRef(null);
   const [localUsageMeta, setLocalUsageMeta] = useState(null);
-  const inLocalUsageView = overviewMode === 'local-usage' && !historyAccountId;
+  const handleLocalUsageMeta = useCallback((next) => {
+    setLocalUsageMeta((previous) => previous?.scanning === next.scanning && previous?.lastScannedAt === next.lastScannedAt ? previous : next);
+  }, []);
+  const wasteApiRef = useRef(null);
+  const [wasteMeta, setWasteMeta] = useState(null);
+  const inStatisticsView = overviewMode === 'local-usage' && !historyAccountId;
+  const inLocalUsageView = inStatisticsView && statisticsMode === 'local-usage';
+  const inWasteView = inStatisticsView && statisticsMode === 'waste';
   const [accounts, setAccounts] = useState(bridge ? [] : initialAccounts);
   const [providers, setProviders] = useState(providerCatalog);
   const [settings, setSettings] = useState(() => normalizeSettings({}));
@@ -3695,9 +3704,12 @@ function App() {
   const historyAccount = historyAccountId ? accounts.find((item) => item.id === historyAccountId) : null;
 
   const handleGlobalRefresh = () => {
-    if (!inLocalUsageView) { refreshAll(); return; }
+    if (!inStatisticsView) { refreshAll(); return; }
     setRefreshing(true);
-    Promise.resolve(localUsageApiRef.current?.refresh?.()).finally(() => { setRefreshing(false); });
+    const api = inLocalUsageView ? localUsageApiRef.current : wasteApiRef.current;
+    Promise.resolve(api?.refresh?.()).catch((error) => {
+      setToast({ id: Date.now(), ok: false, message: error.message || '统计刷新失败' });
+    }).finally(() => { setRefreshing(false); });
   };
 
   // 首次引导：仅在没有账号 且 未标记完成时出现；老用户升级后已有账号 → 启动时自动补记 onboarded
@@ -3715,15 +3727,15 @@ function App() {
   };
 
   const appShellControls = <>
-    <span className="last-checked" title={inLocalUsageView ? '最后一次本机用量扫描时间' : '最后一次额度检查时间'}><Clock3 size={11} />{inLocalUsageView ? (localUsageMeta?.lastScannedAt ? formatChecked(localUsageMeta.lastScannedAt) : '未扫描') : formatChecked(lastSync)}</span>
+    <span className="last-checked" title={inLocalUsageView ? '最后一次本机用量扫描时间' : inWasteView ? '最后一次历史周期读取时间' : '最后一次额度检查时间'}><Clock3 size={11} />{inLocalUsageView ? (localUsageMeta?.lastScannedAt ? formatChecked(localUsageMeta.lastScannedAt) : '未扫描') : inWasteView ? (wasteMeta?.loadedAt ? formatChecked(wasteMeta.loadedAt) : '未读取') : formatChecked(lastSync)}</span>
     {update && ['available', 'downloading', 'downloaded', 'error'].includes(update.status) && !(update.status === 'available' && update.version && update.version === settings.ignoredUpdateVersion) && <button className={`update-badge ${update.status}`} onClick={() => setUpdateOpen(true)} title="查看版本更新"><Download size={11} />{update.status === 'available' && `v${update.version} 可更新`}{update.status === 'downloading' && `下载中 ${update.percent || 0}%`}{update.status === 'downloaded' && '重启升级'}{update.status === 'error' && '更新失败'}</button>}
-    <button className="control-solo" onClick={handleGlobalRefresh} disabled={refreshing} title={inLocalUsageView ? '重新扫描本机用量' : '立即刷新全部账号'} aria-label={inLocalUsageView ? '重新扫描本机用量' : '立即刷新全部账号'}><RefreshCw size={13} className={refreshing || (inLocalUsageView && localUsageMeta?.scanning) ? 'spinning' : ''} /></button>
+    <button className="control-solo" onClick={handleGlobalRefresh} disabled={refreshing || (inWasteView && wasteMeta?.loading)} title={inLocalUsageView ? '重新扫描本机用量' : inWasteView ? '重新读取历史浪费' : '立即刷新全部账号'} aria-label={inLocalUsageView ? '重新扫描本机用量' : inWasteView ? '重新读取历史浪费' : '立即刷新全部账号'}><RefreshCw size={13} className={refreshing || (inLocalUsageView && localUsageMeta?.scanning) || (inWasteView && wasteMeta?.loading) ? 'spinning' : ''} /></button>
     <div className="overview-controls" aria-label="全局视图">
       <button className={overviewMode === 'rings' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rings'); }} title="账号总览" aria-label="账号总览"><CircleGauge size={13} /></button>
       <button className={overviewMode === 'rows' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rows'); }} title="行式明细" aria-label="行式明细"><Rows3 size={13} /></button>
       <button className={overviewMode === 'periods' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('periods'); }} title="周期明细" aria-label="周期明细"><Clock3 size={13} /></button>
     </div>
-    <button className={`control-solo local-usage-control${inLocalUsageView ? ' active' : ''}`} onClick={() => { setHistoryAccountId(null); setOverviewMode('local-usage'); }} title="本机用量" aria-label="本机用量"><ChartNoAxesCombined size={13} /></button>
+    <button className={`control-solo local-usage-control${inStatisticsView ? ' active' : ''}`} onClick={() => { setHistoryAccountId(null); setOverviewMode('local-usage'); }} title="统计" aria-label="统计"><ChartNoAxesCombined size={13} /></button>
   </>;
   const appShellActions = <>
     <button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={13} /></button>
@@ -3732,8 +3744,8 @@ function App() {
 
   return <AppShell controls={appShellControls} actions={appShellActions}>
     {toast && <div className={`toast ${toast.ok ? 'ok' : 'fail'}`} role="status">{toast.ok ? <Check size={13} /> : <AlertCircle size={13} />}<span>{toast.message}</span></div>}
-    <main className={`main-shell${inLocalUsageView ? ' local-usage-mode' : ''}`}>
-      <div className={`content-area${inLocalUsageView ? ' local-usage-mode' : ''}`}>{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{inLocalUsageView ? <LocalCliUsageView settings={settings} setSettings={setSettings} onApi={(api) => { localUsageApiRef.current = api; }} onMetaChange={setLocalUsageMeta} /> : onboardOpen ? <OnboardingWizard settings={settings} setSettings={setSettings} accounts={accounts} providers={providers} ccswitchAvailable={Boolean(bridge?.scanCcswitchImport) || new URLSearchParams(window.location.search).get('onboard') === '1'} onOpenImport={() => setModal('account')} onApplyCcswitch={async (keys, chosen) => {
+    <main className={`main-shell${inStatisticsView ? ' local-usage-mode' : ''}`}>
+      <div className={`content-area${inStatisticsView ? ' local-usage-mode' : ''}`}>{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{inStatisticsView ? <StatisticsView mode={statisticsMode} onModeChange={setStatisticsMode} accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} Logo={Logo} api={bridge} onLocalApi={(api) => { localUsageApiRef.current = api; }} onLocalMeta={handleLocalUsageMeta} onWasteApi={(api) => { wasteApiRef.current = api; }} onWasteMeta={setWasteMeta} /> : onboardOpen ? <OnboardingWizard settings={settings} setSettings={setSettings} accounts={accounts} providers={providers} ccswitchAvailable={Boolean(bridge?.scanCcswitchImport) || new URLSearchParams(window.location.search).get('onboard') === '1'} onOpenImport={() => setModal('account')} onApplyCcswitch={async (keys, chosen) => {
         if (!bridge) {
           // 网页演示模式：直接把选中的模拟条目变成账号，走与真实导入一致的落库形态
           const stamp = Date.now();

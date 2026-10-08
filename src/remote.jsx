@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AlertCircle, ArrowUpRight, ChartNoAxesCombined, CircleGauge, Clock3, KeyRound, LockKeyhole, Moon, RefreshCw, Rows3, ShieldCheck, Sun, WifiOff } from 'lucide-react';
-import { HistoryView, StatusView } from './main.jsx';
-import LocalCliUsageView from './local-cli-usage/LocalCliUsageView';
+import { HistoryView, Logo, StatusView } from './main.jsx';
+import StatisticsView from './statistics/StatisticsView';
 import { AppShell } from './app-shell';
 import { initialAccounts, providerCatalog } from './data';
 import './styles.css';
@@ -164,6 +164,9 @@ function App() {
   const [connectionError, setConnectionError] = useState('');
   const [selectedAccountId, setSelectedAccountId] = useState(null);
   const [mode, setMode] = useState(() => localStorage.getItem(MODE_KEY) || 'rings');
+  const [statisticsMode, setStatisticsMode] = useState('local-usage');
+  const statisticsApiRef = useRef(null);
+  const [statisticsLoading, setStatisticsLoading] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [theme, setTheme] = useState(() => localStorage.getItem(THEME_KEY) || 'dark');
   // 本机用量在远程页是只读会话:设置不落库,仅本页生效(合并同名模型开关等)
@@ -308,19 +311,25 @@ function App() {
     </main>
   </AppShell>;
   if (!token || pairingKey) return <Pairing pairingKey={pairingKey} onConnect={connect} message={pairError} theme={theme} setTheme={setTheme} />;
-  const inLocalUsageView = mode === 'local-usage' && !selectedAccountId;
+  const inStatisticsView = mode === 'local-usage' && !selectedAccountId;
+  const refreshStatistics = async () => {
+    setStatisticsLoading(true);
+    try { await statisticsApiRef.current?.refresh?.(); }
+    catch (error) { setConnectionError(error.message || '无法读取统计数据'); }
+    finally { setStatisticsLoading(false); }
+  };
   const shellControls = <>
     <span className="last-checked" title="最后一次额度检查时间"><Clock3 size={11} />{lastSync ? new Date(lastSync).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '尚未检查'}</span>
-    <button type="button" className="control-solo" onClick={() => location.reload()} title="重新读取电脑数据" aria-label="重新读取电脑数据"><RefreshCw size={13} /></button>
+    <button type="button" className="control-solo" onClick={inStatisticsView ? refreshStatistics : () => location.reload()} disabled={statisticsLoading} title={inStatisticsView ? '重新读取统计数据' : '重新读取电脑数据'} aria-label={inStatisticsView ? '重新读取统计数据' : '重新读取电脑数据'}><RefreshCw size={13} className={statisticsLoading ? 'spinning' : ''} /></button>
     <div className="overview-controls" aria-label="额度展示方式">{[['rings', '账号总览', CircleGauge], ['rows', '行式明细', Rows3], ['periods', '周期明细', Clock3]].map(([key, label, Icon]) => <button type="button" key={key} className={mode === key && !selectedAccountId ? 'active' : ''} onClick={() => { setSelectedAccountId(null); setMode(key); }} title={label} aria-label={label}><Icon size={13} /></button>)}</div>
-    <button type="button" className={`control-solo local-usage-control${inLocalUsageView ? ' active' : ''}`} onClick={() => { setSelectedAccountId(null); setMode('local-usage'); }} title="本机用量" aria-label="本机用量"><ChartNoAxesCombined size={13} /></button>
+    <button type="button" className={`control-solo local-usage-control${inStatisticsView ? ' active' : ''}`} onClick={() => { setSelectedAccountId(null); setMode('local-usage'); }} title="统计" aria-label="统计"><ChartNoAxesCombined size={13} /></button>
     <button type="button" className="remote-title-theme" onClick={() => setTheme((old) => old === 'dark' ? 'light' : 'dark')} aria-label={theme === 'dark' ? '切换亮色主题' : '切换暗色主题'}>{theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}</button>
   </>;
   return <AppShell variant="remote" controls={shellControls}>
-    <main className={`main-shell content-area remote-main${inLocalUsageView ? ' local-usage-mode' : ''}`}>
+    <main className={`main-shell content-area remote-main${inStatisticsView ? ' local-usage-mode' : ''}`}>
       {connectionError && <div className="remote-banner offline" role="status"><WifiOff size={18} /><span>{connectionError}{snapshot ? '，下方保留本次读取的数据。' : '。'}</span></div>}
       {loading && !snapshot ? <div className="remote-loading"><RefreshCw size={23} className="spinning" /><span>正在读取电脑上的额度</span></div> : snapshot ? <>
-        {selectedAccount ? <HistoryView key={selectedAccount.id} account={selectedAccount} provider={selectedProvider} onBack={() => setSelectedAccountId(null)} settings={localCliSettings} setSettings={setLocalCliSettings} readOnly wasteWindowsOverride={selectedAccount.wasteWindows} /> : inLocalUsageView ? <LocalCliUsageView settings={localCliSettings} setSettings={setLocalCliSettings} /> : <>
+        {selectedAccount ? <HistoryView key={selectedAccount.id} account={selectedAccount} provider={selectedProvider} onBack={() => setSelectedAccountId(null)} settings={localCliSettings} setSettings={setLocalCliSettings} readOnly wasteWindowsOverride={selectedAccount.wasteWindows} /> : inStatisticsView ? <StatisticsView mode={statisticsMode} onModeChange={setStatisticsMode} accounts={accounts} providers={providers} settings={localCliSettings} setSettings={setLocalCliSettings} Logo={Logo} api={bridge} onLocalApi={(api) => { if (statisticsMode === 'local-usage') statisticsApiRef.current = api; }} onWasteApi={(api) => { if (statisticsMode === 'waste') statisticsApiRef.current = api; }} /> : <>
           <StatusView accounts={accounts} providers={providers} mode={mode} readOnly onOpenHistory={(account) => setSelectedAccountId(account.id)} lastSync={lastSync} reminderRules={snapshot.settings?.alerts === false ? [] : snapshot.settings?.reminderRules || []} sortWeights={{ fiveHourRemaining: snapshot.settings?.periodSort5hRemaining, otherRemaining: snapshot.settings?.periodSortLongRemaining }} testResults={{}} />
         </>}
       </> : !loading && <div className="remote-empty"><WifiOff size={23} /><strong>暂时无法读取额度</strong><span>请确认电脑正在运行并可通过配对地址访问</span></div>}
