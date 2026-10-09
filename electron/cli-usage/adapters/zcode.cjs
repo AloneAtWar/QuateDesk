@@ -1,11 +1,12 @@
 // ZCode 适配器:只读查询 ~/.zcode/cli/db/db.sqlite 的 model_usage。
 // ZCode 使用 WAL,直接以 readOnly 打开原库(能读到 WAL 中未 checkpoint 的最新行),
 // 绝不复制单文件、绝不用 immutable 模式。input_tokens 含缓存读写,需扣除。
+// 例外:UNC(\\wsl$)路径经 openSqlite 复制副本后打开,9P 不支持文件锁。
 const fs = require('node:fs');
 const path = require('node:path');
-const { DatabaseSync } = require('node:sqlite');
 const { detectZcodeRoots } = require('../paths.cjs');
 const { buildUsageEvent } = require('../normalize.cjs');
+const { openSqlite } = require('./sqlite-open.cjs');
 
 const QUERY_SQL = `
 SELECT
@@ -40,11 +41,12 @@ const adapter = {
       ctx.markRoot(root.rootId, 'missing', null);
       return;
     }
+    let opened;
     let db;
     let rows;
     try {
-      db = new DatabaseSync(dbPath, { readOnly: true });
-      try { db.exec('PRAGMA busy_timeout = 2000'); } catch { /* 只读连接忽略 */ }
+      opened = openSqlite(dbPath);
+      db = opened.db;
       const state = ctx.getFileState(root.rootId, 'db.sqlite');
       const now = Date.now();
       const lastScan = Number(state?.lastScanMs) || 0;
@@ -55,6 +57,7 @@ const adapter = {
       return;
     } finally {
       try { db?.close(); } catch { /* 关闭失败忽略 */ }
+      try { opened?.cleanup?.(); } catch { /* 清理失败忽略 */ }
     }
     ctx.saveFileState(root.rootId, 'db.sqlite', { lastScanMs: Date.now(), formatVersion: 1 });
     for (const row of rows) {

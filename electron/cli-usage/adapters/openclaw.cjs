@@ -5,11 +5,11 @@
 // SQLite 行(带修正后计费)通过 UPSERT 自然覆盖 JSONL 旧值。
 const fs = require('node:fs');
 const path = require('node:path');
-const { DatabaseSync } = require('node:sqlite');
 const { detectOpenclawRoots } = require('../paths.cjs');
 const { buildUsageEvent } = require('../normalize.cjs');
 const { walkJsonlLines, parseJsonLine } = require('./jsonl-walk.cjs');
 const { lenientUint, parseIsoTimestampMs, applyTotalTokenFallback } = require('./parse-utils.cjs');
+const { openSqlite } = require('./sqlite-open.cjs');
 
 const toUint = (value) => lenientUint(value) ?? 0;
 
@@ -164,10 +164,11 @@ const adapter = {
       const state = ctx.getFileState(root.rootId, fileKey);
       if (state && Number(state.size) === stat.size && Number(state.mtimeMs) === Math.floor(stat.mtimeMs)) continue;
       let rows = [];
+      let opened;
       let db;
       try {
-        db = new DatabaseSync(dbPath, { readOnly: true });
-        try { db.exec('PRAGMA busy_timeout = 2000'); } catch { /* 只读连接忽略 */ }
+        opened = openSqlite(dbPath);
+        db = opened.db;
         const hasTable = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'transcript_events' LIMIT 1").get();
         if (hasTable) rows = db.prepare('SELECT session_id, seq, event_json, created_at FROM transcript_events ORDER BY session_id ASC, seq ASC').all();
       } catch (error) {
@@ -175,6 +176,7 @@ const adapter = {
         continue;
       } finally {
         try { db?.close(); } catch { /* 关闭失败忽略 */ }
+        try { opened?.cleanup?.(); } catch { /* 清理失败忽略 */ }
       }
       // 同一 (session, seq) 流内维护模型状态;按 session 分组回放
       const bySession = new Map();

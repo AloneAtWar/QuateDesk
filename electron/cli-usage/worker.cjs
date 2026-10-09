@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { parentPort, workerData } = require('node:worker_threads');
 const { CliUsageStore, AGENT_ORDER } = require('./store.cjs');
+const wsl = require('./wsl.cjs');
 const adapters = {
   zcode: require('./adapters/zcode.cjs'),
   kimi: require('./adapters/kimi.cjs'),
@@ -60,6 +61,8 @@ class CliUsageWorker {
   }
 
   async runScan() {
+    // WSL 开关关闭时:扫描前先清除已入库的 WSL 事件/游标/登记,统计不再含 WSL
+    if (!wsl.isWslEnabled()) this.store.purgeWslRoots();
     const runId = this.store.beginScanRun();
     let upserted = 0;
     let ok = true;
@@ -69,6 +72,7 @@ class CliUsageWorker {
       const rootResults = new Map();
       try {
         const roots = await adapter.detect();
+        this.store.registerRoots(id, roots);
         for (const root of roots) {
           rootResults.set(root.rootId, { status: root.exists ? 'ready' : 'missing', warning: null, files: 0 });
           if (!root.exists) continue;
@@ -86,6 +90,7 @@ class CliUsageWorker {
           try {
             let batch = [];
             for await (const event of adapter.collect(root, ctx)) {
+              event.rootId = root.rootId;
               batch.push(event);
               if (batch.length >= BATCH_SIZE) { upserted += this.store.upsertEvents(batch); batch = []; }
             }
@@ -154,6 +159,9 @@ class CliUsageWorker {
 }
 
 const worker = new CliUsageWorker(workerData.dbPath);
+wsl.setWslEnabled(workerData.scanWsl !== false);
+// 启动即处于关闭状态:立即清除历史 WSL 数据(幂等,无数据时是空操作)
+if (!wsl.isWslEnabled()) worker.store.purgeWslRoots();
 
 const handlers = {
   scan: () => worker.scan(),
@@ -163,6 +171,12 @@ const handlers = {
 };
 
 parentPort.on('message', async (message) => {
+  // 无 id 的 config 消息:只更新开关,不回复;关闭 WSL 时同步清除已入库的 WSL 数据
+  if (message?.type === 'config') {
+    wsl.setWslEnabled(message.scanWsl !== false);
+    if (!wsl.isWslEnabled()) worker.store.purgeWslRoots();
+    return;
+  }
   const handler = handlers[message?.type];
   if (!handler || !message.id) return;
   try {

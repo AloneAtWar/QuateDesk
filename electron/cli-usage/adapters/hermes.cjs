@@ -3,10 +3,10 @@
 // 缺口(extra),provider 归一化;跨库同 session 幂等(键含 rootId,重扫 UPSERT)。
 const fs = require('node:fs');
 const path = require('node:path');
-const { DatabaseSync } = require('node:sqlite');
 const { detectHermesRoots } = require('../paths.cjs');
 const { buildUsageEvent } = require('../normalize.cjs');
 const { lenientUint } = require('./parse-utils.cjs');
+const { openSqlite } = require('./sqlite-open.cjs');
 
 const QUERY_SQL = `
 SELECT
@@ -69,16 +69,18 @@ const adapter = {
       return;
     }
     let rows = [];
+    let opened;
     let db;
     try {
-      db = new DatabaseSync(dbPath, { readOnly: true });
-      try { db.exec('PRAGMA busy_timeout = 2000'); } catch { /* 只读连接忽略 */ }
+      opened = openSqlite(dbPath);
+      db = opened.db;
       rows = db.prepare(QUERY_SQL).all();
     } catch (error) {
       ctx.markRoot(root.rootId, 'incompatible', `Hermes 数据库无法读取(${error.code || 'SCHEMA'})`);
       return;
     } finally {
       try { db?.close(); } catch { /* 关闭失败忽略 */ }
+      try { opened?.cleanup?.(); } catch { /* 清理失败忽略 */ }
     }
     ctx.saveFileState(root.rootId, 'state.db', { lastScanMs: Date.now(), formatVersion: 1 });
     for (const row of rows) {

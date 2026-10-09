@@ -26,11 +26,12 @@ class CliUsageService {
     this.scanPromise = null;
     this.backgroundTimer = null;
     this.enabled = false;
+    this.scanWsl = true;
   }
 
   ensureWorker() {
     if (this.worker && this.workerReady) return this.workerReady;
-    this.worker = new Worker(path.join(__dirname, 'worker.cjs'), { workerData: { dbPath: this.dbPath } });
+    this.worker = new Worker(path.join(__dirname, 'worker.cjs'), { workerData: { dbPath: this.dbPath, scanWsl: this.scanWsl } });
     this.workerReady = new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new CliUsageError('本机用量服务启动超时')), 15_000);
       this.worker.once('message', (message) => {
@@ -143,6 +144,9 @@ class CliUsageService {
   // ---- 后台增量 ----------------------------------------------------------
 
   applySettings(settings) {
+    // WSL 扫描开关:worker 已启动则即时推送,未启动则随 workerData 带上
+    this.scanWsl = settings?.localCliUsage?.scanWsl !== false;
+    if (this.worker) this.worker.postMessage({ type: 'config', scanWsl: this.scanWsl });
     const enabled = settings?.localCliUsage?.enabled === true;
     if (enabled === this.enabled) return;
     this.enabled = enabled;

@@ -5,10 +5,10 @@
 // 聚合是会话累计值,一旦会话出现消息行即撤回聚合事件,避免双计。
 const fs = require('node:fs');
 const path = require('node:path');
-const { DatabaseSync } = require('node:sqlite');
 const { detectOpencodeRoots } = require('../paths.cjs');
 const { buildUsageEvent } = require('../normalize.cjs');
 const { lenientUint, applyTotalTokenFallback } = require('./parse-utils.cjs');
+const { openSqlite } = require('./sqlite-open.cjs');
 
 const OPENCODE_LOOKBACK_DAYS = 7;
 
@@ -118,10 +118,11 @@ const adapter = {
       ctx.markRoot(root.rootId, 'missing', null);
       return;
     }
+    let opened;
     let db;
     try {
-      db = new DatabaseSync(dbPath, { readOnly: true });
-      try { db.exec('PRAGMA busy_timeout = 2000'); } catch { /* 只读连接忽略 */ }
+      opened = openSqlite(dbPath);
+      db = opened.db;
     } catch (error) {
       ctx.markRoot(root.rootId, 'incompatible', `OpenCode 数据库无法读取(${error.code || 'SCHEMA'})`);
       return;
@@ -272,6 +273,7 @@ const adapter = {
       ctx.markRoot(root.rootId, 'ready', null);
     } finally {
       try { db.close(); } catch { /* 关闭失败忽略 */ }
+      try { opened?.cleanup?.(); } catch { /* 清理失败忽略 */ }
     }
   },
 };

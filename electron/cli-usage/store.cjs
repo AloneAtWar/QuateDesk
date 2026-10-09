@@ -9,18 +9,18 @@ const {
   buildDayBoundaries, localDateString, computeStreaks, createModelRuleMatcher,
 } = require('./normalize.cjs');
 
-const SCHEMA_VERSION = '1';
+const SCHEMA_VERSION = '2';
 
 const AGENT_ORDER = ['zcode', 'kimi', 'claude', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'openclaw', 'hermes', 'dsh'];
 
 const UPSERT_EVENT_SQL = `
 INSERT INTO usage_events (
-  event_key, agent, occurred_at_ms, session_key, project_key, model, canonical_model_key,
+  event_key, agent, root_id, occurred_at_ms, session_key, project_key, model, canonical_model_key,
   input_tokens, cache_read_tokens, cache_write_tokens, output_tokens,
   reasoning_tokens, extra_tokens, total_tokens, request_count,
   source_version, exact, is_sidechain
 ) VALUES (
-  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 )
 ON CONFLICT(event_key) DO UPDATE SET
   -- 同一会话内的流式最终快照取更晚时间;跨会话回放(同 message.id、不同 session)
@@ -28,6 +28,7 @@ ON CONFLICT(event_key) DO UPDATE SET
   occurred_at_ms = CASE WHEN excluded.session_key = session_key
     THEN MAX(occurred_at_ms, excluded.occurred_at_ms)
     ELSE MIN(occurred_at_ms, excluded.occurred_at_ms) END,
+  root_id = COALESCE(excluded.root_id, root_id),
   session_key = excluded.session_key,
   project_key = excluded.project_key,
   model = COALESCE(excluded.model, model),
@@ -64,6 +65,7 @@ CREATE TABLE IF NOT EXISTS source_files (
 CREATE TABLE IF NOT EXISTS usage_events (
   event_key TEXT PRIMARY KEY,
   agent TEXT NOT NULL,
+  root_id TEXT,
   occurred_at_ms INTEGER NOT NULL,
   session_key TEXT NOT NULL,
   project_key TEXT,
@@ -93,9 +95,22 @@ CREATE TABLE IF NOT EXISTS scan_runs (
   events_upserted INTEGER,
   error TEXT
 );
+CREATE TABLE IF NOT EXISTS scan_roots (
+  root_id TEXT PRIMARY KEY,
+  agent TEXT NOT NULL,
+  label TEXT,
+  is_wsl INTEGER NOT NULL DEFAULT 0
+);
 `);
     this.ensureMeta();
+    this.migrate();
     this.upsertEventStatement = this.db.prepare(UPSERT_EVENT_SQL);
+  }
+
+  // 老库(schema v1)的 usage_events 没有 root_id,补列后 WSL 事件才能按根清除
+  migrate() {
+    const columns = this.db.prepare('PRAGMA table_info(usage_events)').all().map((col) => col.name);
+    if (!columns.includes('root_id')) this.db.exec('ALTER TABLE usage_events ADD COLUMN root_id TEXT');
   }
 
   ensureMeta() {
@@ -119,7 +134,7 @@ CREATE TABLE IF NOT EXISTS scan_runs (
       for (const event of events) {
         if (!event || !event.eventKey || !event.agent) continue;
         this.upsertEventStatement.run(
-          event.eventKey, event.agent, event.occurredAtMs, event.sessionKey,
+          event.eventKey, event.agent, event.rootId ?? null, event.occurredAtMs, event.sessionKey,
           event.projectKey, event.model, event.canonicalModelKey,
           event.inputTokens, event.cacheReadTokens, event.cacheWriteTokens, event.outputTokens,
           event.reasoningTokens, event.extraTokens, event.totalTokens, event.requestCount,
@@ -174,6 +189,39 @@ ON CONFLICT(agent, root_id, file_key) DO UPDATE SET
     if (beforeMs !== null) { clauses.push('occurred_at_ms <= ?'); params.push(beforeMs); }
     const row = this.db.prepare(`DELETE FROM usage_events WHERE ${clauses.join(' AND ')}`).run(...params);
     return Number(row?.changes || 0);
+  }
+
+  // ---- 根目录登记与 WSL 清除 ----------------------------------------------
+
+  // 每次扫描登记检测到的根目录;isWsl 标记用于关闭 WSL 开关后的精确清除
+  registerRoots(agent, roots) {
+    const statement = this.db.prepare(`
+INSERT INTO scan_roots (root_id, agent, label, is_wsl) VALUES (?, ?, ?, ?)
+ON CONFLICT(root_id) DO UPDATE SET agent = excluded.agent, label = excluded.label, is_wsl = excluded.is_wsl
+`);
+    for (const root of roots) {
+      statement.run(root.rootId, agent, root.rootLabel ?? null, root.isWsl ? 1 : 0);
+    }
+  }
+
+  // 关闭"统计 WSL 用量"时调用:删除 WSL 根目录的事件、游标与登记,
+  // 重新扫描后统计即不含 WSL;本机根目录的数据不受影响
+  purgeWslRoots() {
+    const wslRoots = this.db.prepare('SELECT root_id AS rootId FROM scan_roots WHERE is_wsl = 1').all().map((row) => row.rootId);
+    if (!wslRoots.length) return 0;
+    const placeholders = wslRoots.map(() => '?').join(',');
+    let deleted = 0;
+    this.db.exec('BEGIN');
+    try {
+      deleted = Number(this.db.prepare(`DELETE FROM usage_events WHERE root_id IN (${placeholders})`).run(...wslRoots)?.changes || 0);
+      this.db.prepare(`DELETE FROM source_files WHERE root_id IN (${placeholders})`).run(...wslRoots);
+      this.db.prepare('DELETE FROM scan_roots WHERE is_wsl = 1').run();
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return deleted;
   }
 
   // ---- 扫描记录 ----------------------------------------------------------
