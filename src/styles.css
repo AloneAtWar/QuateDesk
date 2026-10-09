@@ -945,12 +945,14 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 /* 热力图视图 */
 .local-cli-heatmap-view { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .local-cli-heatmap-scroll { margin-bottom: 6px; }
+/* 拖拽当日模型面板时的下限保护:热力图至少保留 130px,不会被完全挤出 */
+.local-cli-page:not(.embedded) .local-cli-heatmap-scroll { min-height: 130px; }
 
 /* 当日模型横向滚动区:外框高度固定,滚动条走预留轨道,溢出不改变页面布局 */
 .local-cli-day-models { flex: 0 0 auto; }
 .local-cli-day-models-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 1px 4px; }
 .local-cli-day-models-title { color: var(--ink-soft); font-size: 10px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.local-cli-day-models-frame { height: 88px; min-height: 88px; overflow: hidden; border: 1px solid var(--line-inner); border-radius: 8px; background: var(--surface-2); }
+.local-cli-day-models-frame { height: 88px; min-height: 88px; overflow: hidden; border: 1px solid var(--line-inner); border-radius: 8px; background: var(--surface-2); container-type: size; }
 .local-cli-page.embedded .local-cli-day-models-frame { height: 36px; min-height: 36px; }
 .local-cli-page.embedded .local-cli-day-models-track { padding-top: 3px; padding-bottom: 3px; }
 .local-cli-page.embedded .local-cli-day-model-card { padding: 2px 7px; }
@@ -1512,4 +1514,33 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
   .local-cli-model-more { font-size: 11px; }
   .local-cli-scope-models em { font-size: 12px; }
   .local-cli-scope-help svg { width: 17px; height: 17px; }
+}
+
+/* 垂直拖拽分隔条:本机用量、额度浪费共用;静止时只是一条细线,悬停/拖拽才放大 */
+.resize-handle { flex: 0 0 auto; height: 10px; margin: -3px 0; display: grid; place-items: center; cursor: row-resize; touch-action: none; border-radius: 5px; position: relative; z-index: 2; }
+.resize-handle i { width: 24px; height: 2px; border-radius: 1px; background: var(--line-strong); opacity: .75; transition: width .15s, height .15s, background .15s, opacity .15s; }
+.resize-handle:hover i, .resize-handle.dragging i, .resize-handle:focus-visible i { width: 54px; height: 3px; background: var(--green); opacity: 1; }
+.resize-handle:focus-visible { outline: 2px solid var(--focus-border); outline-offset: -1px; }
+body.row-resizing, body.row-resizing * { cursor: row-resize !important; user-select: none !important; }
+
+/* 当日模型面板被拖高后,卡片随容器高度逐级放大(尺寸与字号),充分利用纵向空间;
+   放在宽屏断点之后,保证面板拉高时容器查询覆盖断点的固定卡片尺寸 */
+@container (min-height: 140px) {
+  .local-cli-day-model-card { width: 180px; gap: 5px; padding: 10px 14px; }
+  .local-cli-day-model-card b { font-size: 13px; }
+  .local-cli-day-model-card small { font-size: 9.5px; }
+  .local-cli-day-model-card-head small { max-width: 72px; }
+  .local-cli-day-model-card em { font-size: 16px; }
+}
+@container (min-height: 220px) {
+  .local-cli-day-model-card { width: 230px; gap: 8px; padding: 12px 16px; border-radius: 10px; }
+  .local-cli-day-model-card b { font-size: 15px; }
+  .local-cli-day-model-card small { font-size: 10.5px; }
+  .local-cli-day-model-card-head small { max-width: 96px; }
+  .local-cli-day-model-card em { font-size: 20px; }
+}
+@container (min-height: 320px) {
+  .local-cli-day-model-card { width: 280px; gap: 10px; padding: 14px 18px; }
+  .local-cli-day-model-card b { font-size: 17px; }
+  .local-cli-day-model-card em { font-size: 24px; }
 }

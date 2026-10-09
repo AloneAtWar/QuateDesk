@@ -1,10 +1,11 @@
 // 本机用量热力图视图:四张统计卡 + 近一年日历热力图 + 选中日模型横向滚动区。
 // 热力图结构与官方用量页同口径(组合 provider-heatmap 类),色阶改用
 // log1p + 当前筛选 P95,统计卡沿用相同四项指标语义。
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Bot, Flame, TrendingUp, Trophy } from 'lucide-react';
 import { formatLocalTokensCompact, formatLocalTokensExact, formatLocalDayLabel, localHeatmapLevel, localHeatmapMax, localAgentsLine } from './local-cli-usage-format';
 import MergeSameModelsToggle from './MergeSameModelsToggle';
+import { ResizeHandle, useResizableHeight } from '../resize-handle';
 
 const statCard = (key, icon, label, value, title) => (
   <div key={key} className={`local-cli-stat provider-stat ${key}`} title={title || label}>
@@ -13,13 +14,29 @@ const statCard = (key, icon, label, value, title) => (
   </div>
 );
 
-export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate, dayModels, dayModelsLoading, sources, selectedAgent, canMergeModels, mergeSameModels, onToggleMerge }) {
+export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate, dayModels, dayModelsLoading, sources, selectedAgent, canMergeModels, mergeSameModels, onToggleMerge, resizable = true }) {
   const days = useMemo(() => (summary?.days || []).filter((day) => /^\d{4}-\d{2}-\d{2}$/.test(String(day?.date))), [summary]);
   const heatmapRef = useRef(null);
   const wrapRef = useRef(null);
   const [cellPx, setCellPx] = useState(8);
   const [cellH, setCellH] = useState(8);
   const [cellGap, setCellGap] = useState(2);
+  // 热力图是本视图唯一的弹性区域(flex:1,最小 130px):两个手柄的动态上限都从
+  // 它的余量里扣,拖到上限时热力图刚好到最小高度,任何元素都不会被挤出页面。
+  // 当日模型面板 grow='up':向上拖吃热力图余量;统计卡条 grow='down' 同理。
+  // 嵌入厂商详情时都不启用
+  const heatmapSlack = useCallback(() => {
+    const el = wrapRef.current;
+    return el ? Math.max(0, el.getBoundingClientRect().height - 130) : 0;
+  }, []);
+  const dayModelsResize = useResizableHeight('qd-resize:local-day-models', {
+    min: 40, max: 600, grow: 'up',
+    limit: (el) => (el?.getBoundingClientRect().height || 0) + heatmapSlack(),
+  });
+  const statsResize = useResizableHeight('qd-resize:local-stats', {
+    min: 56, max: 150, grow: 'down',
+    limit: (el) => (el?.getBoundingClientRect().height || 0) + heatmapSlack(),
+  });
 
   // 近 1 年整幅铺满:列宽由容器宽度决定,行高吃满纵向空间(与官方用量页同口径)
   const weekCount = useMemo(() => {
@@ -110,7 +127,8 @@ export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate,
   ] : [];
 
   return <div className="local-cli-heatmap-view">
-    {!!stats.length && <div className="provider-usage-summary local-cli-stats">{stats}</div>}
+    {!!stats.length && <div className="provider-usage-summary local-cli-stats" ref={resizable ? statsResize.targetRef : undefined} style={resizable && statsResize.height !== null ? { height: `${statsResize.height}px` } : undefined}>{stats}</div>}
+    {resizable && !!stats.length && <ResizeHandle handleProps={statsResize.handleProps} label="统计卡条" />}
     <div className="provider-heatmap-head">
       <span className="provider-heatmap-title">近 1 年本机使用热力图</span>
       <div className="provider-heatmap-legend" aria-hidden="true" title="颜色深浅按当前筛选范围强度缩放,悬停方格显示准确 Token">
@@ -129,6 +147,7 @@ export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate,
         </div>
       </div>
     </div>
+    {resizable && <ResizeHandle handleProps={dayModelsResize.handleProps} label="当日模型面板" />}
     <div className="local-cli-day-models">
       <div className="local-cli-day-models-head">
         <span className="local-cli-day-models-title">
@@ -136,7 +155,7 @@ export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate,
         </span>
         {canMergeModels && <MergeSameModelsToggle checked={mergeSameModels} onChange={onToggleMerge} />}
       </div>
-      <div className="local-cli-day-models-frame">
+      <div className="local-cli-day-models-frame" ref={resizable ? dayModelsResize.targetRef : undefined} style={resizable && dayModelsResize.height !== null ? { height: `${dayModelsResize.height}px`, minHeight: `${dayModelsResize.height}px`, maxHeight: 'min(600px, 55vh)' } : undefined}>
         <div className="local-cli-day-models-scroll" tabIndex={0} aria-label="当日模型列表,横向滚动">
           <div className="local-cli-day-models-track">
             {dayModelsLoading && !dayModels?.models?.length ? <span className="local-cli-models-hint">正在读取当日模型…</span>

@@ -206,6 +206,7 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
         canMergeModels={canMergeModels}
         mergeSameModels={mergeSameModels}
         onToggleMerge={updateMergeSameModels}
+        resizable={!embedded}
       />
       : <LocalUsageModelBreakdown
         report={rangeModelsBlock.data}

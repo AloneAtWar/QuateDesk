@@ -34,18 +34,18 @@
 .global-waste-metric small { color: var(--muted); font-size: 10px; }
 .global-waste-metric b { font-size: 23px; letter-spacing: -.04em; line-height: 1.3; font-variant-numeric: tabular-nums; }
 .global-waste-metric b span { font-size: 12px; }
-.global-waste-chart { flex: 0 0 auto; padding: 8px 9px 6px; border: 1px solid var(--line-inner); border-radius: 9px; background: var(--surface-2); }
+.global-waste-chart { flex: 0 0 auto; padding: 8px 9px 6px; border: 1px solid var(--line-inner); border-radius: 9px; background: var(--surface-2); --waste-plot-height: 70px; }
 .global-waste-block-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .global-waste-block-head b { font-size: 12px; }
 .global-waste-block-head small { color: var(--muted); font-size: 9px; }
 .global-waste-plot { display: grid; grid-template-columns: 25px minmax(0, 1fr); gap: 4px; margin-top: 8px; }
-.global-waste-axis { height: 72px; display: flex; flex-direction: column; justify-content: space-between; color: var(--muted); font-size: 8px; text-align: right; line-height: 1; padding-top: 2px; }
+.global-waste-axis { height: calc(var(--waste-plot-height) + 2px); display: flex; flex-direction: column; justify-content: space-between; color: var(--muted); font-size: 8px; text-align: right; line-height: 1; padding-top: 2px; }
 .global-waste-bars { position: relative; display: grid; grid-template-columns: repeat(var(--waste-columns), minmax(0, 1fr)); gap: clamp(3px, 1.8vw, 18px); }
-.global-waste-gridlines { position: absolute; top: 3px; right: 0; left: 0; height: 67px; display: flex; flex-direction: column; justify-content: space-between; pointer-events: none; }
+.global-waste-gridlines { position: absolute; top: 3px; right: 0; left: 0; height: calc(var(--waste-plot-height) - 3px); display: flex; flex-direction: column; justify-content: space-between; pointer-events: none; }
 .global-waste-gridlines i { border-top: 1px dashed var(--line); }
 .global-waste-gridlines i:last-child { border-top-style: solid; }
 .global-waste-bar-button { position: relative; min-width: 0; display: flex; flex-direction: column; gap: 5px; padding: 0 3px 2px; border: 0; border-radius: 5px; color: var(--ink); background: transparent; text-align: center; }
-.global-waste-bar-area { display: flex; align-items: flex-end; justify-content: center; height: 70px; width: 100%; padding-top: 4px; }
+.global-waste-bar-area { display: flex; align-items: flex-end; justify-content: center; height: var(--waste-plot-height); width: 100%; padding-top: 4px; }
 .global-waste-bar { position: relative; display: block; width: 100%; max-width: 124px; min-height: 2px; border-radius: 3px 3px 0 0; background: color-mix(in srgb, var(--cyan) 68%, var(--surface-2)); }
 .global-waste-bar b { position: absolute; top: -16px; left: 50%; transform: translateX(-50%); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .global-waste-bar-button.selected .global-waste-bar { outline: 2px solid color-mix(in srgb, var(--cyan) 70%, var(--ink)); outline-offset: -1px; background: var(--cyan); }
@@ -122,10 +122,8 @@
   .global-waste-total small, .global-waste-total span:not(.global-waste-icon), .global-waste-metric small { font-size: 12px; }
   .global-waste-total em { font-size: 10px; }
   .global-waste-metric b { font-size: 30px; }
-  .global-waste-chart { padding: 12px 15px; }
-  .global-waste-bar-area { height: 171px; }
-  .global-waste-axis { height: 173px; font-size: 10px; }
-  .global-waste-gridlines { height: 168px; }
+  .global-waste-chart { padding: 12px 15px; --waste-plot-height: 171px; }
+  .global-waste-axis { font-size: 10px; }
   .global-waste-bar b { font-size: 12px; top: -20px; }
   .global-waste-bar-label strong, .global-waste-bar-label small { font-size: 10px; }
   .global-waste-block-head b, .global-waste-detail-head b { font-size: 14px; }

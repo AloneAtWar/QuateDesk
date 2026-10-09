@@ -1,19 +1,20 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, ChevronDown, Info, RefreshCw, Trash2 } from 'lucide-react';
 import { accountWasteWindows, buildWasteReport, createWasteRange, formatWasteAmount, formatWasteDate, formatWastePercent, loadWasteArchives, WASTE_RANGES } from '../waste-statistics';
+import { ResizeHandle, useResizableHeight } from '../resize-handle';
 
 const cycleDates = (cycle) => `${formatWasteDate(cycle.from, true)} → ${formatWasteDate(cycle.end, true)}`;
 const exclusionReason = (cycle) => cycle.kind !== 'natural' ? '提前结束，未计入' : cycle.remaining == null ? '额度数据缺失，未计入' : '记录不可靠，未计入';
 const cycleValue = (cycle) => `${!cycle.counted && cycle.remaining != null ? '≤ ' : ''}${formatWastePercent(cycle.remaining)}`;
 
-function WasteChart({ buckets, selectedId, onSelect, hasData }) {
+function WasteChart({ buckets, selectedId, onSelect, hasData, plotHeight = null, plotRef = null }) {
   const peak = Math.max(1, ...buckets.map((bucket) => bucket.total || 0));
   const magnitude = 10 ** Math.floor(Math.log10(peak));
   const maximum = Math.ceil(peak / magnitude) * magnitude;
   const step = maximum / 5;
   return <section className="global-waste-chart" aria-label="历史浪费趋势">
     <div className="global-waste-block-head"><b>历史浪费趋势</b><small>份周期额度</small></div>
-    <div className="global-waste-plot">
+    <div className="global-waste-plot" ref={plotRef} style={plotHeight !== null ? { '--waste-plot-height': `${plotHeight}px` } : undefined}>
       <div className="global-waste-axis" aria-hidden="true">{[5, 4, 3, 2, 1, 0].map((tick) => <span key={tick}>{formatWasteAmount(step * tick)}</span>)}</div>
       <div className="global-waste-bars" style={{ '--waste-columns': buckets.length }}>
         <div className="global-waste-gridlines" aria-hidden="true">{[0, 1, 2, 3, 4, 5].map((tick) => <i key={tick} />)}</div>
@@ -35,6 +36,25 @@ export default function WasteOverviewView({ accounts, providers, Logo, api = win
   const [expandedId, setExpandedId] = useState(null);
   const [data, setData] = useState({ archives: {}, loading: true, error: '', loadedAt: null });
   const requestId = useRef(0);
+  const contributionsRef = useRef(null);
+  // 贡献表是页面唯一的弹性区域(flex:1,最小 112px):两个手柄的动态上限
+  // 都从它的余量里扣,拖到上限时贡献表刚好到最小高度,任何元素都不会被挤出
+  const slack = useCallback(() => {
+    const el = contributionsRef.current;
+    return el ? Math.max(0, el.getBoundingClientRect().height - 112) : 0;
+  }, []);
+  // 趋势图可拖拽调高(默认沿用样式表,宽窗断点下更高),贡献表随 flex 自适应收缩
+  const chartMeasure = useCallback((el) => el?.querySelector('.global-waste-bar-area')?.getBoundingClientRect().height || 0, []);
+  const chartResize = useResizableHeight('qd-resize:waste-chart', {
+    min: 48, max: 360, grow: 'down',
+    measure: chartMeasure,
+    limit: (el) => chartMeasure(el) + slack(),
+  });
+  // 汇总卡条也可拖拽调高,与趋势图共用贡献表余量
+  const summaryResize = useResizableHeight('qd-resize:waste-summary', {
+    min: 60, max: 150, grow: 'down',
+    limit: (el) => (el?.getBoundingClientRect().height || 0) + slack(),
+  });
   const mounted = useRef(false);
   const eligible = accounts.filter((account) => accountWasteWindows(account, providers.find((provider) => provider.id === account.providerId)).length > 0);
   const loadKey = JSON.stringify(eligible.map((account) => [account.id, account.lastChecked]));
@@ -79,13 +99,15 @@ export default function WasteOverviewView({ accounts, providers, Logo, api = win
     </div>
     {data.error ? <div className="local-cli-state-card global-waste-state" role="alert"><AlertCircle size={27} /><div><b>无法读取完整的历史浪费</b><small>{data.error}</small></div><button type="button" className="outline-button" onClick={refresh}><RefreshCw size={12} />重新读取</button></div>
       : data.loading ? <div className="local-cli-state-card global-waste-state" role="status"><RefreshCw size={27} className="spinning" /><div><b>正在读取历史周期</b><small>汇总所有账号的已结束周期…</small></div></div> : <>
-        <div className="global-waste-summary">
+        <div className="global-waste-summary" ref={summaryResize.targetRef} style={summaryResize.height !== null ? { height: `${summaryResize.height}px`, minHeight: `${summaryResize.height}px` } : undefined}>
           <div className="global-waste-total"><span className="global-waste-icon"><Trash2 size={18} /></span><div><small>累计浪费</small><div><b>{formatWasteAmount(report.total)}</b><span>份周期额度</span></div><em>各周期总额度记为 1 份</em></div></div>
           <div className="global-waste-metric"><small>平均浪费</small><b>{formatWastePercent(report.average)}</b></div>
           <div className="global-waste-metric"><small>有效周期</small><b>{report.count}<span> 个</span></b></div>
         </div>
-        <WasteChart buckets={report.buckets} selectedId={selected?.id} onSelect={selectBucket} hasData={report.count > 0} />
-        <section className="global-waste-contributions" aria-label="账号浪费贡献">
+        <ResizeHandle handleProps={summaryResize.handleProps} label="汇总卡条" />
+        <WasteChart buckets={report.buckets} selectedId={selected?.id} onSelect={selectBucket} hasData={report.count > 0} plotHeight={chartResize.height} plotRef={chartResize.targetRef} />
+        <ResizeHandle handleProps={chartResize.handleProps} label="趋势图" />
+        <section className="global-waste-contributions" aria-label="账号浪费贡献" ref={contributionsRef}>
           <div className="global-waste-detail-head"><div><b>{selected ? `${selected.dateLabel} 的浪费` : '整个范围的浪费'}</b><small>合计 <strong>{formatWasteAmount(detail.total)}</strong> 份 · {detail.accounts.length} 个浪费账号</small></div>{selected && <button type="button" onClick={() => { setSelectedId(null); setExpandedId(null); }}>查看整个范围</button>}</div>
           <div className="global-waste-accounts-scroll" tabIndex={0} aria-label="账号贡献列表，可滚动查看" key={selected?.id || `${months}:${windowKey}`}>
             <table className="global-waste-accounts"><thead><tr><th scope="col">账号</th><th scope="col">浪费</th><th scope="col">{selected ? '占本段' : '占总浪费'}</th><th scope="col"><span className="sr-only">周期明细</span></th></tr></thead><tbody>
