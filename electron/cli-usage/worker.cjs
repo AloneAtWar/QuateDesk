@@ -15,6 +15,7 @@ const adapters = {
   opencode: require('./adapters/opencode.cjs'),
   openclaw: require('./adapters/openclaw.cjs'),
   hermes: require('./adapters/hermes.cjs'),
+  dsh: require('./adapters/dsh.cjs'),
 };
 
 const BATCH_SIZE = 500;

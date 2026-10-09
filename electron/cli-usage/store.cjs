@@ -11,7 +11,7 @@ const {
 
 const SCHEMA_VERSION = '1';
 
-const AGENT_ORDER = ['zcode', 'kimi', 'claude', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'openclaw', 'hermes'];
+const AGENT_ORDER = ['zcode', 'kimi', 'claude', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'openclaw', 'hermes', 'dsh'];
 
 const UPSERT_EVENT_SQL = `
 INSERT INTO usage_events (

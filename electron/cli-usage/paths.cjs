@@ -117,6 +117,13 @@ const detectGrokRoots = () => {
   return [buildRoot(path.join(homeDir(), '.grok'), '~/.grok')];
 };
 
+// DeepSeek Harness:DSH_HOME 覆盖 > ~/.dsh(会话日志在 sessions/ 子目录)
+const detectDshRoots = () => {
+  const override = envValue('DSH_HOME');
+  if (override) return splitCommaDirs(override).map((item) => buildRoot(item, '$DSH_HOME'));
+  return [buildRoot(path.join(homeDir(), '.dsh'), '~/.dsh')];
+};
+
 module.exports = {
   homeDir,
   envValue,
@@ -133,4 +140,5 @@ module.exports = {
   detectOpenclawRoots,
   detectGeminiRoots,
   detectGrokRoots,
+  detectDshRoots,
 };
