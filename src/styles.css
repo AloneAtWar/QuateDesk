@@ -337,6 +337,12 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .titlebar-actions button { width: 25px; height: 21px; border-radius: 5px; }
 
 /* refresh-result toast under the titlebar */
+.main-view-menu-dismiss { position: fixed; inset: 32px 0 0; z-index: 48; border: 0; background: transparent; }
+.main-view-anchor { position: relative; flex: 0 0 auto; }
+.main-view-anchor.open { z-index: 49; }
+.main-view-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 49; width: 124px; padding: 4px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); box-shadow: 0 8px 24px rgba(20, 40, 30, .14); }
+.main-view-menu button { width: 100%; display: flex; align-items: center; justify-content: space-between; padding: 7px 9px; border: 0; border-radius: 4px; background: transparent; color: var(--ink-soft); font-size: 11px; }
+.main-view-menu button:hover, .main-view-menu button.active { color: var(--green-deep); background: var(--green-bg); }
 .toast { position: fixed; top: 40px; left: 50%; z-index: 60; display: flex; align-items: center; gap: 6px; max-width: calc(100vw - 40px); padding: 7px 12px; border-radius: 8px; font-size: 11px; transform: translateX(-50%); animation: rise-in .2s ease-out; box-shadow: 0 10px 30px rgba(42, 58, 52, .18); }
 .toast.ok { color: var(--green-deep); background: var(--green-bg); border: 1px solid var(--green-line); }
 .toast.fail { color: var(--coral-deep); background: var(--coral-bg); border: 1px solid var(--warn-border); }

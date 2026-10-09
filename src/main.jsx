@@ -3400,10 +3400,10 @@ function App() {
   };
   const toggleAutoLaunch = async (value) => { if (bridge?.setAutoLaunch) setAutoLaunch(await bridge.setAutoLaunch(value)); };
   const [overviewMode, setOverviewMode] = useState('rings');
+  const [viewMenuOpen, setViewMenuOpen] = useState(false);
   // 额度历史折线图视图：点账号卡片进入，返回按钮或右上角视图切换退出
   const [historyAccountId, setHistoryAccountId] = useState(null);
-  // 共享统计入口：刷新只读取当前统计内容，不触发账号额度检查。
-  const [statisticsMode, setStatisticsMode] = useState('local-usage');
+  // 用量与浪费分别从菜单进入，刷新只读取当前内容。
   const localUsageApiRef = useRef(null);
   const [localUsageMeta, setLocalUsageMeta] = useState(null);
   const handleLocalUsageMeta = useCallback((next) => {
@@ -3411,12 +3411,12 @@ function App() {
   }, []);
   const wasteApiRef = useRef(null);
   const [wasteMeta, setWasteMeta] = useState(null);
-  const inStatisticsView = overviewMode === 'local-usage' && !historyAccountId;
-  const inLocalUsageView = inStatisticsView && statisticsMode === 'local-usage';
-  const inWasteView = inStatisticsView && statisticsMode === 'waste';
+  const inLocalUsageView = overviewMode === 'local-usage' && !historyAccountId;
+  const inWasteView = overviewMode === 'waste' && !historyAccountId;
+  const inUsageView = inLocalUsageView || inWasteView;
   const [accounts, setAccounts] = useState(bridge ? [] : initialAccounts);
   const [providers, setProviders] = useState(providerCatalog);
-  const [settings, setSettings] = useState(() => normalizeSettings({}));
+  const [settings, setSettings] = useState(() => normalizeSettings(!bridge && new URLSearchParams(window.location.search).get('theme') === 'light' ? { theme: 'light' } : {}));
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [modal, setModal] = useState(null);
   const [confirmState, setConfirmState] = useState(null);
@@ -3704,11 +3704,11 @@ function App() {
   const historyAccount = historyAccountId ? accounts.find((item) => item.id === historyAccountId) : null;
 
   const handleGlobalRefresh = () => {
-    if (!inStatisticsView) { refreshAll(); return; }
+    if (!inUsageView) { refreshAll(); return; }
     setRefreshing(true);
     const api = inLocalUsageView ? localUsageApiRef.current : wasteApiRef.current;
     Promise.resolve(api?.refresh?.()).catch((error) => {
-      setToast({ id: Date.now(), ok: false, message: error.message || '统计刷新失败' });
+      setToast({ id: Date.now(), ok: false, message: error.message || '数据刷新失败' });
     }).finally(() => { setRefreshing(false); });
   };
 
@@ -3730,22 +3730,18 @@ function App() {
     <span className="last-checked" title={inLocalUsageView ? '最后一次本机用量扫描时间' : inWasteView ? '最后一次历史周期读取时间' : '最后一次额度检查时间'}><Clock3 size={11} />{inLocalUsageView ? (localUsageMeta?.lastScannedAt ? formatChecked(localUsageMeta.lastScannedAt) : '未扫描') : inWasteView ? (wasteMeta?.loadedAt ? formatChecked(wasteMeta.loadedAt) : '未读取') : formatChecked(lastSync)}</span>
     {update && ['available', 'downloading', 'downloaded', 'error'].includes(update.status) && !(update.status === 'available' && update.version && update.version === settings.ignoredUpdateVersion) && <button className={`update-badge ${update.status}`} onClick={() => setUpdateOpen(true)} title="查看版本更新"><Download size={11} />{update.status === 'available' && `v${update.version} 可更新`}{update.status === 'downloading' && `下载中 ${update.percent || 0}%`}{update.status === 'downloaded' && '重启升级'}{update.status === 'error' && '更新失败'}</button>}
     <button className="control-solo" onClick={handleGlobalRefresh} disabled={refreshing || (inWasteView && wasteMeta?.loading)} title={inLocalUsageView ? '重新扫描本机用量' : inWasteView ? '重新读取历史浪费' : '立即刷新全部账号'} aria-label={inLocalUsageView ? '重新扫描本机用量' : inWasteView ? '重新读取历史浪费' : '立即刷新全部账号'}><RefreshCw size={13} className={refreshing || (inLocalUsageView && localUsageMeta?.scanning) || (inWasteView && wasteMeta?.loading) ? 'spinning' : ''} /></button>
-    <div className="overview-controls" aria-label="全局视图">
-      <button className={overviewMode === 'rings' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rings'); }} title="账号总览" aria-label="账号总览"><CircleGauge size={13} /></button>
-      <button className={overviewMode === 'rows' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('rows'); }} title="行式明细" aria-label="行式明细"><Rows3 size={13} /></button>
-      <button className={overviewMode === 'periods' && !historyAccountId ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode('periods'); }} title="周期明细" aria-label="周期明细"><Clock3 size={13} /></button>
-    </div>
-    <button className={`control-solo local-usage-control${inStatisticsView ? ' active' : ''}`} onClick={() => { setHistoryAccountId(null); setOverviewMode('local-usage'); }} title="统计" aria-label="统计"><ChartNoAxesCombined size={13} /></button>
+    <div className={`main-view-anchor${viewMenuOpen ? ' open' : ''}`} onKeyDown={(event) => { if (event.key === 'Escape') setViewMenuOpen(false); }}><button className="control-solo" onClick={() => setViewMenuOpen((open) => !open)} title="切换界面" aria-label="切换界面" aria-expanded={viewMenuOpen} aria-controls="main-view-menu"><Ellipsis size={13} /></button>{viewMenuOpen && <div className="main-view-menu" id="main-view-menu" aria-label="界面切换">{[['rings', '看板'], ['waste', '额度浪费'], ['local-usage', '本机用量']].map(([key, label]) => <button key={key} className={overviewMode === key ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode(key); setViewMenuOpen(false); }}>{label}<span>{overviewMode === key && <Check size={12} />}</span></button>)}</div>}</div>
   </>;
   const appShellActions = <>
-    <button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={13} /></button>
+    <button title="设置" aria-label="打开设置" onClick={() => { setViewMenuOpen(false); setSettingsOpen(true); }}><Settings2 size={13} /></button>
     {bridge && <><button className={pinned ? 'active' : ''} title={pinned ? '取消固定' : '固定在桌面最前面'} aria-label="固定在桌面最前面" onClick={async () => setPinned(await bridge.togglePin())}><Pin size={13} /></button><button title={maximized ? '还原' : '最大化'} aria-label={maximized ? '还原' : '最大化'} onClick={async () => setMaximized(Boolean(await bridge.toggleMaximize()))}>{maximized ? <Copy size={12} /> : <Square size={11} />}</button><button title="关闭到托盘" aria-label="关闭到托盘" onClick={() => bridge.closeMainWindow()}><X size={14} /></button></>}
   </>;
 
   return <AppShell controls={appShellControls} actions={appShellActions}>
+    {viewMenuOpen && <button className="main-view-menu-dismiss" aria-label="关闭界面菜单" onClick={() => setViewMenuOpen(false)} onKeyDown={(event) => { if (event.key === 'Escape') setViewMenuOpen(false); }} />}
     {toast && <div className={`toast ${toast.ok ? 'ok' : 'fail'}`} role="status">{toast.ok ? <Check size={13} /> : <AlertCircle size={13} />}<span>{toast.message}</span></div>}
-    <main className={`main-shell${inStatisticsView ? ' local-usage-mode' : ''}`}>
-      <div className={`content-area${inStatisticsView ? ' local-usage-mode' : ''}`}>{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{inStatisticsView ? <StatisticsView mode={statisticsMode} onModeChange={setStatisticsMode} accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} Logo={Logo} api={bridge} onLocalApi={(api) => { localUsageApiRef.current = api; }} onLocalMeta={handleLocalUsageMeta} onWasteApi={(api) => { wasteApiRef.current = api; }} onWasteMeta={setWasteMeta} /> : onboardOpen ? <OnboardingWizard settings={settings} setSettings={setSettings} accounts={accounts} providers={providers} ccswitchAvailable={Boolean(bridge?.scanCcswitchImport) || new URLSearchParams(window.location.search).get('onboard') === '1'} onOpenImport={() => setModal('account')} onApplyCcswitch={async (keys, chosen) => {
+    <main className={`main-shell${inUsageView ? ' local-usage-mode' : ''}`}>
+      <div className={`content-area${inUsageView ? ' local-usage-mode' : ''}`}>{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{inUsageView ? <StatisticsView mode={overviewMode} showNavigation={false} accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} Logo={Logo} api={bridge} onLocalApi={(api) => { localUsageApiRef.current = api; }} onLocalMeta={handleLocalUsageMeta} onWasteApi={(api) => { wasteApiRef.current = api; }} onWasteMeta={setWasteMeta} /> : onboardOpen ? <OnboardingWizard settings={settings} setSettings={setSettings} accounts={accounts} providers={providers} ccswitchAvailable={Boolean(bridge?.scanCcswitchImport) || new URLSearchParams(window.location.search).get('onboard') === '1'} onOpenImport={() => setModal('account')} onApplyCcswitch={async (keys, chosen) => {
         if (!bridge) {
           // 网页演示模式：直接把选中的模拟条目变成账号，走与真实导入一致的落库形态
           const stamp = Date.now();

@@ -124,7 +124,7 @@ export function buildWasteReport({ accounts, providers, archives, windowKey, ran
 
 /** Read complete archives before exposing totals, so a failed account never looks like zero. */
 export async function loadWasteArchives(api, accountIds) {
-  if (!api?.getCycles) throw new Error('当前环境无法读取周期档案，请在桌面端或远程查看中打开统计。');
+  if (!api?.getCycles) throw new Error('当前环境无法读取周期档案，请通过桌面应用或远程查看读取额度浪费。');
   const entries = await Promise.all(accountIds.map(async (id) => {
     const cycles = await api.getCycles(id);
     if (!Array.isArray(cycles)) throw new Error('周期档案格式不正确，请重试。');

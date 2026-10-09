@@ -4,8 +4,12 @@
 .remote-main.local-usage-mode > .statistics-page { flex: 1 1 auto; min-height: 0; }
 .statistics-page { min-width: 0; display: flex; flex-direction: column; gap: 6px; height: 100%; }
 .statistics-navigation { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.statistics-navigation > b { font-size: 13px; }
-.statistics-switch button { min-width: 73px; font-size: 10px; }
+.statistics-navigation > b { display: none; }
+.statistics-switch { display: flex; align-items: center; gap: 18px; width: 100%; border-bottom: 1px solid var(--line); }
+.statistics-switch button { position: relative; min-width: 0; padding: 7px 0 8px; border: 0; background: transparent; color: var(--muted); font-size: 11px; }
+.statistics-switch button.active { color: var(--green-deep); font-weight: 600; }
+.statistics-switch button.active::after { content: ''; position: absolute; bottom: -1px; left: 0; right: 0; height: 2px; border-radius: 2px; background: var(--green); }
+.statistics-switch button:hover { color: var(--ink); }
 .statistics-panel { min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; }
 .statistics-panel[hidden] { display: none; }
 .statistics-panel > .local-cli-page { flex: 1 1 auto; min-height: 0; }
