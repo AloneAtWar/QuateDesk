@@ -2614,6 +2614,14 @@ if (!app.requestSingleInstanceLock()) {
     registerIpc();
     startupLog('ready: IPC 已注册,创建主窗口');
     createMainWindow();
+    // 自动更新后安装器会以 --updated 参数重启应用。此时再补一次外壳图标缓存刷新:
+    // 更新会保留旧快捷方式、图标缓存按 exe 路径命中旧位图,安装器侧的刷新未必覆盖
+    // 已固定的任务栏图标,启动后异步重建一次缓存兜底。
+    if (process.platform === 'win32' && app.isPackaged && process.argv.includes('--updated')) {
+      setTimeout(() => {
+        try { require('node:child_process').exec('ie4uinit.exe -show', () => {}); } catch { /* 刷新失败不影响使用 */ }
+      }, 3000);
+    }
     const state = store.loadState();
     cliUsage?.applySettings(state?.settings);
     if (state?.settings?.widget !== false) createWidgetWindow();
