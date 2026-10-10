@@ -38,10 +38,14 @@ export default function WasteOverviewView({ accounts, providers, Logo, api = win
   const requestId = useRef(0);
   const contributionsRef = useRef(null);
   // 贡献表是页面唯一的弹性区域(flex:1,最小 112px):两个手柄的动态上限
-  // 都从它的余量里扣,拖到上限时贡献表刚好到最小高度,任何元素都不会被挤出
+  // 都从它的余量里扣,拖到上限时贡献表刚好到最小高度,任何元素都不会被挤出。
+  // 页面已溢出时(窗口缩小后)溢出量计为负余量,窗口变化收敛才能把超高组件压回去
   const slack = useCallback(() => {
     const el = contributionsRef.current;
-    return el ? Math.max(0, el.getBoundingClientRect().height - 112) : 0;
+    if (!el) return 0;
+    const page = el.parentElement;
+    const overflow = page ? Math.max(0, page.scrollHeight - page.clientHeight) : 0;
+    return el.getBoundingClientRect().height - 112 - overflow;
   }, []);
   // 趋势图可拖拽调高(默认沿用样式表,宽窗断点下更高),贡献表随 flex 自适应收缩
   const chartMeasure = useCallback((el) => el?.querySelector('.global-waste-bar-area')?.getBoundingClientRect().height || 0, []);

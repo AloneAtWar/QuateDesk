@@ -23,11 +23,15 @@ export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate,
   const [cellGap, setCellGap] = useState(2);
   // 热力图是本视图唯一的弹性区域(flex:1,最小 130px):两个手柄的动态上限都从
   // 它的余量里扣,拖到上限时热力图刚好到最小高度,任何元素都不会被挤出页面。
+  // 视图已溢出时(窗口缩小后)溢出量计为负余量,窗口变化收敛才能把超高组件压回去。
   // 当日模型面板 grow='up':向上拖吃热力图余量;统计卡条 grow='down' 同理。
   // 嵌入厂商详情时都不启用
   const heatmapSlack = useCallback(() => {
     const el = wrapRef.current;
-    return el ? Math.max(0, el.getBoundingClientRect().height - 130) : 0;
+    if (!el) return 0;
+    const view = el.parentElement;
+    const overflow = view ? Math.max(0, view.scrollHeight - view.clientHeight) : 0;
+    return el.getBoundingClientRect().height - 130 - overflow;
   }, []);
   const dayModelsResize = useResizableHeight('qd-resize:local-day-models', {
     min: 40, max: 600, grow: 'up',
