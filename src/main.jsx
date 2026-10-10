@@ -15,6 +15,7 @@ import LocalCliUsageView from './local-cli-usage/LocalCliUsageView';
 import StatisticsView from './statistics/StatisticsView';
 import qrcode from 'qrcode-generator';
 import { AppShell } from './app-shell';
+import { ViewMenu } from './view-menu';
 import './styles.css';
 
 const formatReset = (resetAt) => {
@@ -43,7 +44,7 @@ const formatResetAbsolute = (resetAt) => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 
-const formatChecked = (date) => {
+export const formatChecked = (date) => {
   const minutes = Math.max(0, Math.floor((Date.now() - new Date(date).getTime()) / 60000));
   if (minutes < 1) return '刚刚更新';
   if (minutes < 60) return `${minutes} 分钟前更新`;
@@ -3733,7 +3734,7 @@ function App() {
     <span className="last-checked" title={inLocalUsageView ? '最后一次本机用量扫描时间' : inWasteView ? '最后一次历史周期读取时间' : '最后一次额度检查时间'}><Clock3 size={11} />{inLocalUsageView ? (localUsageMeta?.lastScannedAt ? formatChecked(localUsageMeta.lastScannedAt) : '未扫描') : inWasteView ? (wasteMeta?.loadedAt ? formatChecked(wasteMeta.loadedAt) : '未读取') : formatChecked(lastSync)}</span>
     {update && ['available', 'downloading', 'downloaded', 'error'].includes(update.status) && !(update.status === 'available' && update.version && update.version === settings.ignoredUpdateVersion) && <button className={`update-badge ${update.status}`} onClick={() => setUpdateOpen(true)} title="查看版本更新"><Download size={11} />{update.status === 'available' && `v${update.version} 可更新`}{update.status === 'downloading' && `下载中 ${update.percent || 0}%`}{update.status === 'downloaded' && '重启升级'}{update.status === 'error' && '更新失败'}</button>}
     <button className="control-solo" onClick={handleGlobalRefresh} disabled={refreshing || (inWasteView && wasteMeta?.loading)} title={inLocalUsageView ? '重新扫描本机用量' : inWasteView ? '重新读取历史浪费' : '立即刷新全部账号'} aria-label={inLocalUsageView ? '重新扫描本机用量' : inWasteView ? '重新读取历史浪费' : '立即刷新全部账号'}><RefreshCw size={13} className={refreshing || (inLocalUsageView && localUsageMeta?.scanning) || (inWasteView && wasteMeta?.loading) ? 'spinning' : ''} /></button>
-    <div className={`main-view-anchor${viewMenuOpen ? ' open' : ''}`} onKeyDown={(event) => { if (event.key === 'Escape') setViewMenuOpen(false); }}><button className="control-solo" onClick={() => setViewMenuOpen((open) => !open)} title="切换界面" aria-label="切换界面" aria-expanded={viewMenuOpen} aria-controls="main-view-menu"><Ellipsis size={13} /></button>{viewMenuOpen && <div className="main-view-menu" id="main-view-menu" aria-label="界面切换">{[['rings', '看板'], ['waste', '额度浪费'], ['local-usage', '本机用量']].map(([key, label]) => <button key={key} className={overviewMode === key ? 'active' : ''} onClick={() => { setHistoryAccountId(null); setOverviewMode(key); setViewMenuOpen(false); }}>{label}<span>{overviewMode === key && <Check size={12} />}</span></button>)}</div>}</div>
+    <ViewMenu current={overviewMode} onChange={(key) => { setHistoryAccountId(null); setOverviewMode(key); }} open={viewMenuOpen} onOpenChange={setViewMenuOpen} />
   </>;
   const appShellActions = <>
     <button title="设置" aria-label="打开设置" onClick={() => { setViewMenuOpen(false); setSettingsOpen(true); }}><Settings2 size={13} /></button>
@@ -3741,7 +3742,6 @@ function App() {
   </>;
 
   return <AppShell controls={appShellControls} actions={appShellActions}>
-    {viewMenuOpen && <button className="main-view-menu-dismiss" aria-label="关闭界面菜单" onClick={() => setViewMenuOpen(false)} onKeyDown={(event) => { if (event.key === 'Escape') setViewMenuOpen(false); }} />}
     {toast && <div className={`toast ${toast.ok ? 'ok' : 'fail'}`} role="status">{toast.ok ? <Check size={13} /> : <AlertCircle size={13} />}<span>{toast.message}</span></div>}
     <main className={`main-shell${inUsageView ? ' local-usage-mode' : ''}`}>
       <div className={`content-area${inUsageView ? ' local-usage-mode' : ''}`}>{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{inUsageView ? <StatisticsView mode={overviewMode} showNavigation={false} accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} Logo={Logo} api={bridge} onLocalApi={(api) => { localUsageApiRef.current = api; }} onLocalMeta={handleLocalUsageMeta} onWasteApi={(api) => { wasteApiRef.current = api; }} onWasteMeta={setWasteMeta} /> : onboardOpen ? <OnboardingWizard settings={settings} setSettings={setSettings} accounts={accounts} providers={providers} ccswitchAvailable={Boolean(bridge?.scanCcswitchImport) || new URLSearchParams(window.location.search).get('onboard') === '1'} onOpenImport={() => setModal('account')} onApplyCcswitch={async (keys, chosen) => {

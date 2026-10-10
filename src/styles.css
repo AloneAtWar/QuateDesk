@@ -130,9 +130,6 @@ button { cursor: pointer; }
 .overview-meter small { grid-column: 1 / -1; color: var(--faint); font-size: 9px; }
 .overview-title { align-items: flex-start; }
 .overview-title-right { display: flex; align-items: center; gap: 18px; }
-.overview-controls { display: inline-flex; align-items: center; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--control); }
-.overview-controls button { width: 30px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 5px; color: var(--ink-soft); background: transparent; }
-.overview-controls button:hover, .overview-controls button.active { color: var(--green-deep); background: var(--green-bg); }
 .concentric-rings { width: 84px; height: 84px; position: relative; flex: 0 0 auto; }
 .quota-ring { position: absolute; inset: calc(var(--ring-index, 0) * 8px); border-radius: 50%; background: conic-gradient(var(--ring-color, var(--score)) var(--progress), var(--ring-track) 0); transform: rotate(-90deg); }
 .quota-ring span { position: absolute; inset: 6px; border-radius: 50%; background: var(--surface); pointer-events: none; }
@@ -316,8 +313,6 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 /* sticky, slimmer overview header: only the card area scrolls */
 .view-intro.overview-title { position: sticky; top: -8px; z-index: 6; margin: -8px -14px 8px; padding: 6px 14px 5px; background: linear-gradient(var(--bg-grad), var(--bg)); border-bottom: 1px solid var(--line); }
 .view-intro.overview-title h1 { font-size: 13px; }
-.overview-controls { padding: 2px; gap: 2px; }
-.overview-controls button { width: 25px; height: 23px; }
 .control-solo { width: 25px; height: 23px; border-radius: 6px; }
 .last-checked { font-size: 8px; }
 /* meter detail lines never wrap; overflow fades into ellipsis */

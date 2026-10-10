@@ -6,6 +6,8 @@ html.remote-page, body.remote-page { width: 100%; min-width: 0; overflow-x: hidd
 .remote-titlebar .titlebar-controls { gap: 6px; }
 .remote-titlebar .last-checked { max-width: 138px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .remote-titlebar button { -webkit-app-region: no-drag; }
+/* 远程标题栏高 40px(窄屏 46px),菜单遮罩从标题栏下沿开始,不盖住标题栏按钮 */
+.remote-titlebar .main-view-menu-dismiss { inset: 40px 0 0; }
 .remote-title-theme { width: 25px; height: 23px; display: grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 6px; color: var(--ink-soft); background: var(--control); }
 .remote-title-theme:hover { color: var(--ink); border-color: var(--hover-border); }
 .remote-title-action { width: 25px; height: 23px; display: grid; place-items: center; flex: 0 0 auto; padding: 0; border: 1px solid var(--line); border-radius: 6px; color: var(--ink-soft); background: var(--control); }
@@ -70,8 +72,7 @@ html.remote-page, body.remote-page { width: 100%; min-width: 0; overflow-x: hidd
   .remote-titlebar .titlebar-drag { min-width: 78px; }
   .remote-titlebar .titlebar-controls { gap: 4px; }
   .remote-titlebar .last-checked { max-width: 98px; font-size: 8px; }
-  .remote-titlebar .overview-controls { gap: 1px; padding: 2px; }
-  .remote-titlebar .overview-controls button { width: 28px; height: 28px; }
+  .remote-titlebar .main-view-menu-dismiss { inset: 46px 0 0; }
   .remote-titlebar .control-solo, .remote-title-theme { width: 30px; height: 30px; }
   .remote-title-action { width: 30px; height: 30px; }
   .remote-main { min-height: calc(100dvh - 46px); padding: 7px 8px 18px; }
