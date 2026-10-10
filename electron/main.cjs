@@ -2614,13 +2614,21 @@ if (!app.requestSingleInstanceLock()) {
     registerIpc();
     startupLog('ready: IPC 已注册,创建主窗口');
     createMainWindow();
-    // 自动更新后安装器会以 --updated 参数重启应用。此时再补一次外壳图标缓存刷新:
-    // 更新会保留旧快捷方式、图标缓存按 exe 路径命中旧位图,安装器侧的刷新未必覆盖
-    // 已固定的任务栏图标,启动后异步重建一次缓存兜底。
-    if (process.platform === 'win32' && app.isPackaged && process.argv.includes('--updated')) {
-      setTimeout(() => {
-        try { require('node:child_process').exec('ie4uinit.exe -show', () => {}); } catch { /* 刷新失败不影响使用 */ }
-      }, 3000);
+    // Windows 图标缓存按 exe 路径缓存位图,任何覆盖安装/更新都可能让缓存停在旧图标
+    // 甚至空白(exe 先被卸载删除再写入,空窗期被 Explorer 缓存了无图标)。安装器侧已
+    // 在 customInstall 里刷新,这里做兜底:版本号与上次运行不一致(自动更新、手动覆盖
+    // 安装、降级都算)时,启动后异步重建一次图标缓存。不每次启动都刷——ie4uinit 刷新
+    // 的是全系统外壳缓存,会引起桌面/任务栏图标闪烁,而两次更新之间缓存本就是对的。
+    if (process.platform === 'win32' && app.isPackaged) {
+      const versionStampPath = path.join(app.getPath('userData'), 'last-run-version');
+      let lastRunVersion = null;
+      try { lastRunVersion = fs.readFileSync(versionStampPath, 'utf8').trim(); } catch { /* 首次运行 */ }
+      if (lastRunVersion !== null && lastRunVersion !== app.getVersion()) {
+        setTimeout(() => {
+          try { require('node:child_process').exec('ie4uinit.exe -show', () => {}); } catch { /* 刷新失败不影响使用 */ }
+        }, 3000);
+      }
+      try { fs.writeFileSync(versionStampPath, app.getVersion()); } catch { /* 写失败则下次启动再补刷 */ }
     }
     const state = store.loadState();
     cliUsage?.applySettings(state?.settings);
