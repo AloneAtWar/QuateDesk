@@ -209,6 +209,12 @@ function App() {
   }, [previewConnecting]);
 
   useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem(THEME_KEY, theme); }, [theme]);
+  // 安卓 App 的主题监听器在发现页面与 App 不一致时通过它直接校正主题(走 React 状态,
+  // localStorage 与 data-theme 随上面的 effect 一并更新);旧版 App 仍回退到点击切换按钮
+  useEffect(() => {
+    window.__qdSetTheme = (value) => { if (value === 'light' || value === 'dark') setTheme(value); };
+    return () => { delete window.__qdSetTheme; };
+  }, []);
   useEffect(() => { localStorage.setItem(MODE_KEY, mode); }, [mode]);
   // 用量视图(本机用量/额度浪费)锁定整页为视口高度,接上桌面端那套"弹性区域吃余量、
   // 拖拽上限按余量收敛"的有界高度链;看板/历史等视图保持内容驱动、整页滚动
