@@ -31,9 +31,12 @@ function defaultDeviceName() {
 function readInitialConnection() {
   const params = new URLSearchParams(location.hash.slice(1));
   const pairingKey = params.get('pair') || '';
-  if (pairingKey || params.has('access')) history.replaceState(null, '', location.pathname + location.search);
+  // 安卓 App 会把当前主题拼在链接里(#theme=light|dark),页面启动时直接应用,避免进入后再翻转闪烁
+  const themeParam = params.get('theme');
+  if (pairingKey || params.has('access') || params.has('theme')) history.replaceState(null, '', location.pathname + location.search);
   return {
     pairingKey,
+    theme: themeParam === 'light' || themeParam === 'dark' ? themeParam : null,
     token: pairingKey ? '' : (localStorage.getItem(TOKEN_KEY) || (import.meta.env.DEV ? 'demo' : '')),
   };
 }
@@ -175,7 +178,7 @@ function App() {
   const [wasteMeta, setWasteMeta] = useState(null);
   const [statisticsLoading, setStatisticsLoading] = useState(false);
   const [now, setNow] = useState(Date.now());
-  const [theme, setTheme] = useState(() => localStorage.getItem(THEME_KEY) || 'dark');
+  const [theme, setTheme] = useState(() => initialConnection.theme || localStorage.getItem(THEME_KEY) || 'dark');
   // 本机用量在远程页是只读会话:设置不落库,仅本页生效(合并同名模型开关等)
   const [localCliSettings, setLocalCliSettings] = useState({ localCliUsage: { enabled: true, mergeSameModels: true } });
   const snapshotRef = useRef(snapshot);
@@ -207,6 +210,13 @@ function App() {
 
   useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem(THEME_KEY, theme); }, [theme]);
   useEffect(() => { localStorage.setItem(MODE_KEY, mode); }, [mode]);
+  // 用量视图(本机用量/额度浪费)锁定整页为视口高度,接上桌面端那套"弹性区域吃余量、
+  // 拖拽上限按余量收敛"的有界高度链;看板/历史等视图保持内容驱动、整页滚动
+  const usageViewActive = !selectedAccountId && (mode === 'local-usage' || mode === 'waste');
+  useEffect(() => {
+    document.body.classList.toggle('remote-usage-bounded', usageViewActive);
+    return () => document.body.classList.remove('remote-usage-bounded');
+  }, [usageViewActive]);
   useEffect(() => {
     if (!token) return undefined;
     let active = true;

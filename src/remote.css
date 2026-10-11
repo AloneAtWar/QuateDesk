@@ -8,6 +8,11 @@ html.remote-page, body.remote-page { width: 100%; min-width: 0; overflow-x: hidd
 .remote-titlebar button { -webkit-app-region: no-drag; }
 /* 远程标题栏高 40px(窄屏 46px),菜单遮罩从标题栏下沿开始,不盖住标题栏按钮 */
 .remote-titlebar .main-view-menu-dismiss { inset: 40px 0 0; }
+/* 安卓 App 会向 WebView 注入 .remote-titlebar button{...!important} 规范标题栏按钮颜色,
+   这里的更高优先级规则保护菜单本体:遮罩保持全透明,菜单项保留 hover/选中配色 */
+.remote-titlebar .main-view-menu-dismiss { background: transparent !important; border-color: transparent !important; }
+.remote-titlebar .main-view-menu button { color: var(--ink-soft) !important; background: transparent !important; border: 0 !important; }
+.remote-titlebar .main-view-menu button:hover, .remote-titlebar .main-view-menu button.active { color: var(--green-deep) !important; background: var(--green-bg) !important; }
 .remote-title-theme { width: 25px; height: 23px; display: grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 6px; color: var(--ink-soft); background: var(--control); }
 .remote-title-theme:hover { color: var(--ink); border-color: var(--hover-border); }
 .remote-title-action { width: 25px; height: 23px; display: grid; place-items: center; flex: 0 0 auto; padding: 0; border: 1px solid var(--line); border-radius: 6px; color: var(--ink-soft); background: var(--control); }
@@ -27,6 +32,12 @@ html.remote-page, body.remote-page { width: 100%; min-width: 0; overflow-x: hidd
 .remote-main { width: 100%; max-width: none; min-height: calc(100dvh - 40px); padding: 8px 14px 20px; flex: 1 0 auto; overflow: visible; }
 /* 本机用量视图(远程只读):与桌面端同一条高度链,让热力图按剩余空间撑满 */
 .remote-main.local-usage-mode > .local-cli-page { flex: 1 1 auto; min-height: 0; }
+/* 用量视图(本机用量/额度浪费)锁定整页为视口高度:弹性区域(热力图/贡献表)吃余量,
+   拖拽上限按余量收敛——与桌面端一致,任何拖拽都不会把内容挤出屏幕或引起整页滚动;
+   看板/历史等视图保持内容驱动、整页滚动 */
+body.remote-usage-bounded { overflow-y: hidden; }
+body.remote-usage-bounded .remote-app { height: 100dvh; }
+.remote-main.local-usage-mode { flex: 1 1 auto; min-height: 0; overflow: hidden; }
 .remote-view-title { margin-bottom: 9px; }
 .remote-view-title .health-summary { color: var(--muted); font-size: 10px; }
 .remote-main > .view-stack { gap: 16px; }
