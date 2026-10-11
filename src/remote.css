@@ -8,9 +8,11 @@ html.remote-page, body.remote-page { width: 100%; min-width: 0; overflow-x: hidd
 .remote-titlebar button { -webkit-app-region: no-drag; }
 /* 远程标题栏高 40px(窄屏 46px),菜单遮罩从标题栏下沿开始,不盖住标题栏按钮 */
 .remote-titlebar .main-view-menu-dismiss { inset: 40px 0 0; }
-/* 安卓 App 会向 WebView 注入 .remote-titlebar button{...!important} 规范标题栏按钮颜色,
-   这里的更高优先级规则保护菜单本体:遮罩保持全透明,菜单项保留 hover/选中配色 */
+/* 安卓 App 会向 WebView 注入标题栏按钮样式(旧版为 .remote-titlebar button,0.0.9 起收窄为
+   .remote-titlebar .titlebar-controls>button 等),遮罩 div 已不受 button 选择器影响;
+   这里再用更高优先级规则兜底:即使未来遮罩改回 button 或 App 注入口径变化,也保持全透明 */
 .remote-titlebar .main-view-menu-dismiss { background: transparent !important; border-color: transparent !important; }
+.remote-titlebar .titlebar-controls > .main-view-menu-dismiss { background: transparent !important; border-color: transparent !important; }
 .remote-titlebar .main-view-menu button { color: var(--ink-soft) !important; background: transparent !important; border: 0 !important; }
 .remote-titlebar .main-view-menu button:hover, .remote-titlebar .main-view-menu button.active { color: var(--green-deep) !important; background: var(--green-bg) !important; }
 .remote-title-theme { width: 25px; height: 23px; display: grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: 6px; color: var(--ink-soft); background: var(--control); }

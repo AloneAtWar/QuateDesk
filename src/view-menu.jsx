@@ -11,7 +11,7 @@ export function ViewMenu({ current, onChange, open, onOpenChange }) {
   const close = () => setOpen(false);
   const onKeyDown = (event) => { if (event.key === 'Escape') close(); };
   return <>
-    {isOpen && <button className="main-view-menu-dismiss" aria-label="关闭界面菜单" onClick={close} onKeyDown={onKeyDown} />}
+    {isOpen && <div className="main-view-menu-dismiss" aria-hidden="true" onClick={close} onKeyDown={onKeyDown} />}
     <div className={`main-view-anchor${isOpen ? ' open' : ''}`} onKeyDown={onKeyDown}>
       <button className="control-solo" onClick={() => setOpen(!isOpen)} title="切换界面" aria-label="切换界面" aria-expanded={isOpen} aria-controls="main-view-menu"><Ellipsis size={13} /></button>
       {isOpen && <div className="main-view-menu" id="main-view-menu" aria-label="界面切换">{MAIN_VIEW_ITEMS.map(([key, label]) => <button key={key} className={current === key ? 'active' : ''} onClick={() => { onChange(key); close(); }}>{label}<span>{current === key && <Check size={12} />}</span></button>)}</div>}
