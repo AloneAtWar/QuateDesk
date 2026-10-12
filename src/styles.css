@@ -1513,6 +1513,34 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
   .local-cli-day-models-title { font-size: 13px; }
 }
 
+/* ── 宽屏下拉菜单跟随整体界面等比放大（视图切换 / 历史视图 / 本机用量范围 / 渠道） ── */
+@media (min-width: 1500px) {
+  .main-view-menu { width: 150px; padding: 5px; }
+  .main-view-menu button { padding: 8px 11px; font-size: 13px; }
+  .history-switch-menu { min-width: 108px; }
+  .history-switch-menu button { padding: 4px 6px; font-size: 11px; }
+  .local-cli-range-menu { padding: 5px; }
+  .local-cli-range-option { padding: 6px 9px; font-size: 12px; }
+  .local-cli-channel-search input { font-size: 12px; }
+  .local-cli-channel-options { max-height: 250px; }
+  .local-cli-channel-option { padding: 6px 9px; font-size: 12px; }
+  .local-cli-channel-option > small { font-size: 9.5px; }
+  .local-cli-channel-empty { font-size: 12px; }
+}
+
+@media (min-width: 1900px) {
+  .main-view-menu { width: 170px; }
+  .main-view-menu button { padding: 9px 12px; font-size: 14px; }
+  .history-switch-menu { min-width: 122px; }
+  .history-switch-menu button { padding: 5px 7px; font-size: 12px; }
+  .local-cli-range-option { padding: 7px 10px; font-size: 13px; }
+  .local-cli-channel-search input { font-size: 13px; }
+  .local-cli-channel-options { max-height: 290px; }
+  .local-cli-channel-option { padding: 7px 10px; font-size: 13px; }
+  .local-cli-channel-option > small { font-size: 10.5px; }
+  .local-cli-channel-empty { font-size: 13px; }
+}
+
 /* ── 宽屏热力图：外框保持 flex:1 吃满纵向余量(基础规则),格子行高由 JS 按框高撑满,
       统计卡/标题/模型条紧贴外框排布,不再用 space-evenly 拉出大段空隙 ── */
 
