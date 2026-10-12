@@ -1331,7 +1331,7 @@ function HistoryViewSwitch({ tabs, view, onChange, domId, panelId }) {
           return <button type="button" role="tab" key={tab.key} id={`${domId}-tab-${tab.key}`} aria-controls={panelId} aria-selected={view === tab.key} aria-disabled={disabled || undefined}
             className={`${view === tab.key ? 'active' : ''}${disabled ? ' disabled' : ''}`} title={disabled ? `暂不可用：${tab.reason}` : tab.label}
             onClick={() => { if (disabled) return; onChange(tab.key); close(); }}>
-            {tab.label}{disabled ? <small>{tab.reason}</small> : <span>{view === tab.key && <Check size={12} />}</span>}
+            {tab.label}{!disabled && <span>{view === tab.key && <Check size={12} />}</span>}
           </button>;
         })}
       </div>}
