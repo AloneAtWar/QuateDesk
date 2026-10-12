@@ -632,6 +632,9 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
   const chartRootRef = useRef(null);
   const svgRef = useRef(null);
   const dragRef = useRef(null);
+  // 触屏双指捏合：跟踪活动触点坐标与捏合起点距离
+  const pointersRef = useRef(new Map());
+  const pinchRef = useRef(null);
   // 图表同时跟随容器宽、高：小窗保持原来的 470×184 基线，宽屏历史页会获得更高的绘图区，
   // 避免最大化后只把一条很扁的折线横向拉长。
   const [chartSize, setChartSize] = useState({ width: 470, height: 184 });
@@ -684,6 +687,18 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
     setView(next);
     onRangeKeyChange?.(matchRangeKey(next, fullStart, fullEnd));
   };
+  // 滚轮与触屏双指共用的缩放：以锚点（ratio 对应的时刻）为中心收缩/放大时间窗口
+  const zoomAt = (ratio, factor) => {
+    const fullSpan = Math.max(1, fullEnd - fullStart);
+    const cur = shown || { start: fullStart, end: fullEnd };
+    const curSpan = cur.end - cur.start;
+    const minSpan = Math.min(fullSpan, Math.max(10 * 60_000, fullSpan / 50));
+    const nextSpan = Math.min(fullSpan, Math.max(minSpan, curSpan * factor));
+    if (Math.abs(nextSpan - curSpan) < 1000) return;
+    const anchor = cur.start + curSpan * ratio;
+    const nextStart = Math.min(Math.max(fullStart, anchor - nextSpan * ratio), fullEnd - nextSpan);
+    applyView(nextSpan >= fullSpan ? null : { start: nextStart, end: nextStart + nextSpan });
+  };
   useEffect(() => {
     if (rangeMs != null && !rangeAvailable(rangeMs, fullStart, fullEnd)) onRangeKeyChange?.('all');
   }, [rangeMs, fullStart, fullEnd]);
@@ -695,16 +710,7 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
       event.preventDefault();
       const rect = el.getBoundingClientRect();
       const ratio = Math.min(1, Math.max(0, (((event.clientX - rect.left) / rect.width) * W - PAD.l) / innerW));
-      const fullSpan = Math.max(1, fullEnd - fullStart);
-      const cur = shown || { start: fullStart, end: fullEnd };
-      const curSpan = cur.end - cur.start;
-      const factor = event.deltaY > 0 ? 1.3 : 1 / 1.3;
-      const minSpan = Math.min(fullSpan, Math.max(10 * 60_000, fullSpan / 50));
-      const nextSpan = Math.min(fullSpan, Math.max(minSpan, curSpan * factor));
-      if (Math.abs(nextSpan - curSpan) < 1000) return;
-      const anchor = cur.start + curSpan * ratio;
-      const nextStart = Math.min(Math.max(fullStart, anchor - nextSpan * ratio), fullEnd - nextSpan);
-      applyView(nextSpan >= fullSpan ? null : { start: nextStart, end: nextStart + nextSpan });
+      zoomAt(ratio, event.deltaY > 0 ? 1.3 : 1 / 1.3);
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
@@ -770,13 +776,41 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
     if (gapIndex >= 0) { setHover(null); setHoverGap({ from: ats[gapIndex], to: ats[gapIndex + 1] }); return; }
     setHover(best); setHoverGap(null);
   };
+  // 触屏适配：跟踪活动触点，两根手指时进入捏合缩放，单指沿用平移/悬停
   const startPan = (event) => {
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    if (pointersRef.current.size === 2) {
+      // 第二根手指落下：平移转为捏合缩放
+      const [a, b] = [...pointersRef.current.values()];
+      pinchRef.current = { distance: Math.hypot(a.x - b.x, a.y - b.y) };
+      dragRef.current = null;
+      return;
+    }
     const cur = shown;
     if (!cur) return;
     dragRef.current = { x: event.clientX, start: cur.start, end: cur.end };
-    event.currentTarget.setPointerCapture?.(event.pointerId);
   };
   const movePan = (event) => {
+    if (pointersRef.current.has(event.pointerId)) pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    const pinch = pinchRef.current;
+    if (pinch && pointersRef.current.size >= 2) {
+      // 双指向外拉（距离变大）放大，向里收（距离变小）缩小；以两指中点为缩放锚点
+      const [a, b] = [...pointersRef.current.values()];
+      const distance = Math.hypot(a.x - b.x, a.y - b.y);
+      const rect = svgRef.current?.getBoundingClientRect();
+      if (rect && distance > 0 && pinch.distance > 0) {
+        const factor = pinch.distance / distance;
+        if (Math.abs(factor - 1) > 0.02) {
+          const ratio = Math.min(1, Math.max(0, ((((a.x + b.x) / 2 - rect.left) / rect.width) * W - PAD.l) / innerW));
+          zoomAt(ratio, factor);
+          pinch.distance = distance;
+        }
+      }
+      setHover(null);
+      setHoverGap(null);
+      return;
+    }
     const drag = dragRef.current;
     if (!drag) { moveHover(event.clientX); return; }
     const rect = svgRef.current?.getBoundingClientRect();
@@ -787,7 +821,16 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
     applyView({ start: nextStart, end: nextStart + viewSpan });
     setHover(null);
   };
-  const endPan = () => { dragRef.current = null; };
+  const endPan = (event) => {
+    if (event?.pointerId != null) pointersRef.current.delete(event.pointerId);
+    else pointersRef.current.clear();
+    if (pointersRef.current.size < 2) pinchRef.current = null;
+    // 捏合结束还剩一根手指时从当前位置接着平移；全部抬起则结束本次手势
+    if (pointersRef.current.size === 1) {
+      const remaining = [...pointersRef.current.values()][0];
+      dragRef.current = shown ? { x: remaining.x, start: shown.start, end: shown.end } : null;
+    } else dragRef.current = null;
+  };
   const hoverPoint = hover == null ? null : drawn[hover];
   const hoverX = hoverPoint ? toX(new Date(hoverPoint.at).getTime()) : 0;
   const pickRange = (preset) => {
@@ -830,7 +873,7 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
         })}
       </g>}
     </svg>
-    {samples.length > 1 && <div className="chart-tools"><span className="chart-hint">滚轮缩放 · 放大后拖动平移</span></div>}
+    {samples.length > 1 && <div className="chart-tools"><span className="chart-hint">滚轮 / 双指缩放 · 放大后拖动平移</span></div>}
   </div>;
 }
 
@@ -1271,6 +1314,31 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
   </div>;
 }
 
+// 历史视图切换下拉：趋势/用量/本机/浪费四个入口常驻；不可用的入口保留在列表里但不可选，
+// 悬停 title 与项内小字都说明原因（触屏没有悬停，小字保证原因可见）
+function HistoryViewSwitch({ tabs, view, onChange, domId, panelId }) {
+  const [open, setOpen] = useState(false);
+  const close = () => setOpen(false);
+  const onKeyDown = (event) => { if (event.key === 'Escape') { event.stopPropagation(); close(); } };
+  const active = tabs.find((tab) => tab.key === view) || tabs[0];
+  return <>
+    {open && <div className="history-switch-dismiss" aria-hidden="true" onClick={close} />}
+    <div className={`history-switch-anchor${open ? ' open' : ''}`} onKeyDown={onKeyDown}>
+      <button type="button" className="history-switch-toggle" onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="true" title="切换视图">{active.label}<ChevronDown size={12} /></button>
+      {open && <div className="history-switch-menu" role="tablist" aria-label="账号历史视图">
+        {tabs.map((tab) => {
+          const disabled = Boolean(tab.reason);
+          return <button type="button" role="tab" key={tab.key} id={`${domId}-tab-${tab.key}`} aria-controls={panelId} aria-selected={view === tab.key} aria-disabled={disabled || undefined}
+            className={`${view === tab.key ? 'active' : ''}${disabled ? ' disabled' : ''}`} title={disabled ? `暂不可用：${tab.reason}` : tab.label}
+            onClick={() => { if (disabled) return; onChange(tab.key); close(); }}>
+            {tab.label}{disabled ? <small>{tab.reason}</small> : <span>{view === tab.key && <Check size={12} />}</span>}
+          </button>;
+        })}
+      </div>}
+    </div>
+  </>;
+}
+
 function HistoryView({ account, provider, onBack, onProviderUsageState, settings, setSettings, readOnly = false, wasteWindowsOverride }) {
   const [points, setPoints] = useState(null);
   const [hiddenKeys, setHiddenKeys] = useState([]);
@@ -1327,40 +1395,34 @@ function HistoryView({ account, provider, onBack, onProviderUsageState, settings
     if (old.includes(key)) return old.filter((item) => item !== key);
     return legendKeys.length - old.length <= 1 ? old : [...old, key];
   });
-  const historyTabs = [
-    { key: 'trend', label: '趋势' },
-    ...(showProviderUsageEntry ? [{ key: 'provider-usage', label: '用量' }] : []),
-    ...(showLocalUsageEntry ? [{ key: 'local-usage', label: '本机' }] : []),
-    ...(wasteWindows.length > 0 ? [{ key: 'waste', label: '浪费' }] : []),
-  ];
   const historyDomId = `history-${String(account.id).replace(/[^a-zA-Z0-9_-]/g, '-')}`;
   const historyPanelId = `${historyDomId}-panel`;
-  const moveHistoryTab = (event) => {
-    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-    event.preventDefault();
-    const tablist = event.currentTarget;
-    const currentIndex = Math.max(0, historyTabs.findIndex((tab) => tab.key === view));
-    const targetIndex = event.key === 'Home'
-      ? 0
-      : event.key === 'End'
-        ? historyTabs.length - 1
-        : (currentIndex + (event.key === 'ArrowRight' ? 1 : -1) + historyTabs.length) % historyTabs.length;
-    const target = historyTabs[targetIndex];
-    if (!target) return;
-    setView(target.key);
-    requestAnimationFrame(() => tablist.querySelector(`[data-history-tab="${target.key}"]`)?.focus());
-  };
-  const hasHistoryTabs = historyTabs.length > 1;
+  // 下拉选项常驻；不可用时给出原因，下拉里置灰展示并说明
+  const providerUsageDisabledReason = showProviderUsageEntry ? ''
+    : !providerUsageCopy(provider)
+      ? '该厂商暂不支持官方用量统计'
+      : account?.usageConnection?.supported === false
+        ? '该账号不支持官方用量统计'
+        : '当前环境不支持官方用量统计';
+  const localUsageDisabledReason = showLocalUsageEntry ? '' : '该厂商未开启本机用量统计，可在厂商设置中开启';
+  const wasteDisabledReason = wasteWindows.length > 0 ? ''
+    : (Array.isArray(wasteWindowsOverride) ? wasteWindowsOverride : resolveWasteWindows(provider?.requestConfig)).length > 0
+      ? '该账号未追踪周 / 月额度窗口，没有可统计的浪费周期'
+      : '该厂商没有周 / 月额度窗口，无法统计浪费';
+  const historyTabs = [
+    { key: 'trend', label: '趋势', reason: '' },
+    { key: 'provider-usage', label: '用量', reason: providerUsageDisabledReason },
+    { key: 'local-usage', label: '本机', reason: localUsageDisabledReason },
+    { key: 'waste', label: '浪费', reason: wasteDisabledReason },
+  ];
   return <div className="view-stack history-view">
     <section className="surface-section">
       <div className="history-head">
         <AccountIdentity account={account} provider={provider} />
         {account.disabled && <span className="history-disabled-tag"><CircleStop size={12} /> 已停用 · {formatDisabledDate(account.disabledAt)}</span>}
-        {hasHistoryTabs && <div className="seg-control history-view-switch" role="tablist" aria-label="账号历史视图" onKeyDown={moveHistoryTab}>
-          {historyTabs.map((tab) => <button type="button" role="tab" id={`${historyDomId}-tab-${tab.key}`} data-history-tab={tab.key} key={tab.key} tabIndex={view === tab.key ? 0 : -1} aria-controls={historyPanelId} aria-selected={view === tab.key} className={view === tab.key ? 'active' : ''} onClick={() => setView(tab.key)}>{tab.label}</button>)}
-        </div>}
+        <HistoryViewSwitch tabs={historyTabs} view={view} onChange={setView} domId={historyDomId} panelId={historyPanelId} />
       </div>
-      <div className={`history-tabpanel${showLocalUsage ? ' local-usage-tabpanel' : ''}`} {...(hasHistoryTabs ? { role: 'tabpanel', id: historyPanelId, 'aria-labelledby': `${historyDomId}-tab-${view}` } : {})}>{showProviderUsage ? <ProviderUsageView account={account} provider={provider} onState={onProviderUsageState} readOnly={readOnly} /> : showLocalUsage ? <LocalCliUsageView settings={settings} setSettings={setSettings} modelRules={localAnalysis.modelRules} scopeName={provider?.name || '当前厂商'} embedded /> : showWaste ? <WasteView account={account} wasteWindows={wasteWindows} /> : <div className="trend-view">
+      <div className={`history-tabpanel${showLocalUsage ? ' local-usage-tabpanel' : ''}`} role="tabpanel" id={historyPanelId} aria-labelledby={`${historyDomId}-tab-${view}`}>{showProviderUsage ? <ProviderUsageView account={account} provider={provider} onState={onProviderUsageState} readOnly={readOnly} /> : showLocalUsage ? <LocalCliUsageView settings={settings} setSettings={setSettings} modelRules={localAnalysis.modelRules} scopeName={provider?.name || '当前厂商'} embedded /> : showWaste ? <WasteView account={account} wasteWindows={wasteWindows} /> : <div className="trend-view">
         {points === null ? <div className="settings-empty chart-empty">正在读取历史记录…</div>
           : points.length === 0 ? <div className="settings-empty chart-empty">暂无历史数据，每次成功刷新额度后都会记录一条</div>
             : <UsageChart points={points} hiddenKeys={hiddenKeys} rangeKey={rangeKey} onRangeKeyChange={setRangeKey} />}

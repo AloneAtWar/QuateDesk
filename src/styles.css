@@ -653,7 +653,7 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .trend-view { height: 271px; display: flex; flex-direction: column; }
 .trend-view .chart-legend { margin-top: auto; }
 .usage-chart { position: relative; padding: 10px 8px 2px; user-select: none; }
-.usage-chart svg { display: block; width: 100%; height: auto; }
+.usage-chart svg { display: block; width: 100%; height: auto; touch-action: pan-y; }
 .chart-grid { stroke: var(--line-inner); stroke-width: 1; }
 .chart-y-label, .chart-x-label { fill: var(--faint); font-size: 9px; font-family: 'DM Mono', monospace; }
 .chart-y-label { text-anchor: end; }
@@ -784,7 +784,17 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 
 /* ── 厂商官方账号服务端用量（一比一复刻 DeepSeek 界面演示）── */
 /* 三个页签统一 271px 主体；热力图方格按容器宽度自适应（5–14px），近 1 年 53 周完整铺满一屏 */
-.history-view-switch button { padding-left: 8px; padding-right: 8px; }
+/* 历史页视图切换下拉：四个入口常驻，不可用项置灰并在项内小字 / 悬停 title 说明原因 */
+.history-switch-dismiss { position: fixed; inset: 0; z-index: 48; }
+.history-switch-anchor { position: relative; flex: 0 0 auto; }
+.history-switch-anchor.open { z-index: 49; }
+.history-switch-toggle { display: flex; align-items: center; gap: 4px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink-soft); background: var(--control); font-size: 10px; }
+.history-switch-toggle:hover { color: var(--ink); border-color: var(--hover-border); }
+.history-switch-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 49; min-width: 176px; padding: 4px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); box-shadow: 0 8px 24px rgba(20, 40, 30, .14); }
+.history-switch-menu button { width: 100%; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 8px; padding: 7px 9px; border: 0; border-radius: 4px; background: transparent; color: var(--ink-soft); font-size: 11px; text-align: left; }
+.history-switch-menu button:hover, .history-switch-menu button.active { color: var(--green-deep); background: var(--green-bg); }
+.history-switch-menu button.disabled, .history-switch-menu button.disabled:hover { color: var(--faint); background: transparent; cursor: not-allowed; }
+.history-switch-menu button small { width: 100%; color: var(--faint); font-size: 9px; line-height: 1.45; }
 .provider-usage-view { height: 271px; min-width: 0; display: flex; flex-direction: column; padding: 7px 12px 5px; }
 /* 顶部统计卡片：彩色圆底图标在左，标签 + 数值在右 */
 .provider-usage-summary { flex: 0 0 auto; display: flex; gap: 7px; }
@@ -1433,7 +1443,7 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
   .history-head { padding: 15px 20px 12px; }
   .history-head .account-title-line strong { font-size: 15px; }
   .history-head .account-copy > span { font-size: 11.5px; }
-  .history-view .seg-control button, .local-cli-page .seg-control button { padding: 5px 14px; font-size: 12px; }
+  .history-view .seg-control button, .local-cli-page .seg-control button, .history-view .history-switch-toggle { padding: 5px 14px; font-size: 12px; }
   .provider-stat { gap: 10px; padding: 9px 13px; border-radius: 12px; }
   .provider-stat .stat-copy > span { font-size: 10px; }
   .provider-stat strong { font-size: 16px; }
