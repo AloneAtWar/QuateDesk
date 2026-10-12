@@ -790,11 +790,11 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .history-switch-anchor.open { z-index: 49; }
 .history-switch-toggle { display: flex; align-items: center; gap: 4px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink-soft); background: var(--control); font-size: 10px; }
 .history-switch-toggle:hover { color: var(--ink); border-color: var(--hover-border); }
-.history-switch-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 49; min-width: 124px; padding: 3px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); box-shadow: 0 8px 24px rgba(20, 40, 30, .14); }
-.history-switch-menu button { width: 100%; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 8px; padding: 5px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--ink-soft); font-size: 10px; text-align: left; }
+.history-switch-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 49; min-width: 68px; padding: 2px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 8px 24px rgba(20, 40, 30, .14); }
+.history-switch-menu button { width: 100%; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1px 4px; padding: 3px 5px; border: 0; border-radius: 4px; background: transparent; color: var(--ink-soft); font-size: 9px; text-align: left; }
 .history-switch-menu button:hover, .history-switch-menu button.active { color: var(--green-deep); background: var(--green-bg); }
 .history-switch-menu button.disabled, .history-switch-menu button.disabled:hover { color: var(--faint); background: transparent; cursor: not-allowed; }
-.history-switch-menu button small { width: 100%; color: var(--faint); font-size: 8px; line-height: 1.4; }
+.history-switch-menu button small { width: 100%; color: var(--faint); font-size: 7px; line-height: 1.35; }
 .provider-usage-view { height: 271px; min-width: 0; display: flex; flex-direction: column; padding: 7px 12px 5px; }
 /* 顶部统计卡片：彩色圆底图标在左，标签 + 数值在右 */
 .provider-usage-summary { flex: 0 0 auto; display: flex; gap: 7px; }
