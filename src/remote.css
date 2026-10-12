@@ -161,10 +161,10 @@ body.remote-usage-bounded .remote-app { height: 100dvh; }
 .remote-settings-heading p { margin: 4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .remote-settings-card-head > b { display: inline-flex; align-items: center; gap: 7px; }
 .remote-settings-card-head > b svg { color: var(--coral); }
-.remote-settings-toggle, .remote-settings-field, .remote-settings-range { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-width: 0; padding: 8px 0; }
-.remote-settings-toggle > span, .remote-settings-field > span, .remote-settings-range > span, .remote-settings-rule-heading > span { display: grid; gap: 4px; min-width: 0; }
-.remote-settings-toggle b, .remote-settings-field b, .remote-settings-range b, .remote-settings-rule-heading b { color: var(--ink-soft); font-size: 11px; font-weight: 600; }
-.remote-settings-toggle small, .remote-settings-field small, .remote-settings-range small, .remote-settings-rule-heading small { color: var(--faint); font-size: 9px; line-height: 1.45; }
+.remote-settings-toggle, .remote-settings-field { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-width: 0; padding: 8px 0; }
+.remote-settings-toggle > span, .remote-settings-field > span, .remote-settings-rule-heading > span { display: grid; gap: 4px; min-width: 0; }
+.remote-settings-toggle b, .remote-settings-field b, .remote-settings-rule-heading b { color: var(--ink-soft); font-size: 11px; font-weight: 600; }
+.remote-settings-toggle small, .remote-settings-field small, .remote-settings-rule-heading small { color: var(--faint); font-size: 9px; line-height: 1.45; }
 .remote-settings-toggle input { width: 18px; height: 18px; flex: 0 0 auto; accent-color: var(--green); }
 .remote-settings-field select { min-width: 115px; height: 34px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink-soft); background: var(--control); font-size: 10px; }
 .remote-settings-rule-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line-inner); }
@@ -173,7 +173,6 @@ body.remote-usage-bounded .remote-app { height: 100dvh; }
 .remote-settings-rule input { width: 100%; min-width: 0; height: 32px; padding: 0 7px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: var(--control); font-size: 11px; }
 .remote-settings-rule .icon-button { width: 28px; height: 28px; }
 .remote-settings-empty { padding: 12px 8px; border-radius: 7px; color: var(--faint); background: var(--surface-2); text-align: center; font-size: 10px; }
-.remote-settings-range input { width: min(45%, 240px); accent-color: var(--green); }
 .remote-settings-access p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.65; }
 .remote-settings-savebar { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 8px -2px 0; padding: 9px 2px max(9px, env(safe-area-inset-bottom)); background: linear-gradient(180deg, transparent, var(--bg) 18%); }
 .remote-settings-savebar > span { color: var(--faint); font-size: 9px; }
@@ -250,7 +249,7 @@ body.remote-usage-bounded .remote-app { height: 100dvh; }
   .remote-main .reset-timeline { width: 100%; max-width: 100%; padding-right: 10px; padding-left: 10px; }
   .remote-settings-card { gap: 10px; padding: 12px; }
   .remote-settings-card-head > small { font-size: 8px; text-align: right; }
-  .remote-settings-toggle, .remote-settings-field, .remote-settings-range { gap: 8px; }
+  .remote-settings-toggle, .remote-settings-field { gap: 8px; }
   .remote-settings-rule { gap: 6px; padding: 7px; }
   .remote-settings-rule input { font-size: 10px; }
   .remote-settings-savebar { margin-right: 0; margin-left: 0; }

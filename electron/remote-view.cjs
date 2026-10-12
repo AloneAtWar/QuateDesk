@@ -36,8 +36,6 @@ const publicRemoteSettings = (settings = {}) => ({
     beforeMinutes: safeInteger(rule?.beforeMinutes, 1, 10080, 120),
     minRemaining: safeInteger(rule?.minRemaining, 0, 100, 50),
   })),
-  periodSort5hRemaining: safeInteger(settings.periodSort5hRemaining, 0, 100, 0),
-  periodSortLongRemaining: safeInteger(settings.periodSortLongRemaining, 0, 100, 0),
 });
 
 const readJsonBody = (request, limit = 16 * 1024) => new Promise((resolve, reject) => {

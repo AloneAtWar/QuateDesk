@@ -8,7 +8,6 @@ import {
 } from 'lucide-react';
 import { builtinLocalAnalysisDefaults, initialAccounts, providerCatalog, windowCatalog } from './data';
 import { adapterDefinitions } from './adapters';
-import { clampRemainingWeight, comparePriority } from './priority-score';
 import { newApiTemplateScript } from './newapi-template';
 import { computeUsageStreaks, formatProviderUsageCost, formatProviderUsageSummaryTokens } from './provider-usage-format';
 import LocalCliUsageView from './local-cli-usage/LocalCliUsageView';
@@ -239,8 +238,6 @@ const normalizeSettings = (value = {}) => {
     },
     proxyMode: ['direct', 'system', 'manual'].includes(value.proxyMode) ? value.proxyMode : 'system',
     proxyUrl: String(value.proxyUrl ?? ''),
-    periodSort5hRemaining: clampRemainingWeight(value.periodSort5hRemaining),
-    periodSortLongRemaining: clampRemainingWeight(value.periodSortLongRemaining),
     widgetSize: undefined,
     widgetWidth: undefined,
     widgetHeight: undefined,
@@ -517,7 +514,7 @@ function PriorityRow({ account, meter, provider, reminderRules, onOpenHistory })
   </div>;
 }
 
-function PriorityView({ accounts, providers, reminderRules, onOpenHistory, sortWeights }) {
+function PriorityView({ accounts, providers, reminderRules, onOpenHistory }) {
   const [collapsed, setCollapsed] = useState({});
   const grouped = useMemo(() => {
     const byWindow = new Map();
@@ -525,10 +522,18 @@ function PriorityView({ accounts, providers, reminderRules, onOpenHistory, sortW
       if (!byWindow.has(row.meter.key)) byWindow.set(row.meter.key, []);
       byWindow.get(row.meter.key).push(row);
     });
+    // 组内固定按距重置时间从近到远排列，不可用的窗口沉底
+    const byReset = (a, b) => {
+      if ((a.meter.available === false) !== (b.meter.available === false)) return a.meter.available === false ? 1 : -1;
+      const aReset = a.meter.resetAt ? new Date(a.meter.resetAt).getTime() : Infinity;
+      const bReset = b.meter.resetAt ? new Date(b.meter.resetAt).getTime() : Infinity;
+      if (aReset !== bReset) return aReset - bReset;
+      return Number(b.meter.remaining || 0) - Number(a.meter.remaining || 0);
+    };
     return [...byWindow.entries()]
       .sort(([a], [b]) => (durationOrder[a] || 9) - (durationOrder[b] || 9))
-      .map(([key, rows]) => [key, rows.sort((a, b) => comparePriority(a, b, sortWeights))]);
-  }, [accounts, sortWeights]);
+      .map(([key, rows]) => [key, rows.sort(byReset)]);
+  }, [accounts]);
   return <div className="view-stack">
     <ResetTimeline accounts={accounts} providers={providers} />
     {grouped.map(([key, rows]) => <section className="surface-section" key={key}>
@@ -1554,7 +1559,7 @@ function OverviewCard({ account, provider, feedback, onOpenHistory, onRelogin, o
   </div>;
 }
 
-function StatusView({ accounts, providers, runtime, onTestAccount, testingAccountId, testResults = {}, reminderRules = [], mode = 'rings', onModeChange, onOpenSettings, lastSync, onRefresh, refreshing, onOpenHistory, onRelogin, onReorderAccounts, sortWeights, readOnly = false }) {
+function StatusView({ accounts, providers, runtime, onTestAccount, testingAccountId, testResults = {}, reminderRules = [], mode = 'rings', onModeChange, onOpenSettings, lastSync, onRefresh, refreshing, onOpenHistory, onRelogin, onReorderAccounts, readOnly = false }) {
   // 停用账号从所有视图的常规列表里分离出来：rows/periods 直接不显示（resetAt 已过期会污染时间排序），
   // rings 视图单独收进置底的折叠分组；组内按停用时间倒序（最近停的排最前）
   const disabledAccounts = accounts.filter((a) => a.disabled)
@@ -1568,7 +1573,7 @@ function StatusView({ accounts, providers, runtime, onTestAccount, testingAccoun
     ? <div className="settings-empty all-disabled-empty">{readOnly ? '所有账号均已停用。可切换到「账号总览」查看停用前记录。' : '所有账号均已停用。切换到「账号总览」视图，或在设置的账号列表中可重新启用。'}</div>
     : null;
   if (mode === 'rows') return <div className="view-stack">{activeAccounts.length ? <WindowsView accounts={activeAccounts} providers={providers} reminderRules={reminderRules} embedded onOpenHistory={onOpenHistory} onRelogin={onRelogin} /> : allDisabledHint}</div>;
-  if (mode === 'periods') return <div className="view-stack">{activeAccounts.length ? <PriorityView accounts={activeAccounts} providers={providers} reminderRules={reminderRules} onOpenHistory={onOpenHistory} sortWeights={sortWeights} /> : allDisabledHint}</div>;
+  if (mode === 'periods') return <div className="view-stack">{activeAccounts.length ? <PriorityView accounts={activeAccounts} providers={providers} reminderRules={reminderRules} onOpenHistory={onOpenHistory} /> : allDisabledHint}</div>;
   // 总览按账号列表顺序展示（不再按状态分组），以便拖拽排序；异常账号仍用警告样式标出
   return <div className="view-stack">
     <section className="overview-grid">{activeAccounts.map((account) => {
@@ -1586,6 +1591,28 @@ function StatusView({ accounts, providers, runtime, onTestAccount, testingAccoun
       })}</div>}
     </>}
   </div>;
+}
+
+// 看板底部的「即将刷新」栏：启用账号的每个带重置时间的额度窗口各占一条，从近到远单行排列；
+// 单行不换行、超出部分裁剪，窗口越窄排得越少，窗口越宽栏越高（样式里的宽屏断点）
+function UpcomingRefreshBar({ accounts, providers, onOpenHistory }) {
+  const upcoming = useMemo(() => accounts
+    .filter((account) => !account.disabled)
+    .flatMap((account) => (account.windows || [])
+      .filter((meter) => meter.resetAt && !Number.isNaN(new Date(meter.resetAt).getTime()))
+      .map((meter) => ({ account, meter, at: new Date(meter.resetAt).getTime() })))
+    .sort((a, b) => a.at - b.at), [accounts]);
+  if (!upcoming.length) return null;
+  return <footer className="refresh-bar">
+    <span className="refresh-bar-title"><Clock3 size={12} />即将刷新</span>
+    {upcoming.map(({ account, meter }) => {
+      const provider = providers.find((item) => item.id === account.providerId);
+      const label = windowCatalog[meter.key]?.label || meter.key;
+      return <button type="button" className="refresh-chip" key={`${account.id}-${meter.key}`} title={`${account.name} · ${label} · ${formatResetAbsolute(meter.resetAt)}`} onClick={() => onOpenHistory?.(account)}>
+        <Logo provider={provider} size="xs" interactive={false} /><span>{account.name}</span><em>{label}</em><small>{formatResetCompact(meter.resetAt)}</small>
+      </button>;
+    })}
+  </footer>;
 }
 
 function Toggle({ checked, onChange, label, description }) {
@@ -1712,8 +1739,6 @@ const normalizeSharedSettings = (settings = {}) => ({
     id: String(rule.id || `rule-${index + 1}`), label: String(rule.label || ''),
     beforeMinutes: String(rule.beforeMinutes ?? 120), minRemaining: String(rule.minRemaining ?? 50),
   })),
-  periodSort5hRemaining: clampRemainingWeight(settings.periodSort5hRemaining),
-  periodSortLongRemaining: clampRemainingWeight(settings.periodSortLongRemaining),
 });
 
 function SharedSettingsPanel({ variant = 'desktop', settings = {}, setSettings, onSave, theme, setTheme, mode, setMode }) {
@@ -1745,12 +1770,8 @@ function SharedSettingsPanel({ variant = 'desktop', settings = {}, setSettings, 
       <small className="drawer-help">满足“刷新前多久”且“剩余至少”时，额度窗口会标记该规则。可以一条规则都没有。</small>
       <div className="setting-select"><span><b>轮询间隔</b><small>所有账号统一检查频率</small></span><select value={values.pollMinutes} onChange={(event) => update((old) => ({ ...old, pollMinutes: event.target.value }))}><option value="5">5 分钟</option><option value="10">10 分钟</option><option value="15">15 分钟</option><option value="30">30 分钟</option></select></div>
     </section>
-    <section className="drawer-section"><div className="drawer-section-title"><SlidersHorizontal size={16} /><span>周期明细排序</span></div>
-      {[{ key: 'periodSort5hRemaining', label: '5 小时' }, { key: 'periodSortLongRemaining', label: '7 天 / 1 个月' }].map((item) => {
-        const remaining = clampRemainingWeight(values[item.key]);
-        return <label className="period-sort-row" key={item.key}><span><b>{item.label}</b><small>剩余 {remaining}% · 重置 {100 - remaining}%</small></span><input type="range" min={0} max={100} step={5} value={remaining} onChange={(event) => update((old) => ({ ...old, [item.key]: Number(event.target.value) }))} /></label>;
-      })}
-      <small className="drawer-help">默认剩余 0%、重置 100%，只按距重置时间从近到远排（与原来一致）。拉高剩余占比后，额度多的账号更靠前。「全部」视图里 5 小时与 7 天/1 个月仍各用各的比例。</small>
+    <section className="drawer-section"><div className="drawer-section-title"><Clock3 size={16} /><span>看板</span></div>
+      <Toggle checked={values.showUpcomingRefresh !== false} onChange={(value) => update((old) => ({ ...old, showUpcomingRefresh: value }))} label="显示即将刷新" description="在看板底部按重置时间从近到远列出即将刷新的账号，窗口越宽显示的账号越多" />
     </section>
     <section className="drawer-section"><div className="drawer-section-title"><SunMoon size={16} /><span>主题</span></div><div className="setting-select"><span><b>界面主题</b><small>主窗口与桌面浮窗同步应用</small></span><select value={values.theme === 'light' ? 'light' : 'dark'} onChange={(event) => update((old) => ({ ...old, theme: event.target.value }))}><option value="dark">暗色</option><option value="light">亮色</option></select></div></section>
   </>;
@@ -1770,13 +1791,6 @@ function SharedSettingsPanel({ variant = 'desktop', settings = {}, setSettings, 
         <label><span>剩余至少（%）</span><input type="number" min="0" max="100" value={rule.minRemaining} onChange={(event) => update((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, minRemaining: event.target.value } : item) }))} /></label>
         <button type="button" className="icon-button danger" title="删除规则" aria-label="删除提醒规则" onClick={() => update((old) => ({ ...old, reminderRules: old.reminderRules.filter((_item, itemIndex) => itemIndex !== index) }))}><Trash2 size={14} /></button>
       </div>)}
-    </section>
-    <section className="remote-settings-card">
-      <div className="remote-settings-card-head"><b><SlidersHorizontal size={15} /> 周期明细排序</b><small>剩余额度和重置紧迫度的排序权重</small></div>
-      {[['periodSort5hRemaining', '5 小时额度'], ['periodSortLongRemaining', '7 天 / 1 个月额度']].map(([key, label]) => {
-        const remaining = clampRemainingWeight(values[key]);
-        return <label className="remote-settings-range" key={key}><span><b>{label}</b><small>剩余 {remaining}% · 重置紧迫度 {100 - remaining}%</small></span><input type="range" min="0" max="100" step="5" value={remaining} onChange={(event) => update((old) => ({ ...old, [key]: Number(event.target.value) }))} /></label>;
-      })}
     </section>
     {remote && <>
       <section className="remote-settings-card remote-settings-access"><div className="remote-settings-card-head"><b>电脑端设置</b><span className="remote-interactive-badge">交互访问</span></div><p>电脑端网络访问、配对设备、账号凭据、厂商适配、代理和数据管理仍由电脑应用管理。</p></section>
@@ -3829,8 +3843,9 @@ function App() {
         const result = await bridge.applyCcswitchImport(keys);
         if (result?.state) { setAccounts(result.state.accounts || []); setProviders(result.state.providers || []); setLastSync(result.state.lastSync || new Date().toISOString()); if (result.state.runtime) setRuntime(result.state.runtime); }
         setToast({ id: Date.now(), ok: result?.imported > 0, message: result?.imported > 0 ? `已从 cc-switch 导入 ${result.imported} 个账号` : '没有导入新账号（凭据都已存在）' });
-      }} onDeleteAccount={deleteAccount} onFinish={finishOnboarding} /> : accounts.length === 0 ? <section className="empty-workspace"><div className="empty-mark"><CircleGauge size={22} /></div><div><h2>把第一份 Coding Plan 接进来</h2><p>凭据将由 Windows 加密保存，额度请求只在本机发出。</p></div><button className="primary-button" onClick={() => setModal('account')}><Plus size={15} /> 添加账号</button><button className="outline-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> 设置</button>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button" onClick={() => setModal('import-ccswitch')}><Download size={15} /> 从 cc-switch 导入</button>}</section> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} onProviderUsageState={applyProviderUsageState} settings={settings} setSettings={setSettings} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} onReorderAccounts={reorderAccounts} sortWeights={{ fiveHourRemaining: settings.periodSort5hRemaining, otherRemaining: settings.periodSortLongRemaining }} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const kind = reloginChannel(provider)?.kind || 'kimi'; setModal({ type: `${kind}-relogin`, account }); }} />}</div>
+      }} onDeleteAccount={deleteAccount} onFinish={finishOnboarding} /> : accounts.length === 0 ? <section className="empty-workspace"><div className="empty-mark"><CircleGauge size={22} /></div><div><h2>把第一份 Coding Plan 接进来</h2><p>凭据将由 Windows 加密保存，额度请求只在本机发出。</p></div><button className="primary-button" onClick={() => setModal('account')}><Plus size={15} /> 添加账号</button><button className="outline-button" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /> 设置</button>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button" onClick={() => setModal('import-ccswitch')}><Download size={15} /> 从 cc-switch 导入</button>}</section> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} onProviderUsageState={applyProviderUsageState} settings={settings} setSettings={setSettings} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} onReorderAccounts={reorderAccounts} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const kind = reloginChannel(provider)?.kind || 'kimi'; setModal({ type: `${kind}-relogin`, account }); }} />}</div>
     </main>
+    {settings.showUpcomingRefresh !== false && !inUsageView && !onboardOpen && !historyAccount && accounts.length > 0 && <UpcomingRefreshBar accounts={accounts} providers={providers} onOpenHistory={(account) => setHistoryAccountId(account.id)} />}
     {settingsOpen && <SettingsDrawer accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)} openModal={setModal} onDeleteAccount={deleteAccount} onToggleAccountDisabled={toggleAccountDisabled} onTestAccount={testAccount} testingAccountId={testingAccountId} onEditProvider={editProvider} autoLaunch={autoLaunch} onToggleAutoLaunch={toggleAutoLaunch} appVersion={appVersion} update={update} onOpenUpdate={() => setUpdateOpen(true)} onCheckUpdate={onCheckUpdate} onClearHistory={clearHistory} runtime={runtime} onExportData={exportData} onImportData={importData} dataBusy={dataBusy} onReopenOnboarding={() => { setSettingsOpen(false); setHistoryAccountId(null); setOnboardOpen(true); }} onOpenDevTools={bridge?.toggleDevTools ? () => bridge.toggleDevTools() : null} />}
     {confirmState && <ConfirmModal confirm={confirmState} onClose={() => setConfirmState(null)} />}
     {updateOpen && update && <UpdateModal update={update} version={appVersion} onIgnore={ignoreUpdate} onClose={() => setUpdateOpen(false)} />}

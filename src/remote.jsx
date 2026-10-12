@@ -83,7 +83,7 @@ const demoSnapshot = {
   readOnly: true,
   lastSync: new Date().toISOString(),
   pollMinutes: 5,
-  settings: { alerts: true, pollMinutes: 5, reminderRules: [{ id: 'soon', label: '即将刷新且额度充足', beforeMinutes: 120, minRemaining: 50 }], periodSort5hRemaining: 0, periodSortLongRemaining: 0 },
+  settings: { alerts: true, pollMinutes: 5, reminderRules: [{ id: 'soon', label: '即将刷新且额度充足', beforeMinutes: 120, minRemaining: 50 }] },
   providers: providerCatalog,
   accounts: initialAccounts.map((account) => ({
     ...account,
@@ -355,7 +355,7 @@ function App() {
       {connectionError && <div className="remote-banner offline" role="status"><WifiOff size={18} /><span>{connectionError}{snapshot ? '，下方保留本次读取的数据。' : '。'}</span></div>}
       {loading && !snapshot ? <div className="remote-loading"><RefreshCw size={23} className="spinning" /><span>正在读取电脑上的额度</span></div> : snapshot ? <>
         {selectedAccount ? <HistoryView key={selectedAccount.id} account={selectedAccount} provider={selectedProvider} onBack={() => setSelectedAccountId(null)} settings={localCliSettings} setSettings={setLocalCliSettings} readOnly wasteWindowsOverride={selectedAccount.wasteWindows} /> : inUsageView ? <StatisticsView mode={inWasteView ? 'waste' : 'local-usage'} showNavigation={false} accounts={accounts} providers={providers} settings={localCliSettings} setSettings={setLocalCliSettings} Logo={Logo} api={bridge} onLocalApi={(api) => { localUsageApiRef.current = api; }} onLocalMeta={setLocalUsageMeta} onWasteApi={(api) => { wasteApiRef.current = api; }} onWasteMeta={setWasteMeta} /> : <>
-          <StatusView accounts={accounts} providers={providers} mode={mode} readOnly onOpenHistory={(account) => setSelectedAccountId(account.id)} lastSync={lastSync} reminderRules={snapshot.settings?.alerts === false ? [] : snapshot.settings?.reminderRules || []} sortWeights={{ fiveHourRemaining: snapshot.settings?.periodSort5hRemaining, otherRemaining: snapshot.settings?.periodSortLongRemaining }} testResults={{}} />
+          <StatusView accounts={accounts} providers={providers} mode={mode} readOnly onOpenHistory={(account) => setSelectedAccountId(account.id)} lastSync={lastSync} reminderRules={snapshot.settings?.alerts === false ? [] : snapshot.settings?.reminderRules || []} testResults={{}} />
         </>}
       </> : !loading && <div className="remote-empty"><WifiOff size={23} /><strong>暂时无法读取额度</strong><span>请确认电脑正在运行并可通过配对地址访问</span></div>}
     </main>
