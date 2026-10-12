@@ -979,7 +979,20 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 /* 模型拆分视图:无统计卡,标题下直接进入数据;控件右对齐 */
 .local-cli-models-view { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .local-cli-model-toolbar { flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-bottom: 6px; }
-.local-cli-range-switch { order: 1; flex: 0 0 auto; }
+.local-cli-range-total { margin-right: auto; color: var(--muted); font-size: 10px; white-space: nowrap; }
+.local-cli-range-total b { color: var(--ink); font-weight: 700; }
+
+/* 统计周期下拉:固定宽度按钮 + portal 菜单 */
+.local-cli-range-select { width: 64px; height: 26px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: space-between; gap: 4px; padding: 0 6px 0 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink-soft); background: var(--control); font-size: 10px; }
+.local-cli-range-select:hover { border-color: var(--hover-border); color: var(--ink); }
+.local-cli-range-select svg { transition: transform .15s; flex: 0 0 auto; }
+.local-cli-range-select svg.flip { transform: rotate(180deg); }
+.local-cli-range-value { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.local-cli-range-menu { z-index: 70; display: flex; flex-direction: column; padding: 4px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--drawer-bg); box-shadow: var(--shadow-strong); overflow: hidden; }
+.local-cli-range-option { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 5px 7px; border: 0; border-radius: 6px; color: var(--ink-soft); background: transparent; font-size: 10px; text-align: left; }
+.local-cli-range-option:hover { background: var(--surface-3); }
+.local-cli-range-option.selected { color: var(--ink); }
+.local-cli-range-check { color: var(--green-deep); }
 .local-cli-model-table { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line-inner); border-radius: 8px; background: var(--surface-2); overflow: hidden; }
 .local-cli-model-header { flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) 62px 58px 44px; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line-inner); color: var(--faint); font-size: 8px; font-weight: 700; }
 .local-cli-model-header .col-total, .local-cli-model-header .col-cache, .local-cli-model-header .col-share { text-align: right; }

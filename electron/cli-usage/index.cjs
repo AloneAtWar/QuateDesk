@@ -7,7 +7,8 @@ const {
 } = require('./normalize.cjs');
 
 const AGENT_IDS = ['zcode', 'kimi', 'claude', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'openclaw', 'hermes', 'dsh'];
-const RANGE_DAYS = [7, 30, 90, 365];
+const RANGE_DAYS = [1, 7, 30, 90, 365];
+// days = 0 表示"全部",不按周期截断
 const QUERY_TIMEOUT_MS = 30_000;
 const SCAN_TIMEOUT_MS = 300_000;
 const BACKGROUND_SCAN_MINUTES = 5;
@@ -132,8 +133,9 @@ class CliUsageService {
       if (!isValidDateString(scope.date)) throw new CliUsageError('无效的日期');
       normalizedScope = { kind: 'day', date: scope.date };
     } else if (scope.kind === 'range') {
-      if (!RANGE_DAYS.includes(Number(scope.days))) throw new CliUsageError('无效的统计周期');
-      normalizedScope = { kind: 'range', days: Number(scope.days) };
+      const days = Number(scope.days);
+      if (days !== 0 && !RANGE_DAYS.includes(days)) throw new CliUsageError('无效的统计周期');
+      normalizedScope = { kind: 'range', days };
     } else throw new CliUsageError('无效的模型查询范围');
     let modelRules;
     try { modelRules = normalizeModelRules(query.modelRules); }

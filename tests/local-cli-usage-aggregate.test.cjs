@@ -90,6 +90,22 @@ test('未知模型永远按渠道隔离,不跨渠道误合并', () => {
   store.close();
 });
 
+test('周期 days:0 表示全部,包含超出 1 年的旧记录;days:1 只含今天', () => {
+  const { store } = createStore();
+  store.upsertEvents([
+    event({ agent: 'zcode', at: now, model: 'glm-4.7', session: 's-today' }),
+    event({ agent: 'zcode', at: now - 800 * DAY, model: 'glm-4.7', session: 's-old' }),
+  ]);
+  const all = store.models({ agent: 'all', mergeSameModels: true, scope: { kind: 'range', days: 0 }, timezone: 'UTC' });
+  assert.equal(totalOf(all), 2 * (100 + 50 + 10 + 40));
+  assert.equal(all.range.start, null);
+  const oneYear = store.models({ agent: 'all', mergeSameModels: true, scope: { kind: 'range', days: 365 }, timezone: 'UTC' });
+  assert.equal(totalOf(oneYear), 100 + 50 + 10 + 40);
+  const oneDay = store.models({ agent: 'all', mergeSameModels: true, scope: { kind: 'range', days: 1 }, timezone: 'UTC' });
+  assert.equal(totalOf(oneDay), 100 + 50 + 10 + 40);
+  store.close();
+});
+
 test('单渠道即使传 mergeSameModels: true 也按 false 执行,filter 如实返回', () => {
   const { store } = createStore();
   seedBase(store);
@@ -246,6 +262,11 @@ test('facade 参数校验:非法 agent/timezone/scope/days 直接拒绝', () => 
   assert.throws(() => CliUsageService.normalizeModelsQuery({ agent: 'all', timezone: 'UTC', scope: { kind: 'range', days: 30 }, modelRules: [{ mode: 'prefix', value: 'glm-' }] }));
   const okModels = CliUsageService.normalizeModelsQuery({ agent: 'all', timezone: 'UTC', scope: { kind: 'range', days: 90 } });
   assert.deepEqual(okModels.scope, { kind: 'range', days: 90 });
+  const okOneDay = CliUsageService.normalizeModelsQuery({ agent: 'all', timezone: 'UTC', scope: { kind: 'range', days: 1 } });
+  assert.deepEqual(okOneDay.scope, { kind: 'range', days: 1 });
+  // days = 0 表示"全部"
+  const okAll = CliUsageService.normalizeModelsQuery({ agent: 'all', timezone: 'UTC', scope: { kind: 'range', days: 0 } });
+  assert.deepEqual(okAll.scope, { kind: 'range', days: 0 });
   const scopedModels = CliUsageService.normalizeModelsQuery({ agent: 'all', timezone: 'UTC', scope: { kind: 'range', days: 30 }, modelRules: [{ mode: 'exact', value: 'OpenAI/GPT-5.6-Sol' }] });
   assert.deepEqual(scopedModels.modelRules, [{ mode: 'exact', value: 'gpt-5.6-sol' }]);
 });

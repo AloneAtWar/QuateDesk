@@ -4,12 +4,16 @@
 import { useMemo } from 'react';
 import { formatLocalTokensCompact, formatLocalTokensExact, formatLocalPercent, localAgentsLine } from './local-cli-usage-format';
 import MergeSameModelsToggle from './MergeSameModelsToggle';
+import RangeSelect from './RangeSelect';
 
+// days = 0 表示"全部"
 const RANGES = [
+  { days: 1, label: '1天' },
   { days: 7, label: '7天' },
   { days: 30, label: '30天' },
   { days: 90, label: '90天' },
   { days: 365, label: '1年' },
+  { days: 0, label: '全部' },
 ];
 
 const cacheHitRatio = (row) => {
@@ -25,13 +29,15 @@ export default function LocalUsageModelBreakdown({ report, loading, error, range
   const hideAgentLabel = (canMergeModels && mergeSameModels) || selectedAgent !== 'all';
   // 合并开关只改变分组,不改变每行数值;条宽按各行自身 total,不按合并后归一化
   const maxTotal = useMemo(() => models.reduce((max, row) => Math.max(max, row.totalTokens), 0), [models]);
+  const periodTotal = useMemo(() => models.reduce((sum, row) => sum + (Number(row.totalTokens) || 0), 0), [models]);
 
   return <div className="local-cli-models-view">
     <div className="local-cli-model-toolbar">
+      <span className="local-cli-range-total" title={models.length ? `周期总计 ${formatLocalTokensExact(periodTotal)} Token` : undefined}>
+        周期总计： <b>{models.length ? formatLocalTokensCompact(periodTotal) : '—'}</b> Token
+      </span>
       {canMergeModels && <MergeSameModelsToggle checked={mergeSameModels} onChange={onToggleMerge} />}
-      <div className="seg-control local-cli-range-switch" role="group" aria-label="模型统计周期">
-        {RANGES.map((range) => <button key={range.days} type="button" className={rangeDays === range.days ? 'active' : ''} onClick={() => onRangeChange(range.days)}>{range.label}</button>)}
-      </div>
+      <RangeSelect value={rangeDays} options={RANGES} onChange={onRangeChange} ariaLabel="模型统计周期" />
     </div>
     <div className="local-cli-model-table">
       <div className="local-cli-model-header" aria-hidden="true">

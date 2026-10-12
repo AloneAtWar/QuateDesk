@@ -433,13 +433,19 @@ ON CONFLICT(root_id) DO UPDATE SET agent = excluded.agent, label = excluded.labe
       const boundaries = buildDayBoundaries(timezone, scope.date, 1);
       startMs = boundaries[0].startMs;
       endMs = boundaries[0].endMs;
-    } else {
+    } else if (scope.days > 0) {
       endDate = localDateString(timezone);
       startDate = null;
       const boundaries = buildDayBoundaries(timezone, endDate, scope.days);
       startDate = boundaries[0].date;
       startMs = boundaries[0].startMs;
       endMs = boundaries[boundaries.length - 1].endMs;
+    } else {
+      // days = 0:全部记录,只按今天结束边界截断未来时间戳
+      endDate = localDateString(timezone);
+      startDate = null;
+      startMs = 0;
+      endMs = buildDayBoundaries(timezone, endDate, 1)[0].endMs;
     }
 
     const groups = new Map();
