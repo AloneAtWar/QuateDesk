@@ -1,5 +1,8 @@
 #remote-root { min-height: 100dvh; }
-html.remote-page, body.remote-page { width: 100%; min-width: 0; overflow-x: hidden; }
+/* overflow-x 只挂在 html 上(传播到视口,横向裁剪不变);不能再挂到 body——那会让 body 成为
+   滚动容器,position: sticky 的吸顶标题栏与钉底「即将刷新」栏都会随之失效 */
+html.remote-page { overflow-x: hidden; }
+body.remote-page { width: 100%; min-width: 0; }
 .remote-app { min-height: 100dvh; display: flex; flex-direction: column; overflow-x: clip; color: var(--ink); background: radial-gradient(circle at 50% -25%, var(--bg-grad) 0, var(--bg) 58%); }
 .remote-titlebar { position: sticky; top: 0; z-index: 15; flex: 0 0 40px; height: 40px; padding: 0 12px; }
 .remote-titlebar .titlebar-drag { min-width: 95px; }
@@ -31,7 +34,10 @@ html.remote-page, body.remote-page { width: 100%; min-width: 0; overflow-x: hidd
 .remote-setting-options button.active { border-color: var(--focus-border); color: var(--green-deep); background: var(--green-bg); }
 .remote-settings-access p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
 .remote-interactive-badge { padding: 4px 7px; border-radius: 5px; color: var(--green-deep); background: var(--green-bg); font-size: 9px; white-space: nowrap; }
-.remote-main { width: 100%; max-width: none; min-height: calc(100dvh - 40px); padding: 8px 14px 20px; flex: 1 0 auto; overflow: visible; }
+/* min-height 不再按「视口−标题栏」硬撑：底部还有「即将刷新」栏等兄弟元素时会把内容
+   顶出视口、产生一段没有内容的可滚动空白；改为交给 flex-grow 吃满 .remote-app 的
+   剩余空间，标题栏+main+底栏相加正好一屏，内容超长时再自然整页滚动 */
+.remote-main { width: 100%; max-width: none; min-height: 0; padding: 8px 14px 20px; flex: 1 0 auto; overflow: visible; }
 /* 本机用量视图(远程只读):与桌面端同一条高度链,让热力图按剩余空间撑满 */
 .remote-main.local-usage-mode > .local-cli-page { flex: 1 1 auto; min-height: 0; }
 /* 用量视图(本机用量/额度浪费)锁定整页为视口高度:弹性区域(热力图/贡献表)吃余量,
@@ -47,16 +53,45 @@ body.remote-usage-bounded .remote-app { height: 100dvh; }
 /* 手机/小平板保持两列卡片；桌面宽度回落到 styles.css 的多列弹性卡片 */
 @media (max-width: 899px) {
   .remote-main .overview-grid > .overview-card { flex: 1 1 calc(50% - 10px); max-width: none; }
+  /* 奇数张卡片时，最后一张孤卡收敛为半宽（与桌面端一致），不被 flex-grow 拉满整行 */
+  .remote-main .overview-grid > .overview-card:last-child:nth-child(odd) { max-width: calc(50% - 5px); }
 }
 .remote-main .overview-card { min-width: 0; }
 .remote-main .account-identity, .remote-main .account-copy, .remote-main .overview-body, .remote-main .overview-meters, .remote-main .overview-meter { min-width: 0; }
 .remote-main > .history-view { width: min(100%, 760px); margin: 0 auto; }
+/* 窄屏(手机)补齐桌面端 ≥800px 的面板高度链：详情页各面板吃满剩余视口，
+   用量视图的热力图行高随之撑开，不再留出大片底部空白 */
+@media (max-width: 799px) {
+  .remote-main .history-view { --history-panel-height: clamp(271px, calc(100dvh - 210px), 2200px); }
+  .remote-main .history-view .trend-view,
+  .remote-main .history-view .waste-view,
+  .remote-main .history-view .local-cli-page.embedded { height: var(--history-panel-height); }
+  /* 用量视图面板独立上限（与桌面端一致）：格子封顶后更高的面板只会留框内空区 */
+  .remote-main .history-view .provider-usage-view { height: min(var(--history-panel-height), 960px); }
+  /* 连接引导/加载/错误等状态视图不跟随面板拉伸，保持紧凑高度（与桌面端一致） */
+  .remote-main .history-view .provider-usage-state { height: 271px; }
+  /* 趋势图与桌面端同一条链：绘图区按面板高度重绘，折线不至于只占面板顶部一小条 */
+  .remote-main .history-view .trend-view > .usage-chart { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  .remote-main .history-view .trend-view > .usage-chart > svg { flex: 0 0 auto; }
+}
+
+/* 手机上用量统计卡改为两列网格：单行 5-6 张每张只剩 ~60px，数字全被省略号截断；
+   「最长连续」在竖屏隐藏，两列正好 2×2，更整洁 */
+@media (max-width: 620px) {
+  .remote-main .provider-usage-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .remote-main .provider-usage-summary .provider-stat { flex: none; }
+  .remote-main .provider-usage-summary .provider-stat:last-child:nth-child(odd) { grid-column: 1 / -1; }
+  .remote-main .provider-usage-summary .provider-stat.longest { display: none; }
+  .remote-main .provider-heatmap-head { flex-wrap: wrap; row-gap: 4px; }
+}
 .remote-banner { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 14px; padding: 11px 13px; border-radius: 9px; font-size: 11px; line-height: 1.55; }
 .remote-banner.offline { color: var(--coral-deep); background: var(--coral-bg); }
 .remote-banner svg { flex: 0 0 auto; }
 .remote-loading, .remote-empty { min-height: 250px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--muted); text-align: center; }
 .remote-empty strong { color: var(--ink); font-size: 16px; }
 .remote-empty span { font-size: 12px; }
+/* 远程页「即将刷新」栏：像桌面端一样钉在视口底部跟随内容滚动，标题固定、条目区横向滑动（样式见 styles.css 的 .refresh-track）；高度按内容自适应并避开手势条 */
+.remote-app > .refresh-bar { position: sticky; bottom: 0; z-index: 10; height: auto; min-height: 30px; padding-top: 5px; padding-bottom: calc(5px + env(safe-area-inset-bottom)); }
 
 .remote-pair-page { min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; color: var(--ink); background: radial-gradient(circle at 50% 20%, rgba(103, 197, 163, .14), transparent 50%), var(--bg); }
 .remote-pair-card { width: min(420px, 100%); padding: 30px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow); }
@@ -88,9 +123,10 @@ body.remote-usage-bounded .remote-app { height: 100dvh; }
   .remote-titlebar .main-view-menu-dismiss { inset: 46px 0 0; }
   .remote-titlebar .control-solo, .remote-title-theme { width: 30px; height: 30px; }
   .remote-title-action { width: 30px; height: 30px; }
-  .remote-main { min-height: calc(100dvh - 46px); padding: 7px 8px 18px; }
+  .remote-main { min-height: 0; padding: 7px 8px 18px; }
   #remote-root .remote-main .overview-grid { gap: 7px; }
   #remote-root .remote-main .overview-grid > .overview-card { flex: 1 1 calc(50% - 7px); }
+  #remote-root .remote-main .overview-grid > .overview-card:last-child:nth-child(odd) { max-width: calc(50% - 3.5px); }
   .remote-main .overview-card { height: 190px; padding: 6px; border-radius: 9px; }
   .remote-main .overview-head { gap: 4px; }
   .remote-main .account-identity { gap: 5px; }
@@ -116,6 +152,10 @@ body.remote-usage-bounded .remote-app { height: 100dvh; }
   .remote-main .ring-dot { width: 5px; height: 5px; }
   .remote-main .card-status-icon { width: 17px; height: 17px; }
   .remote-main .view-intro.overview-title { margin-right: -8px; margin-left: -8px; padding-right: 8px; padding-left: 8px; }
+  /* 手机上把「即将刷新」栏加高到易点尺寸，chip 也放大一点便于触摸 */
+  .remote-app > .refresh-bar { min-height: 42px; padding-top: 7px; padding-bottom: calc(7px + env(safe-area-inset-bottom)); }
+  .remote-app .refresh-chip { max-width: 150px; padding: 5px 11px; }
+  .remote-app .refresh-bar-title { font-size: 9px; }
   .remote-main > .view-stack { gap: 12px; }
   .remote-main > .history-view { width: 100%; }
   .remote-pair-card { padding: 25px 21px; }
@@ -128,7 +168,9 @@ body.remote-usage-bounded .remote-app { height: 100dvh; }
   .remote-titlebar .titlebar-drag { min-width: 18px; flex: 0 0 18px; }
   .remote-titlebar .titlebar-drag b { display: none; }
   #remote-root .remote-main .overview-grid { gap: 8px; }
-  #remote-root .remote-main .overview-grid > .overview-card { flex-basis: 100%; }
+  /* 单列布局下所有卡片全宽，撤销上面的孤卡半宽收敛 */
+  #remote-root .remote-main .overview-grid > .overview-card,
+  #remote-root .remote-main .overview-grid > .overview-card:last-child:nth-child(odd) { flex-basis: 100%; max-width: none; }
   .remote-main .overview-card { height: 152px; padding: 9px; }
   .remote-main .overview-body { gap: 10px; }
   .remote-main .concentric-rings { width: 69px; height: 69px; }

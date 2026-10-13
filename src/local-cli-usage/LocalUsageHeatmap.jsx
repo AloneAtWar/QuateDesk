@@ -6,6 +6,7 @@ import { Bot, Flame, TrendingUp, Trophy } from 'lucide-react';
 import { formatLocalTokensCompact, formatLocalTokensExact, formatLocalDayLabel, localHeatmapLevel, localHeatmapMax, localAgentsLine } from './local-cli-usage-format';
 import MergeSameModelsToggle from './MergeSameModelsToggle';
 import { ResizeHandle, useResizableHeight } from '../resize-handle';
+import { computeHeatmapCells, useHeatmapPan } from '../heatmap-pan';
 
 const statCard = (key, icon, label, value, title) => (
   <div key={key} className={`local-cli-stat provider-stat ${key}`} title={title || label}>
@@ -29,7 +30,8 @@ export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate,
   const heatmapSlack = useCallback(() => {
     const el = wrapRef.current;
     if (!el) return 0;
-    const view = el.parentElement;
+    // 外层包了 provider-heatmap-frame（渐隐提示）后不能再用 parentElement 找视图根
+    const view = el.closest('.local-cli-heatmap-view');
     const overflow = view ? Math.max(0, view.scrollHeight - view.clientHeight) : 0;
     return el.getBoundingClientRect().height - 130 - overflow;
   }, []);
@@ -50,30 +52,28 @@ export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate,
     return Math.max(1, Math.ceil((leading + days.length) / 7));
   }, [days]);
 
+  // 平移/缩放/右端钉随/渐隐交互与官方用量热力图共用一套（heatmap-pan.js）
+  const { handlers: heatmapPanHandlers, zoomRef, measureRef, markMeasured, syncEdges } = useHeatmapPan({ wrapRef, cellPx, cellGap, weekCount });
+
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return undefined;
+    // 竖屏默认可见约 HEATMAP_NARROW_COLUMNS 列，铺不下一年横向滚动、默认钉在最新（右端）
     const measure = () => {
-      // 星期列宽度随断点变化，从 DOM 读实际值
-      const weekdayCol = el.querySelector('.provider-heatmap-weekdays')?.offsetWidth ?? 10;
-      const avail = el.clientWidth - 8 - weekdayCol - 7;
-      // 宽屏铺满：格子随容器放宽（封顶 44px），并按格子大小留 2-3px 间距，避免大格连成一片
-      const rough = Math.floor(avail / weekCount);
-      const gap = rough >= 18 ? 3 : rough >= 10 ? 2 : 0;
-      const w = Math.min(44, Math.max(5, Math.floor((avail - (weekCount - 1) * gap) / weekCount)));
-      // 行高吃满外框剩余高度(外框 flex:1 占满视图余量,高度不随格子变化,无反馈环);
-      // 双重封顶:绝对 96px + 宽度 2.5 倍,防止矮宽/巨高窗口下格子被拉成竖条
-      const h = Math.min(96, Math.round(w * 2.5), Math.max(w, Math.floor((el.clientHeight - 10 - 2 - 10 - 3 - 6 * gap) / 7)));
+      const { base, w, h, gap, minCell } = computeHeatmapCells(el, weekCount, zoomRef.current);
+      markMeasured(base, w, minCell);
       setCellPx(w);
       setCellH(h);
       setCellGap(gap);
+      syncEdges();
     };
+    measureRef.current = measure;
     measure();
     if (typeof ResizeObserver === 'undefined') return undefined;
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [weekCount]);
+  }, [weekCount, zoomRef, measureRef, markMeasured, syncEdges]);
 
   const maxValue = useMemo(() => localHeatmapMax(days), [days]);
   const info = summary?.summary;
@@ -139,17 +139,21 @@ export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate,
         <span>较少</span>{[0, 1, 2, 3, 4].map((level) => <i key={level} className={`provider-heatmap-cell level-${level}`} />)}<span>较多</span>
       </div>
     </div>
-    <div className="provider-heatmap-scroll local-cli-heatmap-scroll" role="grid" tabIndex={0} aria-label="近 1 年本机 CLI Token 热力图,方向键选择日期" ref={wrapRef} onKeyDown={handleKey}>
-      <div className="provider-heatmap-board" ref={heatmapRef} style={{ '--hm-cell': `${cellPx}px`, '--hm-cell-h': `${cellH}px`, '--hm-gap': `${cellGap}px` }}>
-        <span className="provider-heatmap-corner" aria-hidden="true" />
-        <div className="provider-heatmap-months" aria-hidden="true" style={{ width: `${weekCount * cellPx + (weekCount - 1) * cellGap}px` }}>{monthMarkers.map((item) => <span key={item.key} style={{ left: `${(item.column - 1) * (cellPx + cellGap)}px` }}>{item.label}</span>)}</div>
-        <div className="provider-heatmap-weekdays" aria-hidden="true"><span>一</span><span /><span>三</span><span /><span>五</span><span /><span>日</span></div>
-        <div className="provider-heatmap-grid" role="rowgroup" aria-label="每日 Token 热力图">
-          {cells.map((day, index) => day
-            ? <button type="button" role="gridcell" key={day.date} data-local-day={day.date} tabIndex={selectedDate === day.date ? 0 : -1} aria-selected={selectedDate === day.date} title={dayTitle(day)} aria-label={dayTitle(day)} className={`provider-heatmap-cell level-${localHeatmapLevel(day.totalTokens, maxValue)}${selectedDate === day.date ? ' selected' : ''}`} onFocus={() => onSelectDate(day.date)} onClick={() => onSelectDate(day.date)} />
-            : <span key={`blank-${index}`} className="provider-heatmap-cell blank" aria-hidden="true" />)}
+    <div className="provider-heatmap-frame">
+      <div className="provider-heatmap-scroll local-cli-heatmap-scroll" role="grid" tabIndex={0} aria-label="近 1 年本机 CLI Token 热力图,方向键选择日期" ref={wrapRef} onKeyDown={handleKey} {...heatmapPanHandlers}>
+        <div className="provider-heatmap-board" ref={heatmapRef} style={{ '--hm-cell': `${cellPx}px`, '--hm-cell-h': `${cellH}px`, '--hm-gap': `${cellGap}px` }}>
+          <span className="provider-heatmap-corner" aria-hidden="true" />
+          <div className="provider-heatmap-months" aria-hidden="true" style={{ width: `${weekCount * cellPx + (weekCount - 1) * cellGap}px` }}>{monthMarkers.filter((_item, index) => index % (cellPx >= 14 ? 1 : cellPx >= 9 ? 2 : cellPx >= 6 ? 3 : 6) === 0).map((item) => <span key={item.key} style={{ left: `${(item.column - 1) * (cellPx + cellGap)}px` }}>{item.label}</span>)}</div>
+          <div className="provider-heatmap-weekdays" aria-hidden="true"><span>一</span><span /><span>三</span><span /><span>五</span><span /><span>日</span></div>
+          <div className="provider-heatmap-grid" role="rowgroup" aria-label="每日 Token 热力图">
+            {cells.map((day, index) => day
+              ? <button type="button" role="gridcell" key={day.date} data-local-day={day.date} tabIndex={selectedDate === day.date ? 0 : -1} aria-selected={selectedDate === day.date} title={dayTitle(day)} aria-label={dayTitle(day)} className={`provider-heatmap-cell level-${localHeatmapLevel(day.totalTokens, maxValue)}${selectedDate === day.date ? ' selected' : ''}`} onFocus={() => onSelectDate(day.date)} onClick={() => onSelectDate(day.date)} />
+              : <span key={`blank-${index}`} className="provider-heatmap-cell blank" aria-hidden="true" />)}
+          </div>
         </div>
       </div>
+      <span className="provider-heatmap-fade left" aria-hidden="true" />
+      <span className="provider-heatmap-fade right" aria-hidden="true" />
     </div>
     {resizable && <ResizeHandle handleProps={dayModelsResize.handleProps} label="当日模型面板" />}
     <div className="local-cli-day-models">

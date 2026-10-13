@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AlertCircle, ArrowUpRight, Clock3, KeyRound, LockKeyhole, Moon, RefreshCw, ShieldCheck, Sun, WifiOff } from 'lucide-react';
-import { formatChecked, HistoryView, Logo, StatusView } from './main.jsx';
+import { formatChecked, HistoryView, Logo, StatusView, UpcomingRefreshBar } from './main.jsx';
 import StatisticsView from './statistics/StatisticsView';
 import { AppShell } from './app-shell';
 import { MAIN_VIEW_ITEMS, ViewMenu } from './view-menu';
@@ -83,7 +83,7 @@ const demoSnapshot = {
   readOnly: true,
   lastSync: new Date().toISOString(),
   pollMinutes: 5,
-  settings: { alerts: true, pollMinutes: 5, reminderRules: [{ id: 'soon', label: '即将刷新且额度充足', beforeMinutes: 120, minRemaining: 50 }] },
+  settings: { alerts: true, showUpcomingRefresh: true, pollMinutes: 5, reminderRules: [{ id: 'soon', label: '即将刷新且额度充足', beforeMinutes: 120, minRemaining: 50 }] },
   providers: providerCatalog,
   accounts: initialAccounts.map((account) => ({
     ...account,
@@ -359,6 +359,7 @@ function App() {
         </>}
       </> : !loading && <div className="remote-empty"><WifiOff size={23} /><strong>暂时无法读取额度</strong><span>请确认电脑正在运行并可通过配对地址访问</span></div>}
     </main>
+    {snapshot && !selectedAccount && !inUsageView && accounts.length > 0 && snapshot.settings?.showUpcomingRefresh !== false && <UpcomingRefreshBar accounts={accounts} providers={providers} onOpenHistory={(account) => setSelectedAccountId(account.id)} />}
   </AppShell>;
 }
 

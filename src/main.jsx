@@ -11,6 +11,7 @@ import { adapterDefinitions } from './adapters';
 import { newApiTemplateScript } from './newapi-template';
 import { computeUsageStreaks, formatProviderUsageCost, formatProviderUsageSummaryTokens } from './provider-usage-format';
 import LocalCliUsageView from './local-cli-usage/LocalCliUsageView';
+import { computeHeatmapCells, useHeatmapPan } from './heatmap-pan';
 import StatisticsView from './statistics/StatisticsView';
 import qrcode from 'qrcode-generator';
 import { AppShell } from './app-shell';
@@ -1083,30 +1084,25 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
   const [cellPx, setCellPx] = useState(8);
   const [cellH, setCellH] = useState(8);
   const [cellGap, setCellGap] = useState(2);
+  // 平移/缩放/右端钉随/渐隐交互与格子测量口径抽在 heatmap-pan.js，与本机用量热力图共用
+  const { handlers: heatmapPanHandlers, zoomRef, measureRef, markMeasured, syncEdges } = useHeatmapPan({ wrapRef: heatmapWrapRef, cellPx, cellGap, weekCount });
   useEffect(() => {
     const el = heatmapWrapRef.current;
     if (!el) return undefined;
     const measure = () => {
-      // 可用宽度 = 容器 clientWidth − 自身左右 padding(4×2) − 星期列(实际宽度,宽屏会加宽) − 列间距(7)
-      const weekdayCol = el.querySelector('.provider-heatmap-weekdays')?.offsetWidth ?? 10;
-      const avail = el.clientWidth - 8 - weekdayCol - 7;
-      // 宽屏铺满：格子随容器放宽（封顶 44px），并按格子大小留 2-3px 间距，避免大格连成一片
-      const rough = Math.floor(avail / weekCount);
-      const gap = rough >= 18 ? 3 : rough >= 10 ? 2 : 0;
-      const w = Math.min(44, Math.max(5, Math.floor((avail - (weekCount - 1) * gap) / weekCount)));
-      // 行高吃满外框剩余高度(外框 flex:1 占满视图余量,高度不随格子变化,无反馈环);
-      // 双重封顶:绝对 96px + 宽度 2.5 倍,防止矮宽/巨高窗口下格子被拉成竖条
-      const h = Math.min(96, Math.round(w * 2.5), Math.max(w, Math.floor((el.clientHeight - 10 - 2 - 10 - 3 - 6 * gap) / 7)));
+      const { base, w, h, gap, minCell } = computeHeatmapCells(el, weekCount, zoomRef.current);
+      markMeasured(base, w, minCell);
       setCellPx(w);
       setCellH(h);
       setCellGap(gap);
+      syncEdges();
     };
+    measureRef.current = measure;
     measure();
-    if (typeof ResizeObserver === 'undefined') return undefined;
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [weekCount]);
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    observer?.observe(el);
+    return () => observer?.disconnect();
+  }, [weekCount, zoomRef, measureRef, markMeasured, syncEdges]);
 
   const refreshUsage = () => {
     forceNextRequest.current = true;
@@ -1297,17 +1293,27 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
         <span>较少</span>{[0, 1, 2, 3, 4].map((level) => <i key={level} className={`provider-heatmap-cell level-${level}`} />)}<span>较多</span>
       </div>
     </div>
-    <div className="provider-heatmap-scroll" role="grid" tabIndex={0} aria-label="近 1 年每日用量热力图，方向键选择日期" ref={heatmapWrapRef} onKeyDown={handleHeatmapKey}>
-      <div className="provider-heatmap-board" ref={heatmapRef} style={{ '--hm-cell': `${cellPx}px`, '--hm-cell-h': `${cellH}px`, '--hm-gap': `${cellGap}px` }}>
-        <span className="provider-heatmap-corner" aria-hidden="true" />
-        <div className="provider-heatmap-months" aria-hidden="true" style={{ width: `${weekCount * cellPx + (weekCount - 1) * cellGap}px` }}>{monthMarkers.map((item) => <span key={item.key} style={{ left: `${(item.column - 1) * (cellPx + cellGap)}px` }}>{item.label}</span>)}</div>
-        <div className="provider-heatmap-weekdays" aria-hidden="true"><span>一</span><span /><span>三</span><span /><span>五</span><span /><span>日</span></div>
-        <div className="provider-heatmap-grid" role="rowgroup" aria-label={`${copy.display} 每日${metric === 'cost' ? '花费' : 'Token'}热力图`}>
-          {heatmapCells.map((day, index) => day
-            ? <button type="button" role="gridcell" key={day.date} data-usage-date={day.date} tabIndex={selectedDate === day.date ? 0 : -1} aria-selected={selectedDate === day.date} aria-label={dayAriaLabel(day)} className={`provider-heatmap-cell level-${levelOf(day)}${selectedDate === day.date ? ' selected' : ''}`} title={dayAriaLabel(day)} onFocus={() => setSelectedDate(day.date)} onClick={() => setSelectedDate(day.date)} />
-            : <span key={`blank-${index}`} className="provider-heatmap-cell blank" aria-hidden="true" />)}
+    <div className="provider-heatmap-frame">
+      <div
+        className="provider-heatmap-scroll"
+        role="grid" tabIndex={0} aria-label="近 1 年每日用量热力图，方向键选择日期"
+        ref={heatmapWrapRef}
+        onKeyDown={handleHeatmapKey}
+        {...heatmapPanHandlers}
+      >
+        <div className="provider-heatmap-board" ref={heatmapRef} style={{ '--hm-cell': `${cellPx}px`, '--hm-cell-h': `${cellH}px`, '--hm-gap': `${cellGap}px` }}>
+          <span className="provider-heatmap-corner" aria-hidden="true" />
+          <div className="provider-heatmap-months" aria-hidden="true" style={{ width: `${weekCount * cellPx + (weekCount - 1) * cellGap}px` }}>{monthMarkers.filter((_item, index) => index % (cellPx >= 14 ? 1 : cellPx >= 9 ? 2 : cellPx >= 6 ? 3 : 6) === 0).map((item) => <span key={item.key} style={{ left: `${(item.column - 1) * (cellPx + cellGap)}px` }}>{item.label}</span>)}</div>
+          <div className="provider-heatmap-weekdays" aria-hidden="true"><span>一</span><span /><span>三</span><span /><span>五</span><span /><span>日</span></div>
+          <div className="provider-heatmap-grid" role="rowgroup" aria-label={`${copy.display} 每日${metric === 'cost' ? '花费' : 'Token'}热力图`}>
+            {heatmapCells.map((day, index) => day
+              ? <button type="button" role="gridcell" key={day.date} data-usage-date={day.date} tabIndex={selectedDate === day.date ? 0 : -1} aria-selected={selectedDate === day.date} aria-label={dayAriaLabel(day)} className={`provider-heatmap-cell level-${levelOf(day)}${selectedDate === day.date ? ' selected' : ''}`} title={dayAriaLabel(day)} onFocus={() => setSelectedDate(day.date)} onClick={() => setSelectedDate(day.date)} />
+              : <span key={`blank-${index}`} className="provider-heatmap-cell blank" aria-hidden="true" />)}
+          </div>
         </div>
       </div>
+      <span className="provider-heatmap-fade left" aria-hidden="true" />
+      <span className="provider-heatmap-fade right" aria-hidden="true" />
     </div>
     <div className="provider-day-card">
       {selectedDay ? <>
@@ -1594,7 +1600,9 @@ function StatusView({ accounts, providers, runtime, onTestAccount, testingAccoun
 }
 
 // 看板底部的「即将刷新」栏：启用账号的每个带重置时间的额度窗口各占一条，从近到远单行排列；
-// 单行不换行、超出部分裁剪，窗口越窄排得越少，窗口越宽栏越高（样式里的宽屏断点）
+// 「即将刷新」标题固定在左，仅右侧条目区单行滑动：触屏走浏览器原生横向滚动，鼠标按住拖动
+// 或悬停滚动滚轮平移（滚动条隐藏）；未滑到边时两端渐隐提示还有更多条目
+const REFRESH_DRAG_MOVE_PX = 4;
 function UpcomingRefreshBar({ accounts, providers, onOpenHistory }) {
   const upcoming = useMemo(() => accounts
     .filter((account) => !account.disabled)
@@ -1602,16 +1610,90 @@ function UpcomingRefreshBar({ accounts, providers, onOpenHistory }) {
       .filter((meter) => meter.resetAt && !Number.isNaN(new Date(meter.resetAt).getTime()))
       .map((meter) => ({ account, meter, at: new Date(meter.resetAt).getTime() })))
     .sort((a, b) => a.at - b.at), [accounts]);
+  const trackRef = useRef(null);
+  const [edges, setEdges] = useState({ left: false, right: false });
+  const [dragging, setDragging] = useState(false);
+  const dragRef = useRef(null);
+  const suppressClickRef = useRef(false);
+  useEffect(() => {
+    const track = trackRef.current;
+    if (!track) return undefined;
+    const update = () => setEdges({ left: track.scrollLeft > 1, right: track.scrollLeft + track.clientWidth < track.scrollWidth - 1 });
+    // 悬停时的竖向滚轮转为条目区横向滑动；触控板横移(deltaX)交给原生横向滚动；
+    // 滑到头后不再拦截，整页继续正常滚动。React 合成事件的 wheel 是 passive 的，
+    // preventDefault 必须挂在原生非 passive 监听上
+    const onWheel = (event) => {
+      if (Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+      if (track.scrollWidth <= track.clientWidth) return;
+      const delta = event.deltaMode === 1 ? event.deltaY * 33 : event.deltaMode === 2 ? event.deltaY * track.clientWidth : event.deltaY;
+      const before = track.scrollLeft;
+      track.scrollLeft = before + delta;
+      if (track.scrollLeft !== before) event.preventDefault();
+    };
+    update();
+    track.addEventListener('scroll', update, { passive: true });
+    track.addEventListener('wheel', onWheel, { passive: false });
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
+    if (observer) observer.observe(track);
+    return () => {
+      track.removeEventListener('scroll', update);
+      track.removeEventListener('wheel', onWheel);
+      if (observer) observer.disconnect();
+    };
+  }, [upcoming.length]);
   if (!upcoming.length) return null;
+  // 仅鼠标启用拖拽：触屏交给原生横向滚动（touch-action 不受限，竖向手势仍滚动整页）
+  const onPointerDown = (event) => {
+    if (event.pointerType !== 'mouse' || event.button !== 0) return;
+    const track = trackRef.current;
+    if (!track || track.scrollWidth <= track.clientWidth) return;
+    event.preventDefault();
+    dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startScroll: track.scrollLeft, moved: false };
+  };
+  const onPointerMove = (event) => {
+    const drag = dragRef.current;
+    const track = trackRef.current;
+    if (!drag || !track || drag.pointerId !== event.pointerId) return;
+    const dx = event.clientX - drag.startX;
+    if (!drag.moved) {
+      if (Math.abs(dx) < REFRESH_DRAG_MOVE_PX) return;
+      drag.moved = true;
+      setDragging(true);
+      track.setPointerCapture?.(event.pointerId);
+      window.getSelection?.()?.removeAllRanges?.();
+    }
+    track.scrollLeft = drag.startScroll - dx;
+  };
+  const endDrag = () => {
+    if (dragRef.current?.moved) suppressClickRef.current = true;
+    dragRef.current = null;
+    setDragging(false);
+  };
+  const onClickCapture = (event) => {
+    if (!suppressClickRef.current) return;
+    suppressClickRef.current = false;
+    event.preventDefault();
+    event.stopPropagation();
+  };
   return <footer className="refresh-bar">
     <span className="refresh-bar-title"><Clock3 size={12} />即将刷新</span>
-    {upcoming.map(({ account, meter }) => {
-      const provider = providers.find((item) => item.id === account.providerId);
-      const label = windowCatalog[meter.key]?.label || meter.key;
-      return <button type="button" className="refresh-chip" key={`${account.id}-${meter.key}`} title={`${account.name} · ${label} · ${formatResetAbsolute(meter.resetAt)}`} onClick={() => onOpenHistory?.(account)}>
-        <Logo provider={provider} size="xs" interactive={false} /><span>{account.name}</span><em>{label}</em><small>{formatResetCompact(meter.resetAt)}</small>
-      </button>;
-    })}
+    <div
+      ref={trackRef}
+      className={`refresh-track${edges.left ? ' more-left' : ''}${edges.right ? ' more-right' : ''}${dragging ? ' dragging' : ''}`}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+      onClickCapture={onClickCapture}
+    >
+      {upcoming.map(({ account, meter }) => {
+        const provider = providers.find((item) => item.id === account.providerId);
+        const label = windowCatalog[meter.key]?.label || meter.key;
+        return <button type="button" className="refresh-chip" key={`${account.id}-${meter.key}`} title={`${account.name} · ${label} · ${formatResetAbsolute(meter.resetAt)}`} onClick={() => onOpenHistory?.(account)}>
+          <Logo provider={provider} size="xs" interactive={false} /><span>{account.name}</span><em>{label}</em><small>{formatResetCompact(meter.resetAt)}</small>
+        </button>;
+      })}
+    </div>
   </footer>;
 }
 
@@ -1771,7 +1853,7 @@ function SharedSettingsPanel({ variant = 'desktop', settings = {}, setSettings, 
       <div className="setting-select"><span><b>轮询间隔</b><small>所有账号统一检查频率</small></span><select value={values.pollMinutes} onChange={(event) => update((old) => ({ ...old, pollMinutes: event.target.value }))}><option value="5">5 分钟</option><option value="10">10 分钟</option><option value="15">15 分钟</option><option value="30">30 分钟</option></select></div>
     </section>
     <section className="drawer-section"><div className="drawer-section-title"><Clock3 size={16} /><span>看板</span></div>
-      <Toggle checked={values.showUpcomingRefresh !== false} onChange={(value) => update((old) => ({ ...old, showUpcomingRefresh: value }))} label="显示即将刷新" description="在看板底部按重置时间从近到远列出即将刷新的账号，窗口越宽显示的账号越多" />
+      <Toggle checked={values.showUpcomingRefresh !== false} onChange={(value) => update((old) => ({ ...old, showUpcomingRefresh: value }))} label="显示即将刷新" description="在看板底部按重置时间从近到远列出即将刷新的账号，电脑端与手机远程查看页均生效" />
     </section>
     <section className="drawer-section"><div className="drawer-section-title"><SunMoon size={16} /><span>主题</span></div><div className="setting-select"><span><b>界面主题</b><small>主窗口与桌面浮窗同步应用</small></span><select value={values.theme === 'light' ? 'light' : 'dark'} onChange={(event) => update((old) => ({ ...old, theme: event.target.value }))}><option value="dark">暗色</option><option value="light">亮色</option></select></div></section>
   </>;
@@ -3897,7 +3979,7 @@ function App() {
 }
 
 export default App;
-export { HistoryView, ProviderUsageView, SettingsDrawer, SharedSettingsPanel, StatusView };
+export { HistoryView, ProviderUsageView, SettingsDrawer, SharedSettingsPanel, StatusView, UpcomingRefreshBar };
 
 const widgetMode = new URLSearchParams(window.location.search).get('widget') === '1';
 const rootElement = document.getElementById('root');

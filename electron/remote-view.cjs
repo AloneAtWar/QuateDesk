@@ -29,6 +29,7 @@ const safeInteger = (value, min, max, fallback) => {
 
 const publicRemoteSettings = (settings = {}) => ({
   alerts: settings.alerts !== false,
+  showUpcomingRefresh: settings.showUpcomingRefresh !== false,
   pollMinutes: [5, 10, 15, 30].includes(Number(settings.pollMinutes)) ? Number(settings.pollMinutes) : 5,
   reminderRules: (Array.isArray(settings.reminderRules) ? settings.reminderRules : []).slice(0, 20).map((rule, index) => ({
     id: safeText(rule?.id || `rule-${index + 1}`, 80),
