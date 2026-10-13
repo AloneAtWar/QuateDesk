@@ -75,8 +75,8 @@ export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate,
     if (!el) return undefined;
     // 竖屏默认可见约 HEATMAP_NARROW_COLUMNS 列，铺不下一年横向滚动、默认钉在最新（右端）
     const measure = () => {
-      const { base, w, h, gap, minCell } = computeHeatmapCells(el, weekCount, zoomRef.current);
-      markMeasured(base, w, minCell);
+      const { base, w, h, gap, minCell, maxCell } = computeHeatmapCells(el, weekCount, zoomRef.current);
+      markMeasured(base, w, minCell, maxCell);
       setCellPx(w);
       setCellH(h);
       setCellGap(gap);

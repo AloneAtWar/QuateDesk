@@ -9,9 +9,10 @@ export const HEATMAP_MIN_CELL = 14;
 // 既透气，空白带也是天然的滑动握持区；其余月份左右滑动查看
 const HEATMAP_NARROW_MARGIN = 64;
 const HEATMAP_DRAG_MOVE_PX = 4;
-// 缩放上限 40px。捏合/Ctrl+滚轮在这之间是无级连续调节（滚轮每格约 1.25 倍）；
-// 下限是相对值——「整年恰好铺满当前容器宽度」的格子大小，大屏上最小档也占满宽度，
-// 不会缩成中间一小条
+// 缩放下限是相对值——「整年恰好铺满当前容器宽度」的格子大小，大屏上最小档也占满宽度，
+// 不会缩成中间一小条；上限也是相对值——「一整列(7 行格子)恰好装满容器高度」的格子大小
+// （HEATMAP_ZOOM_MAX_CELL 只作无测量时的兜底），放到最大也保证一列 7 天完整可见，
+// 不会纵向裁掉几天
 const HEATMAP_ZOOM_MIN_CELL = 6;
 const HEATMAP_ZOOM_MAX_CELL = 40;
 
@@ -36,11 +37,17 @@ export function computeHeatmapCells(el, weekCount, zoom = 1) {
   const hAvail = Math.floor((el.clientHeight - 10 - 2 - 10 - 3 - 6 * 2 - HEATMAP_NARROW_MARGIN) / 7);
   const fromHeight = Math.floor(hAvail / ratio);
   base = Math.max(base, Math.min(HEATMAP_ZOOM_MAX_CELL, Math.max(HEATMAP_MIN_CELL, fromHeight)));
-  const w = Math.round(Math.min(HEATMAP_ZOOM_MAX_CELL, Math.max(minCell, base * zoom)));
+  // 放大上限：一整列(7 行格子 + 间距 + 轴标签)恰好装满容器高度的格子宽。滚动区
+  // 纵向不滚动(overflow-y hidden)，超过它一列 7 天会被裁掉。行高另有 96px 绝对
+  // 封顶(下方 h 公式)，上限同步封顶避免格子被拉成横条；下限兜底不小于最小档
+  const zoomGap = base * zoom >= 18 ? 3 : base * zoom >= 10 ? 2 : 0;
+  const rowCap = Math.floor((el.clientHeight - 10 - 2 - 10 - 3 - 6 * zoomGap) / 7);
+  const maxCell = Math.max(minCell, Math.min(96, rowCap));
+  const w = Math.round(Math.min(maxCell, Math.max(minCell, base * zoom)));
   const gap = w >= 18 ? 3 : w >= 10 ? 2 : 0;
   // 行高吃满外框剩余高度；双重封顶：绝对 96px + 长宽比，防止格子被拉成竖条
   const h = Math.min(96, Math.round(w * ratio), Math.max(w, Math.floor((el.clientHeight - 10 - 2 - 10 - 3 - 6 * gap) / 7)));
-  return { base, w, h, gap, minCell };
+  return { base, w, h, gap, minCell, maxCell };
 }
 
 // 热力图平移/缩放交互集：悬停滚轮(横移 / Ctrl+滚轮缩放)、鼠标按住拖动、触屏两指捏合缩放、
@@ -52,6 +59,7 @@ export function useHeatmapPan({ wrapRef, cellPx, cellGap, weekCount }) {
   const baseCellRef = useRef(8);       // 最近一次自动测量的未缩放格子宽
   const cellPxRef = useRef(8);         // 当前格子宽（原生监听闭包里 state 会过期，用镜像）
   const minCellRef = useRef(HEATMAP_ZOOM_MIN_CELL); // 最小缩放（整年铺满当前宽度的相对值）
+  const maxCellRef = useRef(HEATMAP_ZOOM_MAX_CELL); // 最大缩放（一列 7 天恰好装满容器高度的相对值）
   const measureRef = useRef(null);
   const pinnedRightRef = useRef(true); // 钉在右端（最新）；滑离后不再自动跟随，滑回右端恢复
   const anchorRef = useRef(null);      // 缩放锚点：渲染后按比例校正 scrollLeft，保持捏合/光标下的日期不动
@@ -70,14 +78,15 @@ export function useHeatmapPan({ wrapRef, cellPx, cellGap, weekCount }) {
     frame.classList.toggle('more-right', el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
   }, [wrapRef]);
 
-  const markMeasured = useCallback((base, w, minCell) => {
+  const markMeasured = useCallback((base, w, minCell, maxCell) => {
     baseCellRef.current = base;
     cellPxRef.current = w;
     if (Number.isFinite(minCell)) minCellRef.current = minCell;
+    if (Number.isFinite(maxCell) && maxCell > 0) maxCellRef.current = maxCell;
   }, []);
 
   const zoomAt = useCallback((nextCell, anchor) => {
-    nextCell = Math.round(Math.min(HEATMAP_ZOOM_MAX_CELL, Math.max(minCellRef.current, nextCell)));
+    nextCell = Math.round(Math.min(maxCellRef.current, Math.max(minCellRef.current, nextCell)));
     if (nextCell === cellPxRef.current || !measureRef.current) return;
     zoomRef.current = nextCell / Math.max(1, baseCellRef.current);
     anchorRef.current = { ...anchor, cell: cellPxRef.current };

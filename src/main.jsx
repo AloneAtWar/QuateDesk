@@ -1138,8 +1138,8 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
     const el = heatmapWrapRef.current;
     if (!el) return undefined;
     const measure = () => {
-      const { base, w, h, gap, minCell } = computeHeatmapCells(el, weekCount, zoomRef.current);
-      markMeasured(base, w, minCell);
+      const { base, w, h, gap, minCell, maxCell } = computeHeatmapCells(el, weekCount, zoomRef.current);
+      markMeasured(base, w, minCell, maxCell);
       setCellPx(w);
       setCellH(h);
       setCellGap(gap);
