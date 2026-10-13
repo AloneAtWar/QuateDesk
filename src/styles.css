@@ -92,7 +92,7 @@ button { cursor: pointer; }
   .topbar { padding: 0 14px; }.main-shell, .footer-bar { width: 100%; }.page-heading { align-items: flex-start; gap: 20px; flex-direction: column; }.heading-note { padding: 0; }.view-switcher button small { display: none; }.priority-row { grid-template-columns: minmax(200px, 1fr) minmax(150px, .8fr) 90px 24px; gap: 12px; }.windows-column-head, .account-window-row { grid-template-columns: minmax(190px, .62fr) 1.4fr 74px; gap: 14px; }.account-meters { grid-template-columns: 1fr; gap: 12px; }.status-row { grid-template-columns: 1fr auto; gap: 12px; }.status-copy { grid-row: 2; }.checked-at { grid-column: 2; grid-row: 2; }.status-row .text-button { grid-column: 1 / -1; justify-self: start; }
 }
 @media (max-width: 620px) {
-  .topbar { height: 50px; padding: 0 12px; }.brand small, .sync-state span { display: none; }.toolbar-button { padding: 8px; }.toolbar-button span { display: none; }.main-shell, .footer-bar { width: 100%; }.main-shell { padding-top: 6px; }.page-heading h1 { font-size: 34px; }.view-switcher { overflow-x: auto; }.view-switcher button { flex: 0 0 auto; padding: 12px 11px 14px; }.view-switcher button span { font-size: 12px; }.content-area { padding-top: 20px; }.attention-band { align-items: flex-start; flex-wrap: wrap; }.attention-band .tag-pill { margin-left: 45px; margin-top: -5px; }.priority-row { grid-template-columns: 1fr auto; gap: 10px; padding: 14px; }.priority-meter { grid-column: 1 / -1; }.priority-reset { grid-column: 1; }.priority-row .icon-button { grid-column: 2; grid-row: 3; }.section-heading { padding: 17px 15px 14px; }.windows-column-head { display: none; }.account-window-row { display: block; padding: 17px 15px 18px; }.account-window-row .account-status { margin-top: 13px; display: flex; }.account-status small { margin-left: 4px; }.account-meters { margin-top: 17px; }.view-intro { align-items: flex-start; flex-direction: column; gap: 12px; }.sort-note { padding: 0; }.footer-bar { flex-wrap: wrap; gap: 10px; padding: 12px 0; }.footer-link { margin-left: auto; }.form-grid { grid-template-columns: 1fr; gap: 0; }.modal { padding: 21px 17px; }.widget-preview-layer { right: 14px; bottom: 14px; width: calc(100vw - 28px); }.widget-row { gap: 6px; }.widget-account { max-width: 70px; }.widget-meter { gap: 3px; padding: 5px; }.widget-meter small { display: none; }.widget-live { display: none; }
+  .topbar { height: 50px; padding: 0 12px; }.brand small, .sync-state span { display: none; }.toolbar-button { padding: 8px; }.toolbar-button span { display: none; }.main-shell, .footer-bar { width: 100%; }.main-shell { padding-top: 6px; }.page-heading h1 { font-size: 34px; }.view-switcher { overflow-x: auto; }.view-switcher button { flex: 0 0 auto; padding: 12px 11px 14px; }.view-switcher button span { font-size: 12px; }.content-area { padding-top: 0; }.attention-band { align-items: flex-start; flex-wrap: wrap; }.attention-band .tag-pill { margin-left: 45px; margin-top: -5px; }.priority-row { grid-template-columns: 1fr auto; gap: 10px; padding: 14px; }.priority-meter { grid-column: 1 / -1; }.priority-reset { grid-column: 1; }.priority-row .icon-button { grid-column: 2; grid-row: 3; }.section-heading { padding: 17px 15px 14px; }.windows-column-head { display: none; }.account-window-row { display: block; padding: 17px 15px 18px; }.account-window-row .account-status { margin-top: 13px; display: flex; }.account-status small { margin-left: 4px; }.account-meters { margin-top: 17px; }.view-intro { align-items: flex-start; flex-direction: column; gap: 12px; }.sort-note { padding: 0; }.footer-bar { flex-wrap: wrap; gap: 10px; padding: 12px 0; }.footer-link { margin-left: auto; }.form-grid { grid-template-columns: 1fr; gap: 0; }.modal { padding: 21px 17px; }.widget-preview-layer { right: 14px; bottom: 14px; width: calc(100vw - 28px); }.widget-row { gap: 6px; }.widget-account { max-width: 70px; }.widget-meter { gap: 3px; padding: 5px; }.widget-meter small { display: none; }.widget-live { display: none; }
 }
 
 .widget-account-block { min-width: 0; flex: 0 0 auto; max-width: 120px; display: grid; gap: 2px; }
@@ -307,8 +307,14 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 
 /* keep the overview header on one row even below the 620px breakpoint */
 .view-intro { flex-direction: row !important; align-items: center !important; }
-/* exactly four cards visible in the default window */
-.overview-card { height: 190px; }
+/* 小窗口首屏（<800px）：顶距收紧为标题栏下 6px；卡片高度跟随窗口高度，
+   最小窗口 520×470 下 ≤4 个账号两行正好铺满可视区不出纵向滚动条，
+   拉高窗口时卡片最多长到 208px（与 ≥800px 断点一致），账号 >4 仍照常滚动 */
+@media (max-width: 799px) {
+  .main-shell { padding-top: 6px; }
+  .content-area { padding-top: 0; }
+  .overview-card { height: clamp(150px, calc((100vh - 96px) / 2), 208px); }
+}
 
 /* sticky, slimmer overview header: only the card area scrolls */
 .view-intro.overview-title { position: sticky; top: -8px; z-index: 6; margin: -8px -14px 8px; padding: 6px 14px 5px; background: linear-gradient(var(--bg-grad), var(--bg)); border-bottom: 1px solid var(--line); }
