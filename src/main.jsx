@@ -633,11 +633,15 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
   const [hover, setHover] = useState(null);
   // 断线区间（无数据时段）的悬停提示：{ from, to } 为区间前后两个数据点的时间
   const [hoverGap, setHoverGap] = useState(null);
+  // 点击选中：持久标记一个数据点（存时间戳，缩放/平移换视图后仍能对上原点）；
+  // 点击图中其它位置取消选中；平移/捏合过的手势不视为点击
+  const [selectedAt, setSelectedAt] = useState(null);
   // 自定义窗口：滚轮 / 平移后不再属于任一预设时使用；选中预设时忽略此值
   const [view, setView] = useState(null);
   const chartRootRef = useRef(null);
   const svgRef = useRef(null);
   const dragRef = useRef(null);
+  const downRef = useRef(null);
   // 触屏双指捏合：跟踪活动触点坐标与捏合起点距离
   const pointersRef = useRef(new Map());
   const pinchRef = useRef(null);
@@ -786,8 +790,10 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
   const startPan = (event) => {
     pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
     event.currentTarget.setPointerCapture?.(event.pointerId);
+    downRef.current = { x: event.clientX, y: event.clientY, moved: false };
     if (pointersRef.current.size === 2) {
-      // 第二根手指落下：平移转为捏合缩放
+      // 第二根手指落下：平移转为捏合缩放；捏合不算点击
+      if (downRef.current) downRef.current.moved = true;
       const [a, b] = [...pointersRef.current.values()];
       pinchRef.current = { distance: Math.hypot(a.x - b.x, a.y - b.y) };
       dragRef.current = null;
@@ -799,6 +805,8 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
   };
   const movePan = (event) => {
     if (pointersRef.current.has(event.pointerId)) pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    // 按住并移动超过阈值后本次手势不再是点击（平移/捏合）
+    if (downRef.current && (Math.abs(event.clientX - downRef.current.x) > 4 || Math.abs(event.clientY - downRef.current.y) > 4)) downRef.current.moved = true;
     const pinch = pinchRef.current;
     if (pinch && pointersRef.current.size >= 2) {
       // 双指向外拉（距离变大）放大，向里收（距离变小）缩小；以两指中点为缩放锚点
@@ -836,9 +844,41 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
       const remaining = [...pointersRef.current.values()][0];
       dragRef.current = shown ? { x: remaining.x, start: shown.start, end: shown.end } : null;
     } else dragRef.current = null;
+    // 未移动且全部手指抬起的按下-抬起视为点击：命中数据点则选中，点空白处取消选中
+    const down = downRef.current;
+    downRef.current = null;
+    if (down && !down.moved && pointersRef.current.size === 0) selectAt(down.x, down.y);
+  };
+  const cancelPan = (event) => {
+    downRef.current = null;
+    endPan(event);
+  };
+  // 点击选点：取横纵平面距离最近的数据点（半径 12px 内命中），否则取消选中
+  const selectAt = (clientX, clientY) => {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect || !drawn.length) { setSelectedAt(null); return; }
+    const x = ((clientX - rect.left) / rect.width) * W;
+    const y = ((clientY - rect.top) / rect.height) * H;
+    let best = -1;
+    let bestDistance = Infinity;
+    drawn.forEach((point, index) => {
+      const px = toX(new Date(point.at).getTime());
+      let distance = Math.abs(px - x);
+      for (const key of visibleKeys) {
+        const sample = point.windows?.[key];
+        if (sample) distance = Math.min(distance, Math.hypot(px - x, toY(chartValue(sample)) - y));
+      }
+      if (distance < bestDistance) { bestDistance = distance; best = index; }
+    });
+    setSelectedAt(best >= 0 && bestDistance <= 12 ? new Date(drawn[best].at).getTime() : null);
   };
   const hoverPoint = hover == null ? null : drawn[hover];
   const hoverX = hoverPoint ? toX(new Date(hoverPoint.at).getTime()) : 0;
+  // 选中点：当前视图内仍存在时才显示标记（被平移/缩放移出视图时暂时休眠，不移除）
+  const selectedPoint = selectedAt == null ? null : (drawn.find((point) => new Date(point.at).getTime() === selectedAt) || null);
+  const selectedX = selectedPoint ? toX(new Date(selectedPoint.at).getTime()) : 0;
+  // 详情条优先级：悬停点 > 断线提示 > 选中点（悬停离开后回落到选中的常驻信息）
+  const detailPoint = hoverPoint || (!hoverGap ? selectedPoint : null);
   const pickRange = (preset) => {
     if (!rangeAvailable(preset.ms, fullStart, fullEnd)) return;
     setView(presetView(preset.ms, fullStart, fullEnd));
@@ -846,15 +886,15 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
   };
   return <div ref={chartRootRef} className={`usage-chart ${shown ? 'zoomed' : ''}`}>
     <div className="chart-detail">
-      <div className="chart-detail-main">{hoverPoint ? <>
-        <b>{formatChartStamp(hoverPoint.at)}</b>
+      <div className="chart-detail-main">{detailPoint ? <>
+        <b>{formatChartStamp(detailPoint.at)}</b>
         {visibleKeys.map((key, index) => {
-          const sample = hoverPoint.windows?.[key];
+          const sample = detailPoint.windows?.[key];
           if (!sample) return null;
-          const reset = formatPointResetShort(sample.resetAt, hoverPoint.at);
+          const reset = formatPointResetShort(sample.resetAt, detailPoint.at);
           return <span className="chart-detail-item" key={key} title={[windowCatalog[key]?.label || key, formatChartDetail(sample), reset].filter(Boolean).join(' ')}><i style={{ background: chartColor(key, index) }} />{windowCatalog[key]?.short || key}<b>{formatChartDetail(sample)}</b>{reset && <small>{reset}</small>}</span>;
         })}
-      </> : hoverGap ? <span className="chart-detail-hint">{formatChartStamp(hoverGap.from)} – {formatChartStamp(hoverGap.to)} · 该时段暂无数据</span> : <span className="chart-detail-hint">悬停查看该点的数值与重置时间</span>}</div>
+      </> : hoverGap ? <span className="chart-detail-hint">{formatChartStamp(hoverGap.from)} – {formatChartStamp(hoverGap.to)} · 该时段暂无数据</span> : <span className="chart-detail-hint">悬停或点击数据点查看数值与重置时间</span>}</div>
       <div className="range-control" role="group" aria-label="趋势时间范围" onPointerDown={(event) => event.stopPropagation()}>
         {RANGE_PRESETS.map((preset) => {
           const available = rangeAvailable(preset.ms, fullStart, fullEnd);
@@ -862,7 +902,7 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
         })}
       </div>
     </div>
-    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} onPointerDown={startPan} onPointerMove={movePan} onPointerUp={endPan} onPointerCancel={endPan} onMouseLeave={() => { setHover(null); setHoverGap(null); endPan(); }}>
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} onPointerDown={startPan} onPointerMove={movePan} onPointerUp={endPan} onPointerCancel={cancelPan} onMouseLeave={() => { setHover(null); setHoverGap(null); downRef.current = null; endPan(); }}>
       {yTicks.map((value) => <g key={value}><line x1={PAD.l} x2={W - PAD.r} y1={toY(value)} y2={toY(value)} className="chart-grid" /><text x={PAD.l - 6} y={toY(value) + 3} className="chart-y-label">{formatYTick(value)}</text></g>)}
       {xTicks.map((at) => <text key={Math.round(at)} x={Math.min(Math.max(toX(at), PAD.l + 16), W - PAD.r - 16)} y={H - 7} className="chart-x-label">{formatTick(at)}</text>)}
       {paths.map((path, index) => path.segments.map((d) => <path key={`${path.key}-${d.slice(0, 12)}`} d={d} fill="none" stroke={chartColor(path.key, index)} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />))}
@@ -871,6 +911,14 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
         const sample = point.windows?.[path.key];
         return sample ? <circle key={`${path.key}-${point.at}`} cx={toX(new Date(point.at).getTime())} cy={toY(chartValue(sample))} r={drawn.length === 1 ? 3 : 2} fill={chartColor(path.key, index)} /> : null;
       }))}
+      {/* 点击选中的常驻标记：竖线 + 空心圆环（与悬停的实心点区分）；正悬停在选中点上时由悬停标记覆盖 */}
+      {selectedPoint && selectedPoint !== hoverPoint && <g>
+        <line x1={selectedX} x2={selectedX} y1={PAD.t} y2={H - PAD.b} className="chart-cursor selected" />
+        {visibleKeys.map((key, index) => {
+          const sample = selectedPoint.windows?.[key];
+          return sample ? <circle key={key} cx={selectedX} cy={toY(chartValue(sample))} r="3.5" fill="none" stroke={chartColor(key, index)} strokeWidth="1.6" /> : null;
+        })}
+      </g>}
       {hoverPoint && <g>
         <line x1={hoverX} x2={hoverX} y1={PAD.t} y2={H - PAD.b} className="chart-cursor" />
         {visibleKeys.map((key, index) => {

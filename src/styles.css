@@ -677,6 +677,7 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .chart-y-label { text-anchor: end; }
 .chart-x-label { text-anchor: middle; }
 .chart-cursor { stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart-cursor.selected { stroke: var(--ink-soft); stroke-width: 1.2; stroke-dasharray: 2 3; }
 .chart-detail { display: flex; align-items: center; gap: 4px; min-height: 22px; margin: 0 6px 4px; padding: 3px 6px 3px 8px; border: 1px solid var(--line-inner); border-radius: 7px; background: var(--surface-2); overflow: hidden; white-space: nowrap; }
 .chart-detail-main { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; overflow: hidden; }
 .chart-detail-main > b { flex: 0 0 auto; color: var(--muted); font-size: 10px; font-weight: 600; }
