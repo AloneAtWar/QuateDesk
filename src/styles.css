@@ -984,9 +984,10 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .local-cli-page:not(.embedded) .provider-heatmap-frame { min-height: 130px; }
 .local-cli-page:not(.embedded) .local-cli-heatmap-scroll { min-height: 130px; }
 
-/* 小窗口(<800px)下统计卡收进 2×2:第 5 张起隐藏(官方用量页最多 5 张指标卡,
-   一行挤 5 张每张不足 100px 宽,数字与标签都读不清;2×2 只展示前 4 张) */
-@media (max-width: 799px) {
+/* 统计卡只在「窄且竖屏(高>宽)」的视图里收进 2×2：手机远程页、竖长桌面窗口——
+   这类比例下高度富余而宽度紧张；横屏窗口（含桌面最小窗口 520×470）保持单行，
+   4/5 张挤一行仍可读。第 5 张起在 2×2 模式下隐藏（2×2 只有 4 个位置） */
+@media (max-width: 799px) and (orientation: portrait) {
   .provider-usage-summary { flex-wrap: wrap; }
   .provider-usage-summary > .provider-stat { flex: 1 1 calc(50% - 4px); }
   .provider-usage-summary > .provider-stat:nth-child(n+5) { display: none; }
@@ -1340,18 +1341,30 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
   .timeline-track { min-width: 100%; }
 }
 
-/* 账号详情页面板高度链：任何窗口宽度都生效（桌面端主窗口默认 460px 宽，之前这套
-   规则锁在 ≥800px 断点里，桌面窄窗口永远固定 271px、拉高不变） */
-.history-view { --history-panel-height: clamp(271px, calc(100vh - 210px), 2200px); }
-.history-view .trend-view,
-.history-view .waste-view,
-.history-view .local-cli-page.embedded { height: var(--history-panel-height); }
+/* 账号详情页面板高度链（桌面端，.app-shell 作用域——手机远程页在 remote.css 里
+   有自己的固定高度链）：改为弹性填充。面板吃满窗口剩余高度（不小于 271px），
+   「返回」按钮贴底，余量不再堆在页面底部形成大片空白；此前固定高度公式
+   (100vh - 210px) 在小窗口低于 271px 下限，在大窗口也低估可用高度 */
+.app-shell .view-stack.history-view { display: flex; flex-direction: column; }
+/* 详情页在位时让滚动容器变成 flex 高度链（同本机用量页 local-usage-mode 的做法）：
+   视图精确吃满剩余高度，不需要按断点估算镶边，任何窗口尺寸都不会溢出或留底部空白 */
+.main-shell:has(> .content-area > .history-view) { display: flex; flex-direction: column; overflow: hidden; }
+.main-shell:has(> .content-area > .history-view) > .content-area { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.main-shell:has(> .content-area > .history-view) > .content-area > .history-view { flex: 1 1 auto; min-height: 0; }
+.app-shell .history-view > .surface-section { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+.app-shell .history-view .history-head { flex: 0 0 auto; }
+.app-shell .history-view .history-tabpanel { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+.app-shell .history-view .trend-view,
+.app-shell .history-view .waste-view,
+.app-shell .history-view .local-cli-page.embedded { flex: 1 1 auto; height: auto; min-height: 271px; }
 /* 用量视图面板独立上限：格子有尺寸封顶(40×96)，超过格网能吃满的高度后只会
    在框内留白；收到 ~960px 让面板"格网吃满即止"，更高的窗口把余量留给页面背景 */
-.history-view .provider-usage-view { height: min(var(--history-panel-height), 960px); }
+.app-shell .history-view .provider-usage-view { flex: 1 1 auto; height: auto; min-height: 271px; max-height: 960px; }
 /* 连接引导/加载/错误等状态视图不跟随面板拉伸：内容只有一两百像素，保持紧凑居中 */
-.history-view .provider-usage-state { height: 271px; }
-.trend-view > .usage-chart { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.app-shell .history-view .provider-usage-state { height: 271px; }
+/* svg 高度按宽度等比取整后可能比容器高出 1-2px 零头，overflow hidden 吸收，
+   避免把整页顶出滚动条 */
+.trend-view > .usage-chart { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .trend-view > .usage-chart > svg { flex: 0 0 auto; }
 
 /* 引导页：宽屏时卡片从容撑开，不再锁死 520×420 */

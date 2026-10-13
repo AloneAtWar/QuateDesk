@@ -40,11 +40,12 @@ export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate,
     const overflow = Math.max(0, view.scrollHeight - view.clientHeight);
     return frameHeight - 130 - overflow;
   }, []);
-  // 统计卡在小窗口(<800px)下换行为 2×2（styles.css），统计条的拉伸上下限要跟着
-  // 实际行数走：两行的自然高度约 103px（40×2 + 间距 7 + 余量），一行时维持原 56/150
-  const [statsWrapped, setStatsWrapped] = useState(() => window.matchMedia('(max-width: 799px)').matches);
+  // 统计卡只在「窄且竖屏(高>宽)」的视图里换行为 2×2（styles.css），统计条的拉伸
+  // 上下限跟着实际行数走：两行的自然高度约 103px（40×2 + 间距 7 + 余量），
+  // 横屏窗口（含桌面最小窗口）保持单行，维持原 56/150
+  const [statsWrapped, setStatsWrapped] = useState(() => window.matchMedia('(max-width: 799px) and (orientation: portrait)').matches);
   useEffect(() => {
-    const mq = window.matchMedia('(max-width: 799px)');
+    const mq = window.matchMedia('(max-width: 799px) and (orientation: portrait)');
     const onChange = () => setStatsWrapped(mq.matches);
     mq.addEventListener?.('change', onChange);
     return () => mq.removeEventListener?.('change', onChange);
