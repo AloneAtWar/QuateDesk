@@ -977,8 +977,19 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 /* 热力图视图 */
 .local-cli-heatmap-view { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .local-cli-heatmap-scroll { margin-bottom: 6px; }
-/* 拖拽当日模型面板时的下限保护:热力图至少保留 130px,不会被完全挤出 */
+/* 拖拽当日模型面板时的下限保护:热力图至少保留 130px,不会被完全挤出。
+   下限写在 frame 上而不是只写内层 scroll:flex 收缩时 frame 若能被压到 0,
+   内层 scroll 的 min-height 会让它向下凸出、叠到当日模型面板上 */
+.local-cli-page:not(.embedded) .provider-heatmap-frame { min-height: 130px; }
 .local-cli-page:not(.embedded) .local-cli-heatmap-scroll { min-height: 130px; }
+
+/* 小窗口(<800px)下统计卡收进 2×2:第 5 张起隐藏(官方用量页最多 5 张指标卡,
+   一行挤 5 张每张不足 100px 宽,数字与标签都读不清;2×2 只展示前 4 张) */
+@media (max-width: 799px) {
+  .provider-usage-summary { flex-wrap: wrap; }
+  .provider-usage-summary > .provider-stat { flex: 1 1 calc(50% - 4px); }
+  .provider-usage-summary > .provider-stat:nth-child(n+5) { display: none; }
+}
 
 /* 当日模型横向滚动区:外框高度固定,滚动条走预留轨道,溢出不改变页面布局 */
 .local-cli-day-models { flex: 0 0 auto; }

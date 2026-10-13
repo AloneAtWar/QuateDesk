@@ -28,19 +28,34 @@ export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate,
   // 当日模型面板 grow='up':向上拖吃热力图余量;统计卡条 grow='down' 同理。
   // 嵌入厂商详情时都不启用
   const heatmapSlack = useCallback(() => {
-    const el = wrapRef.current;
-    if (!el) return 0;
-    // 外层包了 provider-heatmap-frame（渐隐提示）后不能再用 parentElement 找视图根
-    const view = el.closest('.local-cli-heatmap-view');
-    const overflow = view ? Math.max(0, view.scrollHeight - view.clientHeight) : 0;
-    return el.getBoundingClientRect().height - 130 - overflow;
+    const view = wrapRef.current?.closest('.local-cli-heatmap-view');
+    if (!view) return 0;
+    // 外层包了 provider-heatmap-frame（渐隐提示）后不能再用 parentElement 找视图根。
+    // 余量 = 热力图实际高度 - 它的下限 130px：窗口过小把热力图压扁时余量为负，
+    // 上限随之低于面板当前高度，把已保存的面板高度压回去。必须量热力图本身——
+    // flex 是压缩热力图而不是让视图溢出，scrollHeight 溢出此时恒为 0，
+    // 若拿被拖面板自身的高度当基准，压扁状态下测不出负余量，面板会叠上热力图。
+    const frame = view.querySelector('.provider-heatmap-frame');
+    const frameHeight = frame ? frame.getBoundingClientRect().height : 130;
+    const overflow = Math.max(0, view.scrollHeight - view.clientHeight);
+    return frameHeight - 130 - overflow;
   }, []);
+  // 统计卡在小窗口(<800px)下换行为 2×2（styles.css），统计条的拉伸上下限要跟着
+  // 实际行数走：两行的自然高度约 103px（40×2 + 间距 7 + 余量），一行时维持原 56/150
+  const [statsWrapped, setStatsWrapped] = useState(() => window.matchMedia('(max-width: 799px)').matches);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 799px)');
+    const onChange = () => setStatsWrapped(mq.matches);
+    mq.addEventListener?.('change', onChange);
+    return () => mq.removeEventListener?.('change', onChange);
+  }, []);
+  const statsBounds = statsWrapped ? { min: 103, max: 200 } : { min: 56, max: 150 };
   const dayModelsResize = useResizableHeight('qd-resize:local-day-models', {
     min: 40, max: 600, grow: 'up',
     limit: (el) => (el?.getBoundingClientRect().height || 0) + heatmapSlack(),
   });
   const statsResize = useResizableHeight('qd-resize:local-stats', {
-    min: 56, max: 150, grow: 'down',
+    ...statsBounds, grow: 'down',
     limit: (el) => (el?.getBoundingClientRect().height || 0) + heatmapSlack(),
   });
 
@@ -131,7 +146,7 @@ export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate,
   ] : [];
 
   return <div className="local-cli-heatmap-view">
-    {!!stats.length && <div className="provider-usage-summary local-cli-stats" ref={resizable ? statsResize.targetRef : undefined} style={resizable && statsResize.height !== null ? { height: `${statsResize.height}px` } : undefined}>{stats}</div>}
+    {!!stats.length && <div className="provider-usage-summary local-cli-stats" ref={resizable ? statsResize.targetRef : undefined} style={resizable && statsResize.height !== null ? { height: `${Math.max(statsResize.height, statsBounds.min)}px` } : undefined}>{stats}</div>}
     {resizable && !!stats.length && <ResizeHandle handleProps={statsResize.handleProps} label="统计卡条" />}
     <div className="provider-heatmap-head">
       <span className="provider-heatmap-title">近 1 年本机使用热力图</span>
