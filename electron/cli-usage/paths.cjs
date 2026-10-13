@@ -103,10 +103,19 @@ const detectOpencodeRoots = () => {
   return roots;
 };
 
+// Hermes CLI 数据在 ~/.hermes;Windows 桌面版(hermes-desktop)同布局落在
+// %LOCALAPPDATA%\hermes,两目录可并存,桌面版目录存在时追加为第二根目录
 const detectHermesRoots = () => {
   const override = envValue('HERMES_HOME');
   if (override) return splitCommaDirs(override).map((item) => buildRoot(item, '$HERMES_HOME'));
-  return [buildRoot(path.join(homeDir(), '.hermes'), '~/.hermes'), ...wslRootsFor('.hermes', '~/.hermes')];
+  const roots = [buildRoot(path.join(homeDir(), '.hermes'), '~/.hermes')];
+  const desktopParent = envValue('LOCALAPPDATA');
+  if (desktopParent) {
+    const desktop = buildRoot(path.join(desktopParent, 'hermes'), '%LOCALAPPDATA%/hermes');
+    if (desktop.exists && !roots.some((root) => root.rootPath === desktop.rootPath)) roots.push(desktop);
+  }
+  roots.push(...wslRootsFor('.hermes', '~/.hermes'));
+  return roots;
 };
 
 // OpenClaw:官方目录之外保留三个历史改名目录(clawdbot/moltbot/moldbot)

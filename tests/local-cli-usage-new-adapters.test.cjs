@@ -15,6 +15,7 @@ const openclawAdapter = require('../electron/cli-usage/adapters/openclaw.cjs');
 const hermesAdapter = require('../electron/cli-usage/adapters/hermes.cjs');
 const opencodeAdapter = require('../electron/cli-usage/adapters/opencode.cjs');
 const copilotAdapter = require('../electron/cli-usage/adapters/copilot.cjs');
+const wsl = require('../electron/cli-usage/wsl.cjs');
 
 const FIXTURES = path.join(__dirname, 'fixtures', 'cli-usage');
 
@@ -266,6 +267,31 @@ test('hermes sessions 表:秒/毫秒自适应,reasoning 进 extra,provider 归�
   const h2 = byModel(events, 'claude-opus-4.6')[0];
   assert.equal(h2.occurredAtMs, 1774000005000); // 毫秒原样
   assert.equal(h2.sourceVersion, 'anthropic'); // 从模型名推断
+  store.close();
+});
+
+// Windows 桌面版(hermes-desktop)数据目录在 %LOCALAPPDATA%\hermes,与 CLI 的 ~/.hermes 并存;
+// 与 wsl 测试同款补丁,避免默认分支真调 wsl.exe
+const withWslHomes = (homes, run) => {
+  const original = wsl.listWslHomes;
+  wsl.listWslHomes = () => homes;
+  try { return run(); } finally { wsl.listWslHomes = original; }
+};
+
+test('hermes Windows 桌面版:%LOCALAPPDATA%\\hermes 存在时作为第二根目录采集', async () => {
+  const localAppData = fs.mkdtempSync(path.join(os.tmpdir(), 'qd-hermes-lad-'));
+  buildHermesDb(path.join(localAppData, 'hermes'));
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'qd-hermes-empty-'));
+  const { store } = createStore();
+  // 默认分支(无 HERMES_HOME):桌面版目录里的事件能被扫到
+  const events = await withEnv({ HERMES_HOME: undefined, LOCALAPPDATA: localAppData }, () => withWslHomes([], () => scanAgent(hermesAdapter, store)));
+  assert.ok(events.some((event) => event.model === 'gpt-5.5' && event.inputTokens === 1000));
+  // 桌面版目录不存在:默认分支不追加该根目录
+  const withoutDesktop = await withEnv({ HERMES_HOME: undefined, LOCALAPPDATA: empty }, () => withWslHomes([], () => hermesAdapter.detect()));
+  assert.ok(!withoutDesktop.some((root) => root.rootLabel === '%LOCALAPPDATA%/hermes'));
+  // env 覆盖分支:只认 $HERMES_HOME,不追加任何默认目录
+  const overridden = await withEnv({ HERMES_HOME: localAppData, LOCALAPPDATA: localAppData }, () => withWslHomes([], () => hermesAdapter.detect()));
+  assert.deepEqual(overridden.map((root) => root.rootLabel), ['$HERMES_HOME']);
   store.close();
 });
 

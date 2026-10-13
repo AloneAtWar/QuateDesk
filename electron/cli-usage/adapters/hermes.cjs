@@ -1,4 +1,5 @@
-// Hermes Agent 适配器:~/.hermes/state.db 的 sessions 表——每会话一行累计值。
+// Hermes Agent 适配器:~/.hermes(或 Windows 桌面版 %LOCALAPPDATA%\hermes)的
+// state.db sessions 表——每会话一行累计值。
 // 对齐 ccusage hermes adapter:started_at 秒/毫秒自适应,reasoning 计入 total
 // 缺口(extra),provider 归一化;跨库同 session 幂等(键含 rootId,重扫 UPSERT)。
 const fs = require('node:fs');
@@ -57,7 +58,7 @@ const adapter = {
   displayName: 'Hermes Agent',
   iconKey: 'hermes',
   colorToken: 'amber',
-  defaultRootLabels: ['~/.hermes'],
+  defaultRootLabels: ['~/.hermes', '%LOCALAPPDATA%/hermes'],
 
   detect: detectHermesRoots,
 

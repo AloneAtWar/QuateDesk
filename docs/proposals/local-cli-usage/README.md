@@ -969,7 +969,7 @@ scanLocalCliUsage: () => ipcRenderer.invoke('cliUsage:scan'),
 | Grok CLI | `~/.grok/sessions/<url编码cwd>/<sessionId>/updates.jsonl` + 兄弟 `summary.json` | JSONL | 只取 `turn_completed`；`modelUsage` 优先，缺省回退 summary 默认模型；`cachedRead`/`cacheCreation` 是 inputTokens 子集需扣除；`agentTimestampMs` 优先于外层 Unix 秒；项目取 summary.cwd 或 URL 解码目录名 |
 | OpenCode | `~/.local/share/opencode/opencode.db` | SQLite | message 表（逐消息，modelID/providerID 必填）→ session_message 事件表（v2，fork 拷贝行跳过）→ session/session_v2 聚合只兜底无消息行的会话；会话出现消息行后撤回聚合事件；项目取 session.directory |
 | OpenClaw | `~/.openclaw`（含 clawdbot/moltbot/moldbot）递归会话 JSONL（含 `.jsonl.deleted.*`/`.jsonl.reset.*`）+ `agents/*/agent/openclaw-agent.sqlite` | JSONL + SQLite | `model_change`/`model-snapshot` 行维护当前模型；assistant 消息 usage；JSONL 与 SQLite 迁移副本按内容身份共用事件键，自然覆盖不双计 |
-| Hermes Agent | `~/.hermes/state.db` | SQLite | `sessions` 表每会话一行累计值；`started_at` 秒/毫秒自适应；reasoning 经 total 缺口进 extra；provider 归一化 |
+| Hermes Agent | `~/.hermes/state.db`（Windows 桌面版追加 `%LOCALAPPDATA%hermesstate.db`，存在即扫） | SQLite | `sessions` 表每会话一行累计值；`started_at` 秒/毫秒自适应；reasoning 经 total 缺口进 extra；provider 归一化 |
 
 env 覆盖与 ccusage 一致：`COPILOT_HOME`、`OPENCODE_DATA_DIR`、`HERMES_HOME`、`OPENCLAW_DIR`、`GEMINI_DATA_DIR`、`GROK_HOME`（逗号分隔支持多根）。
 
