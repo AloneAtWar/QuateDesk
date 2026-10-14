@@ -107,7 +107,7 @@ const ZAI_USAGE_TIMEZONE_OFFSET_SEC = 8 * 60 * 60;
 // 小控件整体等比缩放：一个比例因子同时决定窗口像素尺寸和内容缩放（渲染端 transform）。
 // Windows 显示缩放非 100% 时，反复 setPosition 会因 DIP/物理像素换算误差把窗口
 // 越拖越大，所以拖动时也必须用固定宽高走 setBounds。
-const WIDGET_BASE_SIZE = { width: 350, height: 52 };
+const { WIDGET_BASE_SIZE, widgetWindowSize: computeWidgetWindowSize } = require('./widget-layout.cjs');
 // 主窗口默认尺寸，同时也是允许的最小尺寸：界面按 520×470 设计，更小会挤压布局
 const MAIN_WINDOW_MIN = { width: 520, height: 470 };
 const clampWidgetScale = (value) => {
@@ -121,7 +121,10 @@ const clampWidgetLength = (value) => {
   const length = Math.round(Number(value) * 20) / 20;
   return Number.isFinite(length) ? Math.min(WIDGET_MAX_LENGTH, Math.max(WIDGET_MIN_LENGTH, length)) : 1;
 };
-const widgetWindowSize = (scale, length = 0.9) => ({ width: Math.round(WIDGET_BASE_SIZE.width * scale * clampWidgetLength(length)), height: Math.round(WIDGET_BASE_SIZE.height * scale) });
+const widgetWindowSize = (scale, length = 0.9) => {
+  const state = store?.loadState();
+  return computeWidgetWindowSize(scale, clampWidgetLength(length), state?.accounts, state?.settings?.widgetLayout, state?.settings?.widgetGridRows, state?.settings?.widgetGridColumns, state?.settings?.widgetCarousel === true);
+};
 // 兼容旧设置：小/中/大档位与像素宽高都折算成比例；新装默认 90%
 const savedWidgetScale = () => {
   const settings = store?.loadState()?.settings || {};
@@ -442,6 +445,7 @@ function applyProxySetting() {
 }
 
 const sendState = (state) => {
+  if (widgetWindow && !widgetWindow.isDestroyed()) applyWidgetSize(savedWidgetScale(), savedWidgetLength());
   for (const window of [mainWindow, widgetWindow]) {
     if (window && !window.isDestroyed()) window.webContents.send('state:updated', { ...state, runtime: runtimeStatus() });
   }
@@ -1612,13 +1616,13 @@ function ensureWidgetOnTop() {
 
 function createWidgetWindow() {
   const display = screen.getPrimaryDisplay();
-  const { width, height } = display.workAreaSize;
+  const area = display.workArea;
   widgetScale = savedWidgetScale();
   widgetLength = savedWidgetLength();
-  const size = widgetWindowSize(widgetScale, widgetLength);
+  const requested = widgetWindowSize(widgetScale, widgetLength);
+  const size = { width: Math.min(requested.width, area.width), height: Math.min(requested.height, area.height) };
   widgetWindow = new BrowserWindow({
-    width: size.width, height: size.height, x: Math.max(0, width - size.width - 16), y: Math.max(0, height - size.height - 14),
-    minWidth: widgetWindowSize(0.8, WIDGET_MIN_LENGTH).width, maxWidth: widgetWindowSize(3, WIDGET_MAX_LENGTH).width, minHeight: widgetWindowSize(0.8).height, maxHeight: widgetWindowSize(1.5).height,
+    width: size.width, height: size.height, x: area.x + Math.max(0, area.width - size.width - 16), y: area.y + Math.max(0, area.height - size.height - 14),
     frame: false, resizable: false, movable: true, skipTaskbar: true, alwaysOnTop: true, show: false,
     backgroundColor: themeColors(savedTheme()).widget, title: 'Quota Desk 浮窗',
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: preloadPath },
@@ -1641,13 +1645,15 @@ function createWidgetWindow() {
 function applyWidgetSize(scale, length) {
   widgetScale = clampWidgetScale(scale);
   widgetLength = clampWidgetLength(length ?? widgetLength);
-  const size = widgetWindowSize(widgetScale, widgetLength);
   if (!widgetWindow || widgetWindow.isDestroyed()) return widgetScale;
   const bounds = widgetWindow.getBounds();
   // 按窗口当前所在显示器钳制，副屏上的浮窗调整大小时不会被拽回主屏
   const area = screen.getDisplayMatching(bounds).workArea;
+  const requested = widgetWindowSize(widgetScale, widgetLength);
+  const size = { width: Math.min(requested.width, area.width), height: Math.min(requested.height, area.height) };
   const x = Math.max(area.x, Math.min(area.x + area.width - size.width, bounds.x + bounds.width - size.width));
   const y = Math.max(area.y, Math.min(area.y + area.height - size.height, bounds.y + bounds.height - size.height));
+  if (bounds.x === x && bounds.y === y && bounds.width === size.width && bounds.height === size.height) return widgetScale;
   widgetWindow.setBounds({ x, y, width: size.width, height: size.height });
   return widgetScale;
 }
@@ -2572,13 +2578,14 @@ function registerIpc() {
     const dx = Math.round(Number(deltaX) || 0);
     const dy = Math.round(Number(deltaY) || 0);
     if (!dx && !dy) return;
-    const size = widgetWindowSize(widgetScale, widgetLength);
     const bounds = widgetWindow.getBounds();
     // 钳制目标取鼠标指针所在显示器而非窗口所在显示器：按窗口 bounds 会形成死锁（窗口永远越不过
     // 当前屏幕边界，getDisplayMatching 也就永远返回同一块屏），导致浮窗无法跨显示器拖动。
     const area = Number.isFinite(pointerX) && Number.isFinite(pointerY)
       ? screen.getDisplayNearestPoint({ x: Math.round(pointerX), y: Math.round(pointerY) }).workArea
       : screen.getDisplayMatching(bounds).workArea;
+    const requested = widgetWindowSize(widgetScale, widgetLength);
+    const size = { width: Math.min(requested.width, area.width), height: Math.min(requested.height, area.height) };
     const x = Math.max(area.x, Math.min(area.x + area.width - size.width, bounds.x + dx));
     const y = Math.max(area.y, Math.min(area.y + area.height - size.height, bounds.y + dy));
     widgetWindow.setBounds({ x, y, width: size.width, height: size.height });
