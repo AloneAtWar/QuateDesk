@@ -259,7 +259,7 @@ async function bootServer() {
       { id: 'deepseek', name: 'DeepSeek', requestConfig: { windows: ['balance'], wasteWindows: [] } },
     ],
     accounts: [
-      { id: 'a1', providerId: 'zai', name: '主号', windowKeys: ['weekly'], windows: [{ key: 'weekly', unit: '%', remaining: 62, used: 38, total: 100, resetAt: new Date(now + DAY).toISOString(), available: true }], usageConnection: { status: 'connected' } },
+      { id: 'a1', providerId: 'zai', name: '主号', windowKeys: ['weekly'], windows: [{ key: 'weekly', unit: '%', remaining: 62, used: 38, total: 100, resetAt: new Date(now + DAY).toISOString(), available: true }, { key: 'five_hour', unit: '%', remaining: 87, used: 13, total: 100, resetAt: 1791959656432, available: true }], usageConnection: { status: 'connected' } },
       { id: 'a2', providerId: 'deepseek', name: '备号', windowKeys: ['balance'], windows: [], status: 'warning' },
     ],
   });
@@ -286,7 +286,7 @@ async function bootServer() {
     authorizeToken: (token, options) => deskStore.isRemoteTokenAuthorized(token, options),
     pairDevice: (body) => deskStore.pairRemoteDevice(body),
     pairLocalPreview: () => deskStore.pairLocalPreview(),
-    getHistory: (accountId) => (accountId === 'a1' ? [{ at: '2026-10-14T02:30:00.000Z', windows: { weekly: { remaining: 55, amount: null, limit: null, unit: '%', resetAt: null } } }] : []),
+    getHistory: (accountId) => (accountId === 'a1' ? [{ at: '2026-10-14T02:30:00.000Z', windows: { weekly: { remaining: 55, amount: null, limit: null, unit: '%', resetAt: '2026-10-25T07:59:14+08:00' } } }] : []),
     getCycles: (accountId) => deskStore.getCycles(accountId),
     getUsage: async () => providerUsage,
     queryUsage: async () => providerUsage,
@@ -336,6 +336,8 @@ test('服务级:quota/snapshot 与 history(必填 account、window 过滤、点�
     assert.equal(a1.providerName, 'Z.ai');
     assert.equal(a1.windows[0].remaining, 62);
     assert.equal(a1.windows[0].resetAt, session.deskStore.loadState().accounts[0].windows[0].resetAt);
+    // v1 层 resetAt 统一为 ISO 8601:毫秒时间戳(如 Z.ai 落库格式)也要转换
+    assert.equal(a1.windows[1].resetAt, new Date(1791959656432).toISOString());
 
     const missing = await session.call('/api/v1/quota/history?tz=UTC', { token });
     assert.equal(missing.status, 400);
@@ -349,6 +351,8 @@ test('服务级:quota/snapshot 与 history(必填 account、window 过滤、点�
     assert.equal(weekly.body.points.length, 1);
     assert.equal(weekly.body.points[0].windows.weekly.remaining, 55);
     assert.deepEqual(Object.keys(weekly.body.points[0].windows), ['weekly']);
+    // history 的 resetAt 同样统一为 ISO 8601 UTC:带时区偏移的字符串被归一
+    assert.equal(weekly.body.points[0].windows.weekly.resetAt, '2026-10-24T23:59:14.000Z');
   } finally {
     await session.close();
   }

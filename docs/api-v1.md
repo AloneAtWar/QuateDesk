@@ -75,7 +75,7 @@ Every data endpoint response contains:
 | --- | --- | --- | --- |
 | `account` | No | All accounts | Filter a single account |
 
-Returns the current values of all windows for each account: `windows[]` with `key` (such as `five_hour`/`weekly`/`balance`), `unit`, `remaining`, `used`, `total`, `amount`, `limitAmount`, `resetAt`, `available`. Sorting, "which one expires first", and other decisions are made by the agent itself.
+Returns the current values of all windows for each account: `windows[]` with `key` (such as `five_hour`/`weekly`/`balance`), `unit`, `remaining`, `used`, `total`, `amount`, `limitAmount`, `resetAt`, `available`. `resetAt` is uniformly an ISO 8601 UTC string (or `null`); the storage formats differ across vendors (millisecond timestamps / ISO with offsets, etc.) and are normalized at the API exit. Sorting, "which one expires first", and other decisions are made by the agent itself.
 
 **`GET /api/v1/quota/history`**
 
@@ -86,7 +86,7 @@ Returns the current values of all windows for each account: `windows[]` with `ke
 | Time parameters | No | `last=7d` | Local actual retention is 7–90 days |
 | `points` | No | 400 (10–800) | Sampling cap; when exceeded, equal-distance sampling is performed and marked with `sampled: true` |
 
-Each point has shape `{ at, windows: { [key]: { remaining, amount, limit, unit, resetAt } } }`.
+Each point has shape `{ at, windows: { [key]: { remaining, amount, limit, unit, resetAt } } }`; `resetAt` is uniformly an ISO 8601 UTC string (or `null`), same as snapshot.
 
 ### Usage Layer (`source=local` local CLI / `source=provider` official per-day)
 

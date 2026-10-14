@@ -47,6 +47,24 @@ const json = (response, status, body) => {
 };
 
 const numOrNull = (value) => (value == null || !Number.isFinite(Number(value)) ? null : Number(value));
+
+// 各厂商落库的 resetAt 五花八门(Z.ai 存毫秒时间戳、Kimi 存带偏移的 ISO 串、有的存秒),
+// v1 出口统一为 ISO 8601 UTC 字符串,无法解析的归 null,调用方不需要再做格式判断
+const isoOrNull = (value) => {
+  if (value == null || value === '') return null;
+  let stamp;
+  const epochMs = (raw) => (raw >= 1e12 ? raw : raw >= 1e9 ? raw * 1000 : NaN); // ≥1e12 按毫秒、1e9~1e12 按秒,更小的重置时间无意义
+  if (value instanceof Date) {
+    stamp = value.getTime();
+  } else if (typeof value === 'number' && Number.isFinite(value)) {
+    stamp = epochMs(value);
+  } else if (/^\d{10,16}$/.test(String(value).trim())) {
+    stamp = epochMs(Number(value));
+  } else {
+    stamp = Date.parse(value);
+  }
+  return Number.isFinite(stamp) && stamp > 0 ? new Date(stamp).toISOString() : null;
+};
 const trimmedParam = (url, name) => {
   const raw = url.searchParams.get(name);
   const value = raw == null ? null : raw.trim();
@@ -309,7 +327,7 @@ function quotaSnapshotHandler({ deps, url }) {
         total: numOrNull(meter?.total),
         amount: numOrNull(meter?.amount),
         limitAmount: numOrNull(meter?.limitAmount),
-        resetAt: meter?.resetAt || null,
+        resetAt: isoOrNull(meter?.resetAt),
         available: meter?.available !== false,
       })),
     })),
@@ -344,7 +362,7 @@ async function quotaHistoryHandler({ deps, url, time }) {
           amount: numOrNull(meter?.amount),
           limit: numOrNull(meter?.limit),
           unit: meter?.unit ?? null,
-          resetAt: meter?.resetAt || null,
+          resetAt: isoOrNull(meter?.resetAt),
         }])),
     })),
   };
