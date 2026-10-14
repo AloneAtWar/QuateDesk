@@ -5,13 +5,45 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
 const {
-  canonicalModelKey, modelKeyForGrouping, modelDisplayName, hmacHex,
-  buildDayBoundaries, localDateString, computeStreaks, createModelRuleMatcher,
+  canonicalModelKey, modelKeyForGrouping, modelDisplayName, hmacHex, projectLabelFromPath,
+  buildDayBoundaries, localDateString, zoneOffsetMs, shiftDateString, computeStreaks, createModelRuleMatcher,
 } = require('./normalize.cjs');
 
-const SCHEMA_VERSION = '2';
+const SCHEMA_VERSION = '3';
 
 const AGENT_ORDER = ['zcode', 'kimi', 'claude', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'openclaw', 'hermes', 'dsh'];
+
+const HOUR_BUCKET_FORMATTER_CACHE = new Map();
+// 小时桶标签:目标时区的本地墙钟 YYYY-MM-DDTHH:00(DST 切换日按平移处理,仅展示用途)
+const hourBucketLabel = (timeZone, atMs) => {
+  let formatter = HOUR_BUCKET_FORMATTER_CACHE.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false });
+    HOUR_BUCKET_FORMATTER_CACHE.set(timeZone, formatter);
+  }
+  const map = {};
+  for (const part of formatter.formatToParts(new Date(atMs))) map[part.type] = part.value;
+  return `${map.year}-${map.month}-${map.day}T${map.hour === '24' ? '00' : map.hour}:00`;
+};
+
+// v1 时间桶:day 用本地日边界(DST 精确);hour 为等宽 3600s、起点对齐本地整点
+const buildV1Boundaries = (startMs, endMs, granularity, timeZone) => {
+  if (granularity === 'hour') {
+    const offset = zoneOffsetMs(timeZone, startMs);
+    const alignedLocal = Math.floor((startMs + offset) / 3_600_000) * 3_600_000;
+    const list = [];
+    for (let start = alignedLocal - offset; start < endMs; start += 3_600_000) {
+      list.push({ startMs: start, endMs: start + 3_600_000, label: hourBucketLabel(timeZone, start) });
+    }
+    return list;
+  }
+  const firstDate = localDateString(timeZone, startMs);
+  const lastDate = localDateString(timeZone, Math.max(startMs, endMs - 1));
+  const dates = [];
+  let cursor = firstDate;
+  while (dates.length < 800 && cursor <= lastDate) { dates.push(cursor); cursor = shiftDateString(cursor, 1); }
+  return buildDayBoundaries(timeZone, dates[dates.length - 1], dates.length).map((boundary) => ({ ...boundary, label: boundary.date }));
+};
 
 const UPSERT_EVENT_SQL = `
 INSERT INTO usage_events (
@@ -101,10 +133,15 @@ CREATE TABLE IF NOT EXISTS scan_roots (
   label TEXT,
   is_wsl INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS project_labels (
+  project_key TEXT PRIMARY KEY,
+  label TEXT NOT NULL
+);
 `);
     this.ensureMeta();
     this.migrate();
     this.upsertEventStatement = this.db.prepare(UPSERT_EVENT_SQL);
+    this.upsertLabelStatement = this.db.prepare('INSERT INTO project_labels (project_key, label) VALUES (?, ?) ON CONFLICT(project_key) DO UPDATE SET label = excluded.label');
   }
 
   // 老库(schema v1)的 usage_events 没有 root_id,补列后 WSL 事件才能按根清除
@@ -140,6 +177,7 @@ CREATE TABLE IF NOT EXISTS scan_roots (
           event.reasoningTokens, event.extraTokens, event.totalTokens, event.requestCount,
           event.sourceVersion, event.exact ? 1 : 0, event.isSidechain ? 1 : 0,
         );
+        if (event.projectKey && event.projectLabel) this.upsertLabelStatement.run(event.projectKey, event.projectLabel);
         written += 1;
       }
       this.db.exec('COMMIT');
@@ -148,6 +186,19 @@ CREATE TABLE IF NOT EXISTS scan_roots (
       throw error;
     }
     return written;
+  }
+
+  // ---- 项目标签 ----------------------------------------------------------
+
+  // key = hmac(工作目录),label = 目录名。采集时顺带登记,API 的 project 分组用
+  saveProjectLabel(projectKey, label) {
+    const cleaned = projectLabelFromPath(label);
+    if (!projectKey || !cleaned) return;
+    this.upsertLabelStatement.run(String(projectKey), cleaned);
+  }
+
+  getProjectLabels() {
+    return Object.fromEntries(this.db.prepare('SELECT project_key AS projectKey, label FROM project_labels').all().map((row) => [row.projectKey, row.label]));
   }
 
   // ---- 来源文件游标 ------------------------------------------------------
@@ -512,6 +563,152 @@ ON CONFLICT(root_id) DO UPDATE SET agent = excluded.agent, label = excluded.labe
       range: { start: startDate, end: endDate, timezone },
       filter: { agent, mergeSameModels, effectiveMergeSameModels: effectiveMerge, scope, modelRules },
       models: rows,
+    };
+  }
+
+  // ---- 聚合:v1 API 通用查询 ------------------------------------------------
+  // 单次扫描同时产出时间桶(hour/day)、区间合计与可选维度分组(model/agent/project)。
+  // 与 summary()/models()(界面口径)互不影响;过滤条件为 null/空数组表示不过滤。
+  v1Aggregate({ startMs, endMs, granularity = 'day', timezone, agents = null, canonicalModels = null, modelsIncludeUnknown = false, projectKeys = null, projectIncludeUnknown = false, groupBy = null }) {
+    const clauses = ['occurred_at_ms >= ?', 'occurred_at_ms < ?'];
+    const params = [startMs, endMs];
+    if ((Array.isArray(canonicalModels) && canonicalModels.length) || modelsIncludeUnknown) {
+      const parts = [];
+      if (Array.isArray(canonicalModels) && canonicalModels.length) {
+        parts.push(`canonical_model_key IN (${canonicalModels.map(() => '?').join(',')})`);
+        params.push(...canonicalModels);
+      }
+      if (modelsIncludeUnknown) parts.push('canonical_model_key IS NULL');
+      clauses.push(`(${parts.join(' OR ')})`);
+    }
+    if ((Array.isArray(agents) && agents.length)) {
+      clauses.push(`agent IN (${agents.map(() => '?').join(',')})`);
+      params.push(...agents);
+    }
+    if ((Array.isArray(projectKeys) && projectKeys.length) || projectIncludeUnknown) {
+      const parts = [];
+      if (Array.isArray(projectKeys) && projectKeys.length) {
+        parts.push(`project_key IN (${projectKeys.map(() => '?').join(',')})`);
+        params.push(...projectKeys);
+      }
+      if (projectIncludeUnknown) parts.push("(project_key IS NULL OR project_key = '')");
+      clauses.push(`(${parts.join(' OR ')})`);
+    }
+
+    const boundaries = buildV1Boundaries(startMs, endMs, granularity, timezone);
+    const buckets = boundaries.map((boundary) => ({
+      startMs: boundary.startMs, endMs: boundary.endMs, label: boundary.label,
+      inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, extraTokens: 0, totalTokens: 0,
+      requests: 0, sessions: new Set(),
+    }));
+    const totals = { inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, extraTokens: 0, totalTokens: 0, requests: 0 };
+    const groups = new Map();
+    const sessionsOverall = new Set();
+
+    const select = `SELECT agent, occurred_at_ms, session_key, project_key, model, canonical_model_key, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, extra_tokens, total_tokens FROM usage_events WHERE ${clauses.join(' AND ')} ORDER BY occurred_at_ms`;
+    let index = 0;
+    for (const row of this.db.prepare(select).iterate(...params)) {
+      const stamp = Number(row.occurred_at_ms);
+      while (index < buckets.length - 1 && stamp >= buckets[index].endMs) index += 1;
+      if (stamp < buckets[index].startMs) continue;
+      const bucket = buckets[index];
+      const input = Number(row.input_tokens) || 0;
+      const cacheRead = Number(row.cache_read_tokens) || 0;
+      const cacheWrite = Number(row.cache_write_tokens) || 0;
+      const output = Number(row.output_tokens) || 0;
+      const extra = Number(row.extra_tokens) || 0;
+      const total = Number(row.total_tokens) || 0;
+      bucket.inputTokens += input;
+      bucket.cacheReadTokens += cacheRead;
+      bucket.cacheWriteTokens += cacheWrite;
+      bucket.outputTokens += output;
+      bucket.extraTokens += extra;
+      bucket.totalTokens += total;
+      bucket.requests += 1;
+      bucket.sessions.add(row.session_key);
+      sessionsOverall.add(row.session_key);
+      totals.inputTokens += input;
+      totals.cacheReadTokens += cacheRead;
+      totals.cacheWriteTokens += cacheWrite;
+      totals.outputTokens += output;
+      totals.extraTokens += extra;
+      totals.totalTokens += total;
+      totals.requests += 1;
+      if (groupBy) {
+        const key = groupBy === 'agent' ? row.agent
+          : groupBy === 'project' ? (row.project_key || 'unknown')
+            : (row.canonical_model_key || `unknown@${row.agent}`);
+        let group = groups.get(key);
+        if (!group) {
+          group = {
+            key, agents: new Set(), displayNameSample: null, sessions: new Set(), firstAtMs: stamp, lastAtMs: stamp,
+            inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, extraTokens: 0, totalTokens: 0, requests: 0,
+          };
+          groups.set(key, group);
+        }
+        group.agents.add(row.agent);
+        if (!group.displayNameSample && row.model) group.displayNameSample = row.model;
+        if (stamp < group.firstAtMs) group.firstAtMs = stamp;
+        if (stamp > group.lastAtMs) group.lastAtMs = stamp;
+        group.inputTokens += input;
+        group.cacheReadTokens += cacheRead;
+        group.cacheWriteTokens += cacheWrite;
+        group.outputTokens += output;
+        group.extraTokens += extra;
+        group.totalTokens += total;
+        group.requests += 1;
+        group.sessions.add(row.session_key);
+      }
+    }
+
+    // 区间外的全量累计与最早事件(判定 coverage):沿用同一组非时间过滤
+    const sideClauses = clauses.slice(2);
+    const sideParams = params.slice(2);
+    const sideRow = sideClauses.length
+      ? this.db.prepare(`SELECT SUM(total_tokens) AS total, MIN(occurred_at_ms) AS earliest FROM usage_events WHERE ${sideClauses.join(' AND ')}`).get(...sideParams)
+      : this.db.prepare('SELECT SUM(total_tokens) AS total, MIN(occurred_at_ms) AS earliest FROM usage_events').get();
+
+    const bucketTotals = buckets.map((bucket) => bucket.totalTokens);
+    let peakIndex = -1;
+    bucketTotals.forEach((value, position) => { if (peakIndex < 0 || value > bucketTotals[peakIndex]) peakIndex = position; });
+    const streaks = granularity === 'day' ? computeStreaks(bucketTotals) : null;
+    const cacheBase = totals.inputTokens + totals.cacheReadTokens + totals.cacheWriteTokens;
+    const projectLabels = groupBy === 'project' ? this.getProjectLabels() : null;
+
+    return {
+      granularity,
+      timezone,
+      buckets: buckets.map((bucket) => ({
+        startMs: bucket.startMs, endMs: bucket.endMs, label: bucket.label,
+        inputTokens: bucket.inputTokens, cacheReadTokens: bucket.cacheReadTokens, cacheWriteTokens: bucket.cacheWriteTokens,
+        outputTokens: bucket.outputTokens, extraTokens: bucket.extraTokens, totalTokens: bucket.totalTokens,
+        requests: bucket.requests, sessions: bucket.sessions.size,
+      })),
+      totals: {
+        ...totals,
+        sessions: sessionsOverall.size,
+        activeBuckets: bucketTotals.filter((value) => value > 0).length,
+        peak: peakIndex >= 0 && bucketTotals[peakIndex] > 0 ? { label: buckets[peakIndex].label, startMs: buckets[peakIndex].startMs, totalTokens: bucketTotals[peakIndex] } : null,
+        currentStreakDays: streaks ? streaks.current : null,
+        longestStreakDays: streaks ? streaks.longest : null,
+        cacheReuseRatio: cacheBase > 0 ? totals.cacheReadTokens / cacheBase : null,
+      },
+      groups: groupBy ? [...groups.values()].map((group) => ({
+        key: group.key,
+        displayName: groupBy === 'model'
+          ? (String(group.key).startsWith('unknown@') ? '未知模型' : modelDisplayName(group.displayNameSample || group.key))
+          : group.key,
+        label: groupBy === 'project' ? (projectLabels[group.key] || null) : undefined,
+        agents: [...group.agents].sort((left, right) => AGENT_ORDER.indexOf(left) - AGENT_ORDER.indexOf(right)),
+        sessions: group.sessions.size,
+        firstAtMs: group.firstAtMs,
+        lastAtMs: group.lastAtMs,
+        inputTokens: group.inputTokens, cacheReadTokens: group.cacheReadTokens, cacheWriteTokens: group.cacheWriteTokens,
+        outputTokens: group.outputTokens, extraTokens: group.extraTokens, totalTokens: group.totalTokens,
+        requests: group.requests,
+      })).sort((left, right) => right.totalTokens - left.totalTokens || String(left.key).localeCompare(String(right.key))) : null,
+      allTimeTotalTokens: Number(sideRow?.total || 0),
+      earliestEventMs: sideRow?.earliest ? Number(sideRow.earliest) : null,
     };
   }
 }

@@ -52,6 +52,12 @@ const adapter = {
       const lastScan = Number(state?.lastScanMs) || 0;
       const lookbackFloor = lastScan > 0 ? now - ZCODE_LOOKBACK_DAYS * 86_400_000 : 0;
       rows = db.prepare(QUERY_SQL).all(lookbackFloor);
+      // 便宜的一条 DISTINCT 查询:把历史会话的工作目录补登记为项目标签;
+      // 旧版 schema 可能没有 directory 列,失败时跳过,不影响主扫描
+      try {
+        const labelRows = db.prepare("SELECT DISTINCT directory FROM session WHERE directory IS NOT NULL AND directory != ''").all();
+        for (const labelRow of labelRows) ctx.saveProjectLabel?.(ctx.hmac(labelRow.directory), labelRow.directory);
+      } catch { /* 无 directory 列时忽略 */ }
     } catch (error) {
       ctx.markRoot(root.rootId, 'incompatible', `ZCode 数据库无法读取(${error.code || 'SCHEMA'})`);
       return;
@@ -67,6 +73,7 @@ const adapter = {
         occurredAtMs: Number(row.completed_at) > 0 ? Number(row.completed_at) : Number(row.started_at),
         sessionKey: ctx.hmac(`zcode:${row.session_id || ''}`),
         projectKey: row.directory ? ctx.hmac(row.directory) : null,
+        projectDir: row.directory || null,
         model: row.model_id,
         inputTokens: Math.max(0, Number(row.input_tokens || 0) - Number(row.cache_read_input_tokens || 0) - Number(row.cache_creation_input_tokens || 0)),
         cacheReadTokens: row.cache_read_input_tokens,

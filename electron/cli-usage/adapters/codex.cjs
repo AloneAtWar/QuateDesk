@@ -139,6 +139,7 @@ const adapter = {
           occurredAtMs: parseTimestamp(record.timestamp) || Math.floor(stat.mtimeMs),
           sessionKey: ctx.hmac(`codex:${threadId || path.basename(filePath, '.jsonl')}`),
           projectKey: cwd ? ctx.hmac(cwd) : null,
+          projectDir: cwd || null,
           model: currentModel,
           inputTokens: Math.max(0, input - cached - cacheWrite),
           cacheReadTokens: cached,

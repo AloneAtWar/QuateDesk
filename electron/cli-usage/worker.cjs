@@ -86,6 +86,7 @@ class CliUsageWorker {
             markRoot: (rootId, status, warning) => { rootResults.set(rootId, { status, warning, files: rootResults.get(rootId)?.files || 0 }); },
             deleteEvents: (predicate) => this.store.deleteEvents(id, predicate),
             deferDeleteEvents: (predicate) => deferredDeletes.push(predicate),
+            saveProjectLabel: (projectKey, label) => this.store.saveProjectLabel(projectKey, label),
           };
           try {
             let batch = [];
@@ -168,6 +169,16 @@ const handlers = {
   summary: (query) => worker.store.summary(query),
   models: (query) => worker.store.models(query),
   sources: () => worker.sources(),
+  v1Aggregate: (query) => {
+    const result = worker.store.v1Aggregate(query);
+    // by=agent 的展示名来自适配器声明,补在 worker 层(store 不认识适配器)
+    if (query?.groupBy === 'agent' && Array.isArray(result?.groups)) {
+      for (const group of result.groups) {
+        group.displayName = adapters[group.key]?.displayName || group.key;
+      }
+    }
+    return result;
+  },
 };
 
 parentPort.on('message', async (message) => {

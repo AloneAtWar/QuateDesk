@@ -98,14 +98,26 @@ class DesktopStore {
   }
 
   // 设备令牌全局有效;本机预览令牌只存哈希于进程内存,且仅回环连接可用
-  isRemoteTokenAuthorized(token, { loopback = false } = {}) {
+  matchTokenHashes(token, hashes) {
     const digest = crypto.createHash('sha256').update(String(token || '')).digest('hex');
-    const hashes = [...this.loadRemoteAccess().devices.map((device) => device.tokenHash), ...(loopback ? this.localPreviewTokenHashes : [])];
     return hashes.some((hash) => {
       const left = Buffer.from(digest, 'hex');
       const right = Buffer.from(hash, 'hex');
       return left.length === right.length && crypto.timingSafeEqual(left, right);
     });
+  }
+
+  isRemoteTokenAuthorized(token, { loopback = false } = {}) {
+    const hashes = [...this.loadRemoteAccess().devices.map((device) => device.tokenHash), ...(loopback ? this.localPreviewTokenHashes : [])];
+    return this.matchTokenHashes(token, hashes);
+  }
+
+  // 令牌作用域:device=配对设备(全局有效);local=本机预览(仅回环);null=无效
+  // v1 API 用它区分数据可见面(如项目目录名只对本机令牌展示)
+  remoteTokenScope(token, { loopback = false } = {}) {
+    if (this.matchTokenHashes(token, this.loadRemoteAccess().devices.map((device) => device.tokenHash))) return 'device';
+    if (loopback && this.matchTokenHashes(token, this.localPreviewTokenHashes)) return 'local';
+    return null;
   }
 
   pairRemoteDevice({ pairingKey, id, name }) {

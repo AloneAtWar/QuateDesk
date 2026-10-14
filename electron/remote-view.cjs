@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { resolveWasteWindows } = require('./waste.cjs');
 const { CliUsageService } = require('./cli-usage/index.cjs');
+const { handleApiV1 } = require('./api-v1.cjs');
 
 const REMOTE_PORT = 43187;
 const WINDOW_FIELDS = ['key', 'remaining', 'used', 'total', 'unit', 'resetAt', 'available', 'amount', 'limitAmount'];
@@ -203,7 +204,7 @@ function handleCliUsage({ pathname, url, request, response, cliUsage }) {
   return json(response, 404, { error: 'not_found' });
 }
 
-function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, pairLocalPreview, getHistory, getCycles, getUsage, cliUsage, port = REMOTE_PORT, allowedHosts = [] }) {
+function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, pairLocalPreview, getHistory, getCycles, getUsage, queryUsage, appVersion, cliUsage, port = REMOTE_PORT, allowedHosts = [] }) {
   const hostAllowlist = new Set([...LOOPBACK_HOSTS, ...[].concat(allowedHosts)].map(normalizeHost));
   const server = http.createServer((request, response) => {
     setHeaders(response);
@@ -240,6 +241,16 @@ function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, pa
       const tokenAuthorized = typeof authorizeToken === 'function' && authorizeToken(providedToken, { loopback: isLoopbackRequest(request) });
       if (!hostAllowlist.has(normalizeHost(request.headers.host)) && !tokenAuthorized) return json(response, 421, { error: 'host_not_allowed' });
       if (!tokenAuthorized) return json(response, 401, { error: 'unauthorized' });
+      // v1 数据接口:与网页契约分离,自行处理方法与路由;项目目录名只对本机令牌展示
+      if (pathname === '/api/v1' || pathname.startsWith('/api/v1/')) {
+        const scope = typeof store.remoteTokenScope === 'function'
+          ? store.remoteTokenScope(providedToken, { loopback: isLoopbackRequest(request) }) || 'device'
+          : 'device';
+        return handleApiV1({
+          pathname, url, request, response, scope,
+          deps: { store, cliUsage, getHistory, getCycles, getUsage, queryUsage, appVersion },
+        });
+      }
       if (request.method === 'POST' && pathname !== '/api/cli-usage/scan') return json(response, 405, { error: 'method_not_supported' });
       if (request.method === 'PATCH') {
         return pathname === '/api/settings'

@@ -32,6 +32,46 @@ async function listProjectFiles(rootPath) {
   return files;
 }
 
+// 只读文件头部找 cwd:用于给历史项目补登记标签,不经过游标体系
+async function peekCwd(filePath) {
+  const handle = await fs.promises.open(filePath, 'r').catch(() => null);
+  if (!handle) return null;
+  try {
+    const buffer = Buffer.alloc(262_144);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    for (const line of buffer.toString('utf8', 0, bytesRead).split('\n')) {
+      const record = parseJsonLine(line);
+      if (record?.cwd) return record.cwd;
+    }
+    return null;
+  } finally {
+    await handle.close().catch(() => { /* 关闭失败忽略 */ });
+  }
+}
+
+// 增量游标会跳过未变化的历史文件,老事件的 project_key 对应不上目录名;
+// 每个项目目录在进程生命周期内只翻一次首个会话文件的头部,补齐 key→目录名 标签
+const harvestedProjectDirs = new Set();
+
+async function harvestProjectLabels(rootId, projectDirs, ctx) {
+  for (const projectDir of projectDirs) {
+    const marker = `${rootId}:${projectDir}`;
+    if (harvestedProjectDirs.has(marker)) continue;
+    harvestedProjectDirs.add(marker);
+    let files;
+    try {
+      files = (await fs.promises.readdir(projectDir, { withFileTypes: true }))
+        .filter((file) => file.isFile() && file.name.endsWith('.jsonl'))
+        .map((file) => path.join(projectDir, file.name))
+        .sort();
+    } catch { continue; }
+    for (const filePath of files) {
+      const cwd = await peekCwd(filePath);
+      if (cwd) { ctx.saveProjectLabel?.(ctx.hmac(cwd), cwd); break; }
+    }
+  }
+}
+
 const adapter = {
   id: 'claude',
   displayName: 'Claude Code',
@@ -48,6 +88,10 @@ const adapter = {
       return;
     }
     const files = await listProjectFiles(root.rootPath);
+    // 标签补登记属于尽力而为:任何失败都不能影响主扫描
+    try {
+      await harvestProjectLabels(root.rootId, [...new Set(files.map((filePath) => path.dirname(filePath)))], ctx);
+    } catch { /* 忽略标签采集失败 */ }
     for (const filePath of files) {
       const relative = path.relative(projectsRoot, filePath).replace(/[\\/]+/g, '/');
       const fileKey = relative;
@@ -80,6 +124,7 @@ const adapter = {
           occurredAtMs,
           sessionKey: ctx.hmac(`claude:${record.sessionId || relative}`),
           projectKey: record.cwd ? ctx.hmac(record.cwd) : null,
+          projectDir: record.cwd || null,
           model: message.model,
           inputTokens: usage.input_tokens,
           cacheReadTokens: usage.cache_read_input_tokens,

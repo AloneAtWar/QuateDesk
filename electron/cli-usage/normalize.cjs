@@ -89,6 +89,13 @@ const hmacHex = (value, salt) => crypto
   .digest('hex')
   .slice(0, 24);
 
+// 项目标签:只保留目录名(路径最后一段),去控制字符并限长,完整路径绝不入库
+const projectLabelFromPath = (value) => {
+  const base = String(value || '').split(/[\\/]/).filter(Boolean).pop() || '';
+  const cleaned = base.replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  return cleaned.slice(0, 60) || null;
+};
+
 const safeTokenCount = (value) => {
   if (value === null || value === undefined || value === '') return null;
   const num = Number(value);
@@ -122,6 +129,7 @@ const buildUsageEvent = (input) => {
     occurredAtMs,
     sessionKey: String(input.sessionKey || ''),
     projectKey: input.projectKey ? String(input.projectKey) : null,
+    projectLabel: projectLabelFromPath(input.projectDir),
     model: typeof input.model === 'string' && input.model.trim() ? input.model : null,
     canonicalModelKey: canonicalModelKey(input.model),
     inputTokens,
@@ -235,11 +243,13 @@ module.exports = {
   normalizeModelRules,
   createModelRuleMatcher,
   hmacHex,
+  projectLabelFromPath,
   safeTokenCount,
   buildUsageEvent,
   isValidTimeZone,
   isValidDateString,
   localDateString,
+  zoneOffsetMs,
   zonedDayStartUtcMs,
   shiftDateString,
   buildDayBoundaries,

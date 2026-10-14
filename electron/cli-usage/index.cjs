@@ -94,6 +94,11 @@ class CliUsageService {
     return this.request('sources', null, QUERY_TIMEOUT_MS);
   }
 
+  // v1 API 专用聚合:参数由 api-v1 层校验,这里只透传
+  getV1Aggregate(query) {
+    return this.request('v1Aggregate', query, QUERY_TIMEOUT_MS);
+  }
+
   // ---- 参数校验:非法输入直接拒绝,不进 Worker ------------------------------
 
   static validateAgent(agent) {
