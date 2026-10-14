@@ -679,17 +679,13 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .chart-cursor { stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 3 3; }
 .chart-cursor.selected { stroke: var(--ink-soft); stroke-width: 1.2; stroke-dasharray: 2 3; }
 .chart-detail { display: flex; align-items: center; gap: 4px; min-height: 22px; margin: 0 6px 4px; padding: 3px 6px 3px 8px; border: 1px solid var(--line-inner); border-radius: 7px; background: var(--surface-2); overflow: hidden; white-space: nowrap; }
-/* 详情文字窄窗口放不下时横向滑动看全：范围按钮固定在右侧不随滚动，
-   滚动条走预留细轨（与当日模型横滚区同款），触屏/鼠标拖动/滚轮平移均可 */
-.chart-detail-main { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; scrollbar-gutter: stable; }
-.chart-detail-main::-webkit-scrollbar { height: 4px; }
-.chart-detail-main::-webkit-scrollbar-thumb { border-radius: 2px; background: var(--scrollbar); }
-.chart-detail-main::-webkit-scrollbar-track { background: transparent; }
+/* 详情文字窄窗口放不下时横向滑动看全：范围按钮固定在右侧不随滚动；
+   滚动条整个隐藏（不做滑动框样式），触屏/鼠标拖动/滚轮平移均可 */
+.chart-detail-main { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.chart-detail-main::-webkit-scrollbar { display: none; }
 /* 浪费视图详情行的内容直接挂在 .chart-detail 下（无 main 包裹），同样支持横向滑动 */
-.chart-detail.waste-detail { overflow-x: auto; scrollbar-width: thin; scrollbar-gutter: stable; }
-.chart-detail.waste-detail::-webkit-scrollbar { height: 4px; }
-.chart-detail.waste-detail::-webkit-scrollbar-thumb { border-radius: 2px; background: var(--scrollbar); }
-.chart-detail.waste-detail::-webkit-scrollbar-track { background: transparent; }
+.chart-detail.waste-detail { overflow-x: auto; scrollbar-width: none; }
+.chart-detail.waste-detail::-webkit-scrollbar { display: none; }
 .chart-detail-main > b { flex: 0 0 auto; color: var(--muted); font-size: 10px; font-weight: 600; }
 .chart-detail-item { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto; font-size: 10px; color: var(--ink-soft); }
 .chart-detail-item b { color: var(--ink); font-weight: 700; }
