@@ -692,9 +692,18 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
     if (!root || !el || typeof ResizeObserver === 'undefined') return undefined;
     const measure = () => {
       const width = Math.round(el.getBoundingClientRect().width);
-      // 详情条、操作提示和内边距大约占 58px；只有父布局确实分配了额外高度时才放大绘图区。
-      const availableHeight = root.clientHeight > 300 ? root.clientHeight - 58 : 184;
-      const height = Math.min(1400, Math.max(184, Math.round(availableHeight)));
+      // 绘图区吃满容器分到的高度：svg 之外的所有子行（详情条、操作提示）按实际占位扣除。
+      // 不能用固定估值加阈值（旧实现按 58px 估算、clientHeight>300 才放大）：
+      // 字号随窗口密度变化会偏离估值，而容器高在 242~300px 的窗口落在死区里，
+      // 图表停在 184px 基线，余量全堆在操作提示与图例之间形成空白带。
+      const rootStyle = window.getComputedStyle(root);
+      const chrome = parseFloat(rootStyle.paddingTop) + parseFloat(rootStyle.paddingBottom)
+        + Array.from(root.children).reduce((sum, node) => {
+          if (node === el) return sum;
+          const style = window.getComputedStyle(node);
+          return sum + node.offsetHeight + parseFloat(style.marginTop) + parseFloat(style.marginBottom);
+        }, 0);
+      const height = Math.min(1400, Math.max(184, Math.round(root.clientHeight - chrome)));
       if (!Number.isFinite(width) || width < 300) return;
       setChartSize((old) => {
         const next = { width: Math.min(4000, width), height };
