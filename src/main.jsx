@@ -645,6 +645,44 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
   // 触屏双指捏合：跟踪活动触点坐标与捏合起点距离
   const pointersRef = useRef(new Map());
   const pinchRef = useRef(null);
+  // 详情文字条窄窗口放不下时横向滑动看全（范围按钮固定右侧不随滚动）：
+  // 触屏走原生横滚，鼠标按住拖动平移，悬停时竖向滚轮转为横向滑动
+  const detailRef = useRef(null);
+  const detailDragRef = useRef(null);
+  useEffect(() => {
+    const el = detailRef.current;
+    if (!el) return undefined;
+    // 与「即将刷新」栏同款：React 合成 wheel 是 passive 的，preventDefault 必须挂原生非 passive 监听；
+    // 滑到头后不再拦截，整页继续正常滚动
+    const onWheel = (event) => {
+      if (Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+      if (el.scrollWidth <= el.clientWidth) return;
+      const delta = event.deltaMode === 1 ? event.deltaY * 33 : event.deltaMode === 2 ? event.deltaY * el.clientWidth : event.deltaY;
+      const before = el.scrollLeft;
+      el.scrollLeft = before + delta;
+      if (el.scrollLeft !== before) event.preventDefault();
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+  const onDetailPointerDown = (event) => {
+    if (event.pointerType !== 'mouse' || event.button !== 0) return;
+    const el = detailRef.current;
+    if (!el || el.scrollWidth <= el.clientWidth) return;
+    event.preventDefault();
+    detailDragRef.current = { pointerId: event.pointerId, startX: event.clientX, startScroll: el.scrollLeft };
+    el.setPointerCapture?.(event.pointerId);
+  };
+  const onDetailPointerMove = (event) => {
+    const drag = detailDragRef.current;
+    const el = detailRef.current;
+    if (!drag || !el || drag.pointerId !== event.pointerId) return;
+    el.scrollLeft = drag.startScroll - (event.clientX - drag.startX);
+  };
+  const endDetailDrag = (event) => {
+    if (detailDragRef.current && event?.pointerId != null && detailDragRef.current.pointerId !== event.pointerId) return;
+    detailDragRef.current = null;
+  };
   // 图表同时跟随容器宽、高：小窗保持原来的 470×184 基线，宽屏历史页会获得更高的绘图区，
   // 避免最大化后只把一条很扁的折线横向拉长。
   const [chartSize, setChartSize] = useState({ width: 470, height: 184 });
@@ -886,7 +924,14 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
   };
   return <div ref={chartRootRef} className={`usage-chart ${shown ? 'zoomed' : ''}`}>
     <div className="chart-detail">
-      <div className="chart-detail-main">{detailPoint ? <>
+      <div
+        className="chart-detail-main"
+        ref={detailRef}
+        onPointerDown={onDetailPointerDown}
+        onPointerMove={onDetailPointerMove}
+        onPointerUp={endDetailDrag}
+        onPointerCancel={endDetailDrag}
+      >{detailPoint ? <>
         <b>{formatChartStamp(detailPoint.at)}</b>
         {visibleKeys.map((key, index) => {
           const sample = detailPoint.windows?.[key];
@@ -1290,11 +1335,20 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
   const peakTokens = providerUsageHasNumber(data.summary?.peakDailyTokens)
     ? Number(data.summary.peakDailyTokens)
     : (hasTokens ? (sortedDays.reduce((max, day) => Math.max(max, Number(day?.tokens) || 0), 0) || null) : null);
-  const peakCost = providerUsageHasNumber(data.summary?.peakDailyCost) ? Number(data.summary.peakDailyCost) : null;
+  // 峰值花费同样本地兜底：金额指标可用但摘要没给峰值时，从逐日花费取最大，
+  // 花费卡在的地方峰值卡不缺位
+  const peakCost = providerUsageHasNumber(data.summary?.peakDailyCost)
+    ? Number(data.summary.peakDailyCost)
+    : (hasCost ? (sortedDays.reduce((max, day) => Math.max(max, Number(day?.cost) || 0), 0) || null) : null);
   const peakIsCost = metric === 'cost' && peakCost !== null;
   const peakReady = peakIsCost || peakTokens !== null;
   const peakDate = typeof data.summary?.peakDailyTokensDate === 'string' && data.summary.peakDailyTokensDate ? data.summary.peakDailyTokensDate : null;
   const hasRequests = providerUsageHasMetric(data, 'requests');
+  // 统计卡保底 4 张：竖屏 2×2 恰好铺满四个位置，横屏单行也至少 4 张可读。
+  // 「当前连续」在 DeepSeek/MiniMax 上默认隐藏（保持四卡），但只在隐藏后仍有
+  // ≥4 张时才隐藏——指标缺失（如某天没返回花费）导致卡片不足时照常显示
+  const cardsWithoutStreak = [hasCost, hasTokens, peakReady, longestStreak !== null].filter(Boolean).length;
+  const showStreak = streakDays !== null && (!copy.hideCurrentStreak || cardsWithoutStreak < 4);
   const summaryCards = [
     hasCost && <div key="cost" className="provider-stat cost" title={formatProviderUsageCost(costTotal, data.currency)}>
       <span className="stat-icon"><Zap size={13} /></span>
@@ -1317,7 +1371,7 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
         <strong>{peakIsCost ? formatProviderUsageCost(peakCost, data.currency) : formatProviderUsageSummaryTokens(peakTokens)}</strong>
       </div>
     </div>,
-    streakDays !== null && !copy.hideCurrentStreak && <div key="streak" className="provider-stat streak" title="当前连续使用天数">
+    showStreak && <div key="streak" className="provider-stat streak" title="当前连续使用天数">
       <span className="stat-icon"><Flame size={13} /></span>
       <div className="stat-copy">
         <span>当前连续</span>
