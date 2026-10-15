@@ -1788,22 +1788,24 @@ function UpcomingRefreshBar({ accounts, providers, onOpenHistory }) {
   };
   return <footer className="refresh-bar">
     <span className="refresh-bar-title"><Clock3 size={12} />即将刷新</span>
-    <div
-      ref={trackRef}
-      className={`refresh-track${edges.left ? ' more-left' : ''}${edges.right ? ' more-right' : ''}${dragging ? ' dragging' : ''}`}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={endDrag}
-      onPointerCancel={endDrag}
-      onClickCapture={onClickCapture}
-    >
-      {upcoming.map(({ account, meter }) => {
-        const provider = providers.find((item) => item.id === account.providerId);
-        const label = windowCatalog[meter.key]?.label || meter.key;
-        return <button type="button" className="refresh-chip" key={`${account.id}-${meter.key}`} title={`${account.name} · ${label} · ${formatResetAbsolute(meter.resetAt)}`} onClick={() => onOpenHistory?.(account)}>
-          <Logo provider={provider} size="xs" interactive={false} /><span>{account.name}</span><em>{label}</em><small>{formatResetCompact(meter.resetAt)}</small>
-        </button>;
-      })}
+    <div className={`refresh-track-wrap${edges.left ? ' more-left' : ''}${edges.right ? ' more-right' : ''}`}>
+      <div
+        ref={trackRef}
+        className={`refresh-track${dragging ? ' dragging' : ''}`}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        onClickCapture={onClickCapture}
+      >
+        {upcoming.map(({ account, meter }) => {
+          const provider = providers.find((item) => item.id === account.providerId);
+          const label = windowCatalog[meter.key]?.label || meter.key;
+          return <button type="button" className="refresh-chip" key={`${account.id}-${meter.key}`} title={`${account.name} · ${label} · ${formatResetAbsolute(meter.resetAt)}`} onClick={() => onOpenHistory?.(account)}>
+            <Logo provider={provider} size="xs" interactive={false} /><span>{account.name}</span><em>{label}</em><small>{formatResetCompact(meter.resetAt)}</small>
+          </button>;
+        })}
+      </div>
     </div>
   </footer>;
 }

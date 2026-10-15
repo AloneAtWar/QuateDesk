@@ -438,12 +438,14 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .refresh-bar { height: 30px; flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 0 clamp(14px, 1.8vw, 30px); border-top: 1px solid var(--line); background: var(--titlebar-bg); }
 .refresh-bar-title { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; font-weight: 700; }
 /* 标题固定不动，仅右侧条目区横向滑动；鼠标端按住拖动平移（组件里挂了拖拽逻辑） */
-.refresh-track { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; position: relative; }
+/* 渐隐提示挂在不滚动的外层 wrap 上：若挂在滚动容器自身，absolute 伪元素会随内容一起滚走 */
+.refresh-track-wrap { flex: 1 1 auto; min-width: 0; position: relative; display: flex; }
+.refresh-track { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .refresh-track::-webkit-scrollbar { display: none; }
-.refresh-track.more-left::before, .refresh-track.more-right::after { content: ''; position: absolute; top: 0; bottom: 0; z-index: 1; width: 26px; pointer-events: none; }
-.refresh-track.more-left::before { left: 0; background: linear-gradient(90deg, var(--titlebar-bg), transparent); }
-.refresh-track.more-right::after { right: 0; background: linear-gradient(270deg, var(--titlebar-bg), transparent); }
-.refresh-track.more-left, .refresh-track.more-right { cursor: grab; }
+.refresh-track-wrap.more-left::before, .refresh-track-wrap.more-right::after { content: ''; position: absolute; top: 0; bottom: 0; z-index: 1; width: 26px; pointer-events: none; }
+.refresh-track-wrap.more-left::before { left: 0; background: linear-gradient(90deg, var(--titlebar-bg), transparent); }
+.refresh-track-wrap.more-right::after { right: 0; background: linear-gradient(270deg, var(--titlebar-bg), transparent); }
+.refresh-track-wrap.more-left .refresh-track, .refresh-track-wrap.more-right .refresh-track { cursor: grab; }
 .refresh-track.dragging { cursor: grabbing; }
 .refresh-bar-title { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; font-weight: 700; }
 .refresh-chip { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; max-width: 180px; padding: 3px 9px; overflow: hidden; white-space: nowrap; border: 1px solid var(--line); border-radius: 20px; color: var(--ink-soft); background: var(--control); font-size: 10px; }
