@@ -18,7 +18,7 @@ import { AppShell } from './app-shell';
 import { ViewMenu } from './view-menu';
 import './styles.css';
 import { WIDGET_BASE_SIZE, WIDGET_MIN_LENGTH, WIDGET_MAX_LENGTH, clampWidgetScale, clampWidgetLength, normalizeWidgetSettings } from '../electron/widget-layout.mjs';
-import { WidgetLayoutSetting, WidgetScaleSetting, WidgetIntervalSetting } from './widget-settings';
+import { WidgetLayoutSetting, WidgetScaleSetting, WidgetIntervalSetting, WidgetShortcutSetting } from './widget-settings';
 import { WidgetGrid, useWidgetGeometry, useWidgetPaging } from './widget-view';
 import { WidgetFitRow } from './widget-fit-row';
 import { normalizeTheme } from '../electron/widget-appearance.mjs';
@@ -2016,6 +2016,7 @@ function SettingsDrawer({ variant = 'desktop', accounts, providers, settings, se
         <div className="drawer-section-title"><Monitor size={16} /><span>桌面浮窗</span><TitleHelp>自动排列最多三行三列。自定义按行×列分页，支持 1～15；点击空白处或按 Enter 保存，Esc 取消。鼠标滚轮可翻页。</TitleHelp></div>
         <Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" />
         <Toggle checked={settings.widgetAlwaysOnTop} onChange={(value) => setSettings((old) => ({ ...old, widgetAlwaysOnTop: value }))} label="浮窗置顶" />
+        <WidgetShortcutSetting settings={settings} setSettings={setSettings} />
         <WidgetLayoutSetting settings={settings} setSettings={setSettings} />
         <Toggle checked={settings.widgetCarousel} onChange={(value) => setSettings((old) => ({ ...old, widgetCarousel: value }))} label="自动轮播" />
         <WidgetIntervalSetting settings={settings} setSettings={setSettings} />
@@ -2049,7 +2050,7 @@ function WidgetRow({ account, provider, tagLimit = 2, scale = 1, textSettings })
     value: formatAmount(meter), reset: formatResetCompact(meter.resetAt), off: meter.available === false,
     title: `${windowCatalog[meter.key]?.label || meter.key} · ${formatAmount(meter)} · ${formatResetAbsolute(meter.resetAt)}`,
   }));
-  return <WidgetFitRow name={account.name} error={account.lastError} tags={(account.tags || []).slice(0, tagLimit)}
+  return <WidgetFitRow accountId={account.id} name={account.name} error={account.lastError} tags={(account.tags || []).slice(0, tagLimit)}
     meters={meters} logo={<Logo provider={provider} size="sm" interactive={false} />} scale={Math.max(0.8, scale)} textSettings={textSettings} />;
 }
 
@@ -2518,10 +2519,37 @@ function WidgetApp() {
   }, []);
   const geometry = useWidgetGeometry(accounts || [], settings, formatAmount);
   const paging = useWidgetPaging((accounts || []).filter((item) => !item.disabled).length, geometry, settings);
-  const startDrag = (event) => { if (event.button !== 0) return; dragRef.current = { active: true, moved: false, x: event.screenX, y: event.screenY }; event.currentTarget.setPointerCapture?.(event.pointerId); };
-  const moveDrag = (event) => { const drag = dragRef.current; if (!drag.active) return; const deltaX = event.screenX - drag.x; const deltaY = event.screenY - drag.y; if (!deltaX && !deltaY) return; drag.moved ||= Math.abs(deltaX) + Math.abs(deltaY) > 2; drag.x = event.screenX; drag.y = event.screenY; window.quotaDesk?.moveWidget(deltaX, deltaY, event.screenX, event.screenY); };
-  const stopDrag = () => { dragRef.current.active = false; };
-  return <div className="widget-window-shell" ref={paging.surface} style={{ '--widget-opacity': `${settings.widgetOpacity}%` }} title="拖动移动，双击展开，右键打开菜单" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag} onDoubleClick={() => { if (!dragRef.current.moved) window.quotaDesk?.openMainWindow(); }}>
+  const refreshes = useRef(new Set());
+  const lastDrag = useRef(0);
+  const startDrag = (event) => {
+    if (event.button !== 0) return;
+    dragRef.current = { active: true, moved: false, x: event.screenX, y: event.screenY };
+    event.target.setPointerCapture?.(event.pointerId);
+  };
+  const moveDrag = (event) => {
+    const drag = dragRef.current;
+    if (!drag.active) return;
+    const deltaX = event.screenX - drag.x, deltaY = event.screenY - drag.y;
+    if (!drag.moved && Math.hypot(deltaX, deltaY) <= 3) return;
+    if (!deltaX && !deltaY) return;
+    drag.moved = true; drag.x = event.screenX; drag.y = event.screenY;
+    window.quotaDesk?.moveWidget(deltaX, deltaY, event.screenX, event.screenY);
+  };
+  const stopDrag = () => {
+    if (dragRef.current.moved) { lastDrag.current = Date.now(); window.quotaDesk?.endWidgetDrag?.(); }
+    dragRef.current.active = false;
+  };
+  const doubleClick = async (event) => {
+    if (dragRef.current.moved || Date.now() - lastDrag.current < 500) return;
+    const target = event.target.closest('.provider-logo, .widget-meter');
+    const accountId = target?.closest('[data-account-id]')?.dataset.accountId;
+    if (!accountId) { window.quotaDesk?.openMainWindow(); return; }
+    if (refreshes.current.has(accountId)) return;
+    refreshes.current.add(accountId);
+    try { await window.quotaDesk?.pollAccount(accountId); } catch { /* 额度错误由账号状态展示 */ }
+    finally { refreshes.current.delete(accountId); }
+  };
+  return <div className="widget-window-shell" ref={paging.surface} style={{ '--widget-opacity': `${settings.widgetOpacity}%` }} title="拖动移动；双击图标或额度刷新，双击空白打开主面板；右键打开菜单" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag} onDoubleClick={doubleClick}>
     <WidgetAccounts accounts={accounts || []} providers={providers} loading={accounts === null} geometry={geometry} settings={settings} theme={effectiveTheme} tagLimit={Number(settings.widgetTagLimit ?? 2)} pageIndex={paging.pageIndex} />
   </div>;
 }

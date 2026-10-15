@@ -1,4 +1,5 @@
 import { normalizeWidgetText } from './widget-appearance.mjs';
+import { normalizeWidgetShortcut } from './widget-shortcut.mjs';
 export const WIDGET_BASE_SIZE = { width: 350, height: 52 };
 export const WIDGET_MIN_LENGTH = 0.6;
 export const WIDGET_MAX_LENGTH = 1.5;
@@ -30,6 +31,7 @@ export function normalizeWidgetSettings(value = {}) {
     widgetCarouselSeconds: clampWidgetInterval(value.widgetCarouselSeconds),
     widgetOpacity: clampWidgetOpacity(value.widgetOpacity),
     widgetAlwaysOnTop: value.widgetAlwaysOnTop !== false,
+    widgetShortcut: normalizeWidgetShortcut(value.widgetShortcut) ?? 'Alt+Q',
     ...normalizeWidgetText(value),
   };
 }

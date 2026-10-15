@@ -179,6 +179,7 @@ const createResizeHarness = ({ bounds, area, requested }) => {
   const updates = [];
   const context = {
     widgetScale: 1, widgetLength: 1,
+    widgetSummon: null,
     clampWidgetScale: (value) => value, clampWidgetLength: (value) => value,
     widgetWindowSize: () => requested,
     widgetWindow: { isDestroyed: () => false, getBounds: () => bounds, setBounds: (value) => updates.push(value) },
@@ -204,5 +205,11 @@ test('many accounts and large scale are constrained to the current monitor', () 
 test('a quota refresh without layout changes does not reposition the window', () => {
   const harness = createResizeHarness({ bounds: { x: 500, y: 500, width: 350, height: 104 }, area: { x: 0, y: 0, width: 1920, height: 1080 }, requested: { width: 350, height: 104 } });
   harness.resize();
+  assert.equal(harness.updates.length, 0);
+});
+
+test('one-pixel Windows DIP rounding does not accumulate position drift on refresh', () => {
+  const harness = createResizeHarness({ bounds: { x: 20, y: 20, width: 351, height: 105 }, area: { x: 0, y: 0, width: 1920, height: 1080 }, requested: { width: 350, height: 104 } });
+  harness.resize(); harness.resize();
   assert.equal(harness.updates.length, 0);
 });

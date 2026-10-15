@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 
 // Probe the actual rendered content before removing anything. The first two
 // quota values and provider icon always survive; names shrink before hiding.
-export function WidgetFitRow({ name, error, tags = [], meters, logo, scale = 1, textSettings }) {
+export function WidgetFitRow({ accountId, name, error, tags = [], meters, logo, scale = 1, textSettings }) {
   const rowRef = useRef(null);
   const probesRef = useRef(null);
   const [stage, setStage] = useState(0);
@@ -53,7 +53,7 @@ export function WidgetFitRow({ name, error, tags = [], meters, logo, scale = 1, 
   </>;
   const classes = (level) => `widget-row widget-cell widget-fit-${level}`;
   return <>
-    <div ref={rowRef} className={classes(stage)} title={error || name} data-fit-stage={stage}
+    <div ref={rowRef} className={classes(stage)} title={error || name} data-fit-stage={stage} data-account-id={accountId}
       style={{ '--widget-name-min': `${minimumNameWidth}px`, '--widget-meter-offset': `${spacing.offset}px`,
         '--widget-group-gap': `${spacing.groupGap}px`, '--widget-inner-gap': `${spacing.innerGap}px` }}>{contents(stage)}</div>
     <div className="widget-fit-probes" ref={probesRef} aria-hidden="true" inert style={{ '--widget-name-min': `${minimumNameWidth}px` }}>

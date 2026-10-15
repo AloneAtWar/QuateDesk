@@ -1,6 +1,53 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { clampWidgetInterval, clampWidgetScale, commitWidgetLayout } from '../electron/widget-layout.mjs';
+import { shortcutFromEvent } from '../electron/widget-shortcut.mjs';
+
+export function WidgetShortcutSetting({ settings, setSettings }) {
+  const [recording, setRecording] = useState(false);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const input = useRef(null);
+  const bridge = window.quotaDesk;
+  useEffect(() => {
+    let active = true;
+    bridge?.getWidgetShortcutStatus?.().then((status) => { if (active) setError(status.error || ''); }).catch(() => {});
+    return () => { active = false; bridge?.setWidgetShortcutRecording?.(false).catch(() => {}); };
+  }, []);
+  const change = async (shortcut) => {
+    if (busy) return;
+    setBusy(true); setError('');
+    try {
+      const result = bridge?.setWidgetShortcut ? await bridge.setWidgetShortcut(shortcut) : { ok: true, shortcut };
+      if (result.ok) setSettings((old) => ({ ...old, widgetShortcut: result.shortcut }));
+      else setError(result.error || '快捷键设置失败，请重试');
+    } catch { setError('快捷键设置失败，请重试'); }
+    finally { setBusy(false); setRecording(false); input.current?.blur(); }
+  };
+  return <div className="widget-shortcut-setting">
+    <div className="setting-select"><span><b>唤出快捷键</b><small>点击输入框后按 Ctrl 或 Alt＋字母、数字或 F 键</small></span>
+      <div className="widget-shortcut-controls"><input ref={input} aria-label="浮窗唤出快捷键" readOnly disabled={busy}
+        value={recording ? '请按组合键…' : (settings.widgetShortcut || '未设置').replace('+', ' + ')}
+        onFocus={async () => {
+          setRecording(true); setError('');
+          try { await bridge?.setWidgetShortcutRecording?.(true); } catch { setError('暂时无法录入快捷键'); }
+        }}
+        onBlur={() => { setRecording(false); bridge?.setWidgetShortcutRecording?.(false).catch(() => {}); }}
+        onKeyDown={(event) => {
+          if (event.key === 'Tab') return;
+          event.preventDefault(); event.stopPropagation();
+          if (event.key === 'Escape') { event.currentTarget.blur(); return; }
+          if (event.repeat || ['Control', 'Alt', 'Shift', 'Meta'].includes(event.key)) return;
+          const shortcut = shortcutFromEvent(event);
+          if (shortcut) change(shortcut);
+          else setError('只支持 Ctrl 或 Alt 加一个字母、数字或 F 键');
+        }} />
+        <button type="button" className="outline-button" disabled={busy || !settings.widgetShortcut} onClick={() => change('')}>清除</button></div>
+    </div>
+    <p className="widget-shortcut-help">临时移到鼠标附近，点击外部恢复原状态；拖动后固定在新位置。</p>
+    {error && <p className="widget-shortcut-error" role="alert">{error}</p>}
+  </div>;
+}
 
 export function DigitsInput({ value, onChange, ...props }) {
   return <input {...props} type="text" inputMode="numeric" autoComplete="off" value={value}

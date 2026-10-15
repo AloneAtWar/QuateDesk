@@ -1689,6 +1689,13 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .widget-cell .provider-logo.sm { flex: 0 0 auto; width: max(22px, calc(22px * var(--widget-content-scale, 1))); height: max(22px, calc(22px * var(--widget-content-scale, 1))); font-size: max(10px, calc(10px * var(--widget-content-scale, 1))); }
 .widget-cell .widget-account-block { flex: 0 1 104px; max-width: 104px; min-width: 0; overflow: hidden; }
 .widget-cell .widget-account { display: block; max-width: 100%; font-size: max(11px, calc(11px * var(--widget-content-scale, 1))); animation: none; }
+.widget-shortcut-setting .setting-select { flex-wrap: wrap; gap: 8px; }
+.widget-shortcut-controls { display: flex; align-items: center; gap: 6px; }
+.widget-shortcut-controls input { width: 128px; min-width: 0; padding: 7px 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink); background: var(--control); text-align: center; cursor: pointer; }
+.widget-shortcut-controls input:focus { outline: 2px solid var(--focus-border); outline-offset: 1px; }
+.widget-shortcut-help, .widget-shortcut-error { margin: 0 0 10px; font-size: 10px; line-height: 1.5; color: var(--muted); }
+.widget-shortcut-error { color: var(--coral); }
+.widget-window-shell .provider-logo img { -webkit-user-drag: none; }
 .widget-cell .widget-meters { flex: 0 0 auto; margin-left: var(--widget-meter-offset, 0px); gap: var(--widget-group-gap, 5px); overflow: visible; }
 .widget-cell .widget-meter { padding: 3px 4px; gap: var(--widget-inner-gap, 3px); background: color-mix(in srgb, var(--widget-chip) var(--widget-opacity, 100%), transparent); }
 .widget-cell .widget-meter em { font-size: max(11px, calc(11px * var(--widget-content-scale, 1))); white-space: nowrap; }
