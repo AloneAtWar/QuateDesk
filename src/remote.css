@@ -75,13 +75,13 @@ body.remote-usage-bounded .remote-app { height: 100dvh; }
   .remote-main .history-view .trend-view > .usage-chart > svg { flex: 0 0 auto; }
 }
 
-/* 手机上用量统计卡改为两列网格：单行 5-6 张每张只剩 ~60px，数字全被省略号截断；
-   「最长连续」在竖屏隐藏，两列正好 2×2，更整洁 */
+/* 手机上用量统计卡改为两列网格：单行 5-6 张每张只剩 ~60px，数字全被省略号截断。
+   全部卡片保留：本机用量 4 张正好 2×2；官方用量 5 张时末张占满整行
+   （竖屏下第 5 张起仍由 styles.css 的竖屏 2×2 规则隐藏） */
 @media (max-width: 620px) {
   .remote-main .provider-usage-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
   .remote-main .provider-usage-summary .provider-stat { flex: none; }
   .remote-main .provider-usage-summary .provider-stat:last-child:nth-child(odd) { grid-column: 1 / -1; }
-  .remote-main .provider-usage-summary .provider-stat.longest { display: none; }
   .remote-main .provider-heatmap-head { flex-wrap: wrap; row-gap: 4px; }
 }
 .remote-banner { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 14px; padding: 11px 13px; border-radius: 9px; font-size: 11px; line-height: 1.55; }
