@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const crypto = require('node:crypto');
 const { DesktopStore } = require('./storage.cjs');
+const startup = require('./startup.cjs');
 const { REMOTE_PORT, createRemoteViewServer } = require('./remote-view.cjs');
 const { queryAccount, authStatusForPollError } = require('./poller.cjs');
 const { clampRetentionDays } = require('./history.cjs');
@@ -78,6 +79,9 @@ if (process.argv.includes('--qd-no-gpu')) {
 startupLog(`boot v${app.getVersion()} electron=${process.versions.electron} chrome=${process.versions.chrome} node=${process.versions.node} cwd=${process.cwd()}`);
 
 let mainWindow;
+let mainWindowReady = false;
+let mainWindowRequested = false;
+let mainWindowRestoreMaximized = false;
 let widgetWindow;
 let widgetReady;
 let widgetSummon;
@@ -227,11 +231,8 @@ async function remoteViewStatus() {
 }
 
 // 开机自启由操作系统的登录项管理,作为唯一事实来源,不写入应用状态
-const getAutoLaunch = () => app.getLoginItemSettings().openAtLogin;
-const setAutoLaunch = (enabled) => {
-  app.setLoginItemSettings({ openAtLogin: Boolean(enabled) });
-  return getAutoLaunch();
-};
+const getAutoLaunch = () => startup.getAutoLaunch(app);
+const setAutoLaunch = (enabled) => startup.setAutoLaunch(app, enabled);
 
 // 自动更新:仅在打包后的应用里加载 electron-updater;开发模式没有 app-update.yml,检查必失败。
 // 测试版也不接更新:它没有自己的发布通道,放任检查会把正式版安装包拉下来装
@@ -1505,13 +1506,15 @@ const persistMainWindowBounds = () => {
   saveMainWindowBoundsTimer = setTimeout(() => {
     saveMainWindowBoundsTimer = null;
     if (!mainWindow || mainWindow.isDestroyed()) return;
-    try { store.saveMainWindowState({ bounds: mainWindow.getNormalBounds(), maximized: mainWindow.isMaximized() }); } catch { /* 磁盘异常时放弃本次记忆 */ }
+    try { store.saveMainWindowState({ bounds: mainWindow.getNormalBounds(), maximized: mainWindowRestoreMaximized || mainWindow.isMaximized() }); } catch { /* 磁盘异常时放弃本次记忆 */ }
   }, 600);
 };
 
 // 从托盘/二次启动唤起窗口：最小化状态下要先还原再显示
 function showMainWindow() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindowRequested = true;
+  if (!mainWindow || mainWindow.isDestroyed() || !mainWindowReady) return;
+  if (mainWindowRestoreMaximized) { mainWindow.maximize(); mainWindowRestoreMaximized = false; }
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
@@ -1536,6 +1539,7 @@ function toggleDevTools(window) {
 }
 
 function createMainWindow() {
+  mainWindowReady = false;
   const area = screen.getPrimaryDisplay().workArea;
   const saved = savedMainWindowState();
   const width = saved?.bounds.width ?? MAIN_WINDOW_MIN.width;
@@ -1549,7 +1553,8 @@ function createMainWindow() {
     backgroundColor: themeColors(savedTheme()).main, title: 'Quota Desk', icon: loadAppIcon(), autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: preloadPath },
   });
-  if (saved?.maximized) mainWindow.maximize();
+  // maximize() can reveal a hidden Windows window, so defer it until requested.
+  mainWindowRestoreMaximized = Boolean(saved?.maximized);
   loadAppPage(mainWindow, process.argv.includes('--onboard') ? { onboard: '1' } : {})
     .catch((error) => startupLog('加载主页面失败', String(error)));
   enableDevToolsShortcut(mainWindow);
@@ -1597,9 +1602,10 @@ function createMainWindow() {
   });
   mainWindow.once('ready-to-show', () => {
     startupLog('renderer: ready-to-show, GPU=', JSON.stringify(app.getGPUFeatureStatus()));
-    mainWindow.show();
+    mainWindowReady = true;
+    if (mainWindowRequested) showMainWindow();
   });
-  mainWindow.on('close', (event) => { if (!quitting) { event.preventDefault(); mainWindow.hide(); } });
+  mainWindow.on('close', (event) => { if (!quitting) { event.preventDefault(); mainWindowRequested = false; mainWindow.hide(); } });
   mainWindow.on('closed', () => { mainWindow = null; });
   // 窗口尺寸/位置变化 → 记住窗口状态（内容布局由渲染层响应式适配，标题栏大小恒定）
   mainWindow.on('resize', persistMainWindowBounds);
@@ -2710,10 +2716,11 @@ if (!app.requestSingleInstanceLock()) {
   startupLog('single-instance: 已有实例持锁,本进程退出');
   app.quit();
 } else {
-  app.on('second-instance', async () => {
+  app.on('second-instance', async (_event, argv) => {
+    if (startup.isQuietLaunch({ argv })) return;
     startupLog('second-instance: 唤醒已有实例窗口');
-    if (!mainWindow) return;
     showMainWindow();
+    if (!mainWindow || !mainWindowReady) return;
     try {
       // 空白判定:root 无子节点,或整页没有可渲染文本(有 DOM 但没画出来),都强制 reload
       const probe = await mainWindow.webContents.executeJavaScript('`${document.getElementById("root")?.childElementCount || 0}:${(document.body?.innerText || "").trim().length}`');
@@ -2723,6 +2730,11 @@ if (!app.requestSingleInstanceLock()) {
     } catch (error) { startupLog('second-instance: 检查失败,强制 reload', String(error)); mainWindow.webContents.reload(); }
   });
   app.whenReady().then(async () => {
+    const quietLaunch = startup.isQuietLaunch({ argv: process.argv, login: process.platform === 'darwin' ? app.getLoginItemSettings() : {} });
+    mainWindowRequested ||= !quietLaunch;
+    try { startup.migrateAutoLaunch(app); }
+    catch (error) { startupLog('ready: 自启项静默参数升级失败', error.message); }
+    startupLog('ready: 启动方式', quietLaunch ? '开机静默启动' : '手动启动');
     widgetLayout = await import('./widget-layout.mjs');
     appearance = await import('./widget-appearance.mjs');
     shortcutTools = await import('./widget-shortcut.mjs');
