@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import { clampWidgetInterval, clampWidgetScale, commitWidgetLayout } from '../electron/widget-layout.mjs';
 
 export function DigitsInput({ value, onChange, ...props }) {
@@ -60,10 +60,31 @@ function WidgetLayoutPicker({ settings, setSettings }) {
   </div>;
 }
 
-export function NumberSetting({ value, label, onCommit, suffix }) {
+export function NumberSetting({ value, label, onCommit, suffix, adjustable = false, min = -Infinity, max = Infinity, step = 1 }) {
   const [draft, setDraft] = useState(String(value));
   const editing = useRef(false);
   const cancelBlur = useRef(false);
+  const anchor = useRef(null);
+  const latest = useRef(null);
+  latest.current = { draft, value, onCommit };
+  const adjust = (direction) => {
+    const current = latest.current;
+    const base = editing.current && current.draft !== '' ? Number(current.draft) : Number(current.value);
+    const next = Math.min(max, Math.max(min, (Number.isFinite(base) ? base : Number(current.value)) + direction * step));
+    const result = current.onCommit(next);
+    latest.current = { ...current, value: result, draft: String(result) };
+    setDraft(String(result));
+  };
+  useEffect(() => {
+    if (!adjustable || !anchor.current) return undefined;
+    const element = anchor.current;
+    const wheel = (event) => {
+      if (!event.deltaY) return;
+      event.preventDefault(); event.stopPropagation(); adjust(event.deltaY < 0 ? 1 : -1);
+    };
+    element.addEventListener('wheel', wheel, { passive: false });
+    return () => element.removeEventListener('wheel', wheel);
+  }, [adjustable, min, max, step]);
   useEffect(() => { if (!editing.current) setDraft(String(value)); }, [value]);
   const commit = () => {
     editing.current = false;
@@ -71,11 +92,15 @@ export function NumberSetting({ value, label, onCommit, suffix }) {
     const result = onCommit(draft === '' ? value : draft);
     setDraft(String(result));
   };
-  return <span className="widget-number-setting"><DigitsInput aria-label={label} value={draft} onFocus={() => { editing.current = true; }} onChange={setDraft} onBlur={commit}
+  return <span ref={anchor} className={`widget-number-setting ${adjustable ? 'widget-number-adjustable' : ''}`}><DigitsInput aria-label={label} value={draft} onFocus={() => { editing.current = true; }} onChange={setDraft} onBlur={commit}
     onKeyDown={(event) => {
+      if (adjustable && ['ArrowUp', 'ArrowDown'].includes(event.key)) { event.preventDefault(); event.stopPropagation(); adjust(event.key === 'ArrowUp' ? 1 : -1); }
       if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); }
       if (event.key === 'Escape') { event.preventDefault(); cancelBlur.current = true; setDraft(String(value)); event.currentTarget.blur(); }
-    }} />{suffix && <span>{suffix}</span>}</span>;
+    }} />{adjustable && <span className="widget-number-arrows">
+      <button type="button" aria-label={`增加${label}`} disabled={Number(draft) >= max} onPointerDown={(event) => event.preventDefault()} onClick={() => adjust(1)}><ChevronUp size={10} /></button>
+      <button type="button" aria-label={`减少${label}`} disabled={Number(draft) <= min} onPointerDown={(event) => event.preventDefault()} onClick={() => adjust(-1)}><ChevronDown size={10} /></button>
+    </span>}{suffix && <span>{suffix}</span>}</span>;
 }
 
 export function WidgetLayoutSetting({ settings, setSettings }) {

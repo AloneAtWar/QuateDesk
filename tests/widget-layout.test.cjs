@@ -122,6 +122,23 @@ test('zero and small requested sizes stop at the readable minimum', () => {
   }
 });
 
+test('a capped preview width does not cancel size increases', () => {
+  const geometries = [1, 2, 3].map((widgetScale) => computeWidgetGeometry(4, custom(1, 2, { widgetScale, widgetLength: 1.5 }), { width: 500, height: 600 }));
+  assert.deepEqual(geometries.map((geometry) => geometry.width), [500, 500, 500]);
+  assert.deepEqual(geometries.map((geometry) => geometry.cellHeight), [52, 104, 156]);
+  assert.ok(geometries[1].scale > geometries[0].scale);
+  assert.ok(geometries.every((geometry) => geometry.widthLimited));
+});
+
+test('length changes only the width, even when the available width is reached', () => {
+  const geometries = [0.6, 0.8, 1, 1.5].map((widgetLength) => computeWidgetGeometry(4, custom(1, 2, { widgetLength }), { width: 500, height: 600 }));
+  assert.deepEqual(geometries.map((geometry) => geometry.height), [52, 52, 52, 52]);
+  assert.ok(geometries[1].width > geometries[0].width);
+  assert.equal(geometries.at(-1).width, 500);
+  assert.equal(geometries[0].widthLimited, false);
+  assert.equal(geometries.at(-1).widthLimited, true);
+});
+
 test('shortest length fits icon and values instead of reserving hidden name space', () => {
   const geometry = computeWidgetGeometry(1, custom(1, 1, { widgetLength: 0.6 }), undefined, { width: 130, height: 36 });
   assert.equal(geometry.cellWidth, 130);

@@ -15,7 +15,7 @@ export function WidgetTextSettings({ settings, setSettings }) {
     {TEXT_KINDS.map((kind) => <div className="widget-text-control" key={kind}>
       <b>{TEXT_LABELS[kind]}</b><span className="widget-color-state">{normalized.widgetTextColors[bank][kind] ? '自定义颜色' : '跟随主题'}</span>
       <div className="widget-text-fields">
-        <label><span>字号</span><NumberSetting label={`${TEXT_LABELS[kind]}字号`} value={normalized.widgetText[kind].size} onCommit={(value) => {
+        <label><span>字号</span><NumberSetting label={`${TEXT_LABELS[kind]}字号`} adjustable min={8} max={32} step={1} value={normalized.widgetText[kind].size} onCommit={(value) => {
           const size = Math.min(32, Math.max(8, Number(value) || normalized.widgetText[kind].size)); setFont(kind, { size }); return size;
         }} /></label>
         <select aria-label={`${TEXT_LABELS[kind]}粗细`} value={normalized.widgetText[kind].weight} onChange={(event) => setFont(kind, { weight: Number(event.target.value) })}>

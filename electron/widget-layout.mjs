@@ -79,12 +79,14 @@ export function computeWidgetGeometry(count, settings = {}, workArea = { width: 
   const baseWidth = length < 1
     ? minWidth + (Math.max(minWidth, WIDGET_BASE_SIZE.width) - minWidth) * (length - WIDGET_MIN_LENGTH) / (1 - WIDGET_MIN_LENGTH)
     : Math.max(minWidth, WIDGET_BASE_SIZE.width * length);
-  scale = Math.min(scale, availableWidth / (columns * baseWidth), availableHeight / (rows * WIDGET_BASE_SIZE.height));
+  // Cap each window dimension independently: a width limit must not cancel
+  // a size increase or make the row shorter when the length grows.
   const cellWidth = Math.min(Math.floor(availableWidth / columns), Math.max(Math.ceil(minWidth), Math.round(baseWidth * scale)));
   const cellHeight = Math.min(Math.floor(availableHeight / rows), Math.max(minHeight, Math.round(WIDGET_BASE_SIZE.height * scale)));
   // Long quota values also limit text/icon scaling when the length is shortened.
   const contentScale = Math.min(scale, cellWidth / minWidth, cellHeight / minHeight);
-  return { rows, columns, pageSize: rows * columns, width: columns * cellWidth, height: rows * cellHeight, cellWidth, cellHeight, scale: contentScale };
+  return { rows, columns, pageSize: rows * columns, width: columns * cellWidth, height: rows * cellHeight, cellWidth, cellHeight, scale: contentScale,
+    widthLimited: baseWidth * scale > availableWidth / columns, heightLimited: WIDGET_BASE_SIZE.height * scale > availableHeight / rows };
 }
 
 export function widgetWindowSize(scale, length = 0.9, accounts = [], layout = 'auto', customRows = 1, customColumns = 2, workArea, minimum) {

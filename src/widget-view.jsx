@@ -41,7 +41,11 @@ export function useWidgetGeometry(accounts, settings, formatAmount, preview = fa
   const available = preview
     ? { width: Math.min(area.width, Math.max(1, viewport.width - drawerWidth - 44)), height: Math.min(area.height, Math.max(1, viewport.width <= 700 ? Math.min(250, viewport.height * 0.35) : viewport.height - 110)) }
     : area;
-  return computeWidgetGeometry(accounts.filter((item) => !item.disabled).length, settings, available, minimum);
+  const count = accounts.filter((item) => !item.disabled).length;
+  const geometry = computeWidgetGeometry(count, settings, available, minimum);
+  if (!preview) return geometry;
+  const desktop = computeWidgetGeometry(count, settings, area, minimum);
+  return { ...geometry, desktopWidth: desktop.width, desktopHeight: desktop.height };
 }
 
 export function useWidgetPaging(count, geometry, settings) {

@@ -1715,6 +1715,14 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .widget-text-fields label { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 10px; }
 .widget-text-fields input[type=number] { width: 50px; min-width: 0; height: 28px; padding: 3px; border: 1px solid var(--line); border-radius: 4px; background: var(--control); color: var(--ink); font-size: 11px; }
 .widget-text-fields input[type=color] { width: 28px; height: 28px; padding: 2px; border: 1px solid var(--line); border-radius: 4px; background: var(--control); cursor: pointer; }
+.widget-text-fields { grid-template-columns: 90px minmax(0, 1fr) 28px 30px; }
+.widget-number-setting.widget-number-adjustable { position: relative; gap: 0 !important; }
+.widget-number-adjustable input { width: 60px; padding-right: 17px; }
+.widget-number-arrows { position: absolute; right: 1px; top: 1px; bottom: 1px; display: grid; grid-template-rows: 1fr 1fr; width: 15px; }
+.widget-number-arrows button { display: grid; place-items: center; padding: 0; border: 0; border-left: 1px solid var(--line); color: var(--ink-soft); background: transparent; }
+.widget-number-arrows button:hover { background: var(--control-2); }
+.widget-number-arrows button:disabled { opacity: .3; cursor: default; }
+.widget-preview-foot.widget-preview-limit { display: block; max-width: 100%; margin: 5px 2px 0; color: var(--widget-chip-sub); font-size: 10px; overflow-wrap: anywhere; }
 .widget-color-reset { padding: 3px 0; border: 0; background: transparent; color: var(--muted); font-size: 10px; }
 .widget-text-settings .setting-toggle { gap: 8px; }
 .widget-text-settings .setting-toggle i { flex: 0 0 34px; }

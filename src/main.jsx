@@ -2055,16 +2055,18 @@ function WidgetRow({ account, provider, tagLimit = 2, scale = 1, textSettings })
 
 function WidgetPreview({ accounts, providers, settings, theme, onClose }) {
   const geometry = useWidgetGeometry(accounts, settings, formatAmount, true);
+  const limited = geometry.widthLimited || geometry.heightLimited;
   const paging = useWidgetPaging(accounts.filter((item) => !item.disabled).length, geometry, settings);
   useEffect(() => {
-    document.body.style.setProperty('--widget-preview-height', `${geometry.height + 58}px`);
+    document.body.style.setProperty('--widget-preview-height', `${geometry.height + 58 + (limited ? 18 : 0)}px`);
     return () => document.body.style.removeProperty('--widget-preview-height');
-  }, [geometry.height]);
+  }, [geometry.height, limited]);
   return <div className="widget-preview-layer" ref={paging.surface}>
     <div className="widget-preview-head"><span><Monitor size={14} /> 浮窗预览 <span>{paging.pageIndex + 1}/{paging.pageCount}</span></span><button className="icon-button" onClick={onClose} aria-label="关闭预览"><X size={15} /></button></div>
     <div className="widget-preview-window" style={{ '--widget-opacity': `${settings.widgetOpacity}%` }}>
       <WidgetAccounts accounts={accounts} providers={providers} geometry={geometry} settings={settings} theme={theme} tagLimit={Number(settings.widgetTagLimit ?? 2)} pageIndex={paging.pageIndex} />
     </div>
+    {limited && <div className="widget-preview-foot widget-preview-limit">预览{geometry.widthLimited && geometry.heightLimited ? '尺寸' : geometry.widthLimited ? '宽度' : '高度'}已达上限 · 实际浮窗 {geometry.desktopWidth} × {geometry.desktopHeight}</div>}
   </div>;
 }
 
