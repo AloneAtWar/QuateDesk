@@ -1689,8 +1689,8 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .widget-cell .provider-logo.sm { flex: 0 0 auto; width: max(22px, calc(22px * var(--widget-content-scale, 1))); height: max(22px, calc(22px * var(--widget-content-scale, 1))); font-size: max(10px, calc(10px * var(--widget-content-scale, 1))); }
 .widget-cell .widget-account-block { flex: 0 1 104px; max-width: 104px; min-width: 0; overflow: hidden; }
 .widget-cell .widget-account { display: block; max-width: 100%; font-size: max(11px, calc(11px * var(--widget-content-scale, 1))); animation: none; }
-.widget-cell .widget-meters { flex: 0 0 auto; margin-left: 0; gap: 5px; overflow: visible; }
-.widget-cell .widget-meter { padding: 3px 4px; background: color-mix(in srgb, var(--widget-chip) var(--widget-opacity, 100%), transparent); }
+.widget-cell .widget-meters { flex: 0 0 auto; margin-left: var(--widget-meter-offset, 0px); gap: var(--widget-group-gap, 5px); overflow: visible; }
+.widget-cell .widget-meter { padding: 3px 4px; gap: var(--widget-inner-gap, 3px); background: color-mix(in srgb, var(--widget-chip) var(--widget-opacity, 100%), transparent); }
 .widget-cell .widget-meter em { font-size: max(11px, calc(11px * var(--widget-content-scale, 1))); white-space: nowrap; }
 .widget-cell .widget-meter b, .widget-cell .widget-meter small { font-size: max(8px, calc(8px * var(--widget-content-scale, 1))); }
 .widget-cell .widget-tags em { background: color-mix(in srgb, var(--widget-tag-bg) var(--widget-opacity, 100%), transparent); }
