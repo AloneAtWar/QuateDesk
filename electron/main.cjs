@@ -104,26 +104,23 @@ const DEEPSEEK_USAGE_URL = 'https://platform.deepseek.com/usage';
 const DEEPSEEK_PLATFORM_ORIGIN = new URL(DEEPSEEK_USAGE_URL).origin;
 const DEEPSEEK_TIMEZONE_OFFSET_SEC = 8 * 60 * 60;
 const ZAI_USAGE_TIMEZONE_OFFSET_SEC = 8 * 60 * 60;
-// 小控件整体等比缩放：一个比例因子同时决定窗口像素尺寸和内容缩放（渲染端 transform）。
-// Windows 显示缩放非 100% 时，反复 setPosition 会因 DIP/物理像素换算误差把窗口
-// 越拖越大，所以拖动时也必须用固定宽高走 setBounds。
-const { WIDGET_BASE_SIZE, widgetWindowSize: computeWidgetWindowSize } = require('./widget-layout.cjs');
-// 主窗口默认尺寸，同时也是允许的最小尺寸：界面按 520×470 设计，更小会挤压布局
+// Shared layout is loaded before any windows or IPC handlers are created.
+let widgetLayout;
+const WIDGET_BASE_SIZE = { width: 350, height: 52 };
 const MAIN_WINDOW_MIN = { width: 520, height: 470 };
-const clampWidgetScale = (value) => {
-  const scale = Math.round(Number(value) * 20) / 20;
-  return Number.isFinite(scale) ? Math.min(3, Math.max(0.8, scale)) : 1;
+const clampWidgetScale = (value) => widgetLayout.clampWidgetScale(value);
+const clampWidgetLength = (value) => widgetLayout.clampWidgetLength(value);
+let widgetMinimum = { width: 170, height: 36 };
+const widgetWorkArea = () => widgetWindow && !widgetWindow.isDestroyed()
+  ? screen.getDisplayMatching(widgetWindow.getBounds()).workArea : screen.getPrimaryDisplay().workArea;
+const notifyWidgetWorkArea = () => {
+  if (widgetWindow && !widgetWindow.isDestroyed()) widgetWindow.webContents.send('widget:work-area-changed');
 };
-// 浮窗长度：在等比缩放之外单独调整横向长度（高度不变），最短也要保证额度芯片完整显示
-const WIDGET_MIN_LENGTH = 0.6;
-const WIDGET_MAX_LENGTH = 1.5;
-const clampWidgetLength = (value) => {
-  const length = Math.round(Number(value) * 20) / 20;
-  return Number.isFinite(length) ? Math.min(WIDGET_MAX_LENGTH, Math.max(WIDGET_MIN_LENGTH, length)) : 1;
-};
-const widgetWindowSize = (scale, length = 0.9) => {
+const widgetWindowSize = (scale, length = 0.9, area = widgetWorkArea()) => {
   const state = store?.loadState();
-  return computeWidgetWindowSize(scale, clampWidgetLength(length), state?.accounts, state?.settings?.widgetLayout, state?.settings?.widgetGridRows, state?.settings?.widgetGridColumns);
+  const geometry = widgetLayout.computeWidgetGeometry((state?.accounts || []).filter((item) => !item.disabled).length,
+    { ...state?.settings, widgetScale: scale, widgetLength: length }, area, widgetMinimum);
+  return { width: geometry.width, height: geometry.height };
 };
 // 兼容旧设置：小/中/大档位与像素宽高都折算成比例；新装默认 90%
 const savedWidgetScale = () => {
@@ -1624,7 +1621,7 @@ function createWidgetWindow() {
   widgetWindow = new BrowserWindow({
     width: size.width, height: size.height, x: area.x + Math.max(0, area.width - size.width - 16), y: area.y + Math.max(0, area.height - size.height - 14),
     frame: false, resizable: false, movable: true, skipTaskbar: true, alwaysOnTop: true, show: false,
-    backgroundColor: themeColors(savedTheme()).widget, title: 'Quota Desk 浮窗',
+    transparent: true, backgroundColor: '#00000000', title: 'Quota Desk 浮窗',
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: preloadPath },
   });
   loadAppPage(widgetWindow, { widget: '1' });
@@ -1649,7 +1646,7 @@ function applyWidgetSize(scale, length) {
   const bounds = widgetWindow.getBounds();
   // 按窗口当前所在显示器钳制，副屏上的浮窗调整大小时不会被拽回主屏
   const area = screen.getDisplayMatching(bounds).workArea;
-  const requested = widgetWindowSize(widgetScale, widgetLength);
+  const requested = widgetWindowSize(widgetScale, widgetLength, area);
   const size = { width: Math.min(requested.width, area.width), height: Math.min(requested.height, area.height) };
   const x = Math.max(area.x, Math.min(area.x + area.width - size.width, bounds.x + bounds.width - size.width));
   const y = Math.max(area.y, Math.min(area.y + area.height - size.height, bounds.y + bounds.height - size.height));
@@ -1661,7 +1658,7 @@ function applyWidgetSize(scale, length) {
 function applyTheme(theme) {
   const colors = themeColors(theme === 'light' ? 'light' : 'dark');
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setBackgroundColor(colors.main);
-  if (widgetWindow && !widgetWindow.isDestroyed()) widgetWindow.setBackgroundColor(colors.widget);
+  if (widgetWindow && !widgetWindow.isDestroyed()) widgetWindow.setBackgroundColor('#00000000');
   return true;
 }
 
@@ -2565,6 +2562,15 @@ function registerIpc() {
   });
   ipcMain.handle('update:install', () => { autoUpdater?.quitAndInstall(true, true); return true; });
   ipcMain.handle('widget:set-size', (_event, size) => (size && typeof size === 'object' ? applyWidgetSize(size.scale, size.length) : applyWidgetSize(size)));
+  ipcMain.handle('widget:get-work-area', () => widgetWorkArea());
+  ipcMain.handle('widget:set-minimum', (event, minimum) => {
+    if (event.sender !== widgetWindow?.webContents) return false;
+    const width = Number(minimum?.width);
+    if (!Number.isFinite(width)) return false;
+    widgetMinimum = { width: Math.max(170, Math.min(10000, Math.ceil(width))), height: 36 };
+    applyWidgetSize(widgetScale, widgetLength);
+    return true;
+  });
   ipcMain.handle('app:set-theme', (_event, theme) => applyTheme(theme));
   // 厂商官网等外部链接一律走系统默认浏览器，不在应用窗口内导航
   ipcMain.handle('app:open-external', (_event, url) => {
@@ -2584,11 +2590,12 @@ function registerIpc() {
     const area = Number.isFinite(pointerX) && Number.isFinite(pointerY)
       ? screen.getDisplayNearestPoint({ x: Math.round(pointerX), y: Math.round(pointerY) }).workArea
       : screen.getDisplayMatching(bounds).workArea;
-    const requested = widgetWindowSize(widgetScale, widgetLength);
+    const requested = widgetWindowSize(widgetScale, widgetLength, area);
     const size = { width: Math.min(requested.width, area.width), height: Math.min(requested.height, area.height) };
     const x = Math.max(area.x, Math.min(area.x + area.width - size.width, bounds.x + dx));
     const y = Math.max(area.y, Math.min(area.y + area.height - size.height, bounds.y + dy));
     widgetWindow.setBounds({ x, y, width: size.width, height: size.height });
+    notifyWidgetWorkArea();
   });
   // 本机 CLI 用量:handler 只转给 cli-usage facade,不在这里解析任何文件
   cliUsage.registerIpc(ipcMain);
@@ -2613,6 +2620,9 @@ if (!app.requestSingleInstanceLock()) {
     } catch (error) { startupLog('second-instance: 检查失败,强制 reload', String(error)); mainWindow.webContents.reload(); }
   });
   app.whenReady().then(async () => {
+    widgetLayout = await import('./widget-layout.mjs');
+    screen.on('display-metrics-changed', () => { applyWidgetSize(widgetScale, widgetLength); notifyWidgetWorkArea(); });
+    screen.on('display-removed', () => { applyWidgetSize(widgetScale, widgetLength); notifyWidgetWorkArea(); });
     startupLog('ready: 初始化开始');
     store = new DesktopStore();
     cliUsage = createCliUsageService({ dbPath: path.join(app.getPath('userData'), 'cli-usage.sqlite') });

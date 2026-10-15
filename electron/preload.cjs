@@ -31,6 +31,13 @@ contextBridge.exposeInMainWorld('quotaDesk', {
   setWidgetVisible: (visible) => ipcRenderer.invoke('widget:set-visible', visible),
   getWidgetVisible: () => ipcRenderer.invoke('widget:get-visible'),
   setWidgetSize: (size) => ipcRenderer.invoke('widget:set-size', size),
+  getWidgetWorkArea: () => ipcRenderer.invoke('widget:get-work-area'),
+  setWidgetMinimum: (minimum) => ipcRenderer.invoke('widget:set-minimum', minimum),
+  onWidgetWorkAreaChanged: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('widget:work-area-changed', listener);
+    return () => ipcRenderer.removeListener('widget:work-area-changed', listener);
+  },
   setTheme: (theme) => ipcRenderer.invoke('app:set-theme', theme),
   openExternal: (url) => ipcRenderer.invoke('app:open-external', url),
   scanCcswitchImport: () => ipcRenderer.invoke('import:scan-ccswitch'),
