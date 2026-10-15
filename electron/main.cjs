@@ -110,7 +110,7 @@ const WIDGET_BASE_SIZE = { width: 350, height: 52 };
 const MAIN_WINDOW_MIN = { width: 520, height: 470 };
 const clampWidgetScale = (value) => widgetLayout.clampWidgetScale(value);
 const clampWidgetLength = (value) => widgetLayout.clampWidgetLength(value);
-let widgetMinimum = { width: 170, height: 36 };
+let widgetMinimum = { width: 130, height: 36 };
 const widgetWorkArea = () => widgetWindow && !widgetWindow.isDestroyed()
   ? screen.getDisplayMatching(widgetWindow.getBounds()).workArea : screen.getPrimaryDisplay().workArea;
 const notifyWidgetWorkArea = () => {
@@ -1606,7 +1606,10 @@ function createMainWindow() {
 // 均不再真正生效，必须显式给非默认级别（'screen-saver'，Windows 上同为 HWND_TOPMOST）。
 // 另外浮窗经 hide() 后再显示、Win+D 显示桌面等场景也可能丢失置顶，展示后统一补一次。
 function ensureWidgetOnTop() {
-  if (!widgetWindow || widgetWindow.isDestroyed() || !widgetWindow.isVisible()) return;
+  if (!widgetWindow || widgetWindow.isDestroyed()) return;
+  const pinned = store?.loadState()?.settings?.widgetAlwaysOnTop !== false;
+  if (!pinned) { widgetWindow.setAlwaysOnTop(false); return; }
+  if (!widgetWindow.isVisible()) return;
   widgetWindow.setAlwaysOnTop(true, 'screen-saver');
   widgetWindow.moveTop();
 }
@@ -1620,7 +1623,7 @@ function createWidgetWindow() {
   const size = { width: Math.min(requested.width, area.width), height: Math.min(requested.height, area.height) };
   widgetWindow = new BrowserWindow({
     width: size.width, height: size.height, x: area.x + Math.max(0, area.width - size.width - 16), y: area.y + Math.max(0, area.height - size.height - 14),
-    frame: false, resizable: false, movable: true, skipTaskbar: true, alwaysOnTop: true, show: false,
+    frame: false, resizable: false, movable: true, skipTaskbar: true, alwaysOnTop: store?.loadState()?.settings?.widgetAlwaysOnTop !== false, show: false,
     transparent: true, backgroundColor: '#00000000', title: 'Quota Desk 浮窗',
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: preloadPath },
   });
@@ -1761,6 +1764,7 @@ function registerIpc() {
     const previous = migrateState(store.loadState());
     const autoUpdateWasDisabled = previous?.settings?.autoUpdate === false;
     const saved = store.saveState(cleanState(mergeMainOwnedUsageConnections(state, previous)));
+    if ((previous?.settings?.widgetAlwaysOnTop !== false) !== (saved?.settings?.widgetAlwaysOnTop !== false)) ensureWidgetOnTop();
     // 本机用量后台增量跟随设置开关启停
     cliUsage?.applySettings(saved?.settings);
     const savedIds = new Set((saved.accounts || []).map((account) => account.id));
@@ -2567,7 +2571,7 @@ function registerIpc() {
     if (event.sender !== widgetWindow?.webContents) return false;
     const width = Number(minimum?.width);
     if (!Number.isFinite(width)) return false;
-    widgetMinimum = { width: Math.max(170, Math.min(10000, Math.ceil(width))), height: 36 };
+    widgetMinimum = { width: Math.max(130, Math.min(10000, Math.ceil(width))), height: 36 };
     applyWidgetSize(widgetScale, widgetLength);
     return true;
   });

@@ -20,6 +20,7 @@ import './styles.css';
 import { WIDGET_BASE_SIZE, WIDGET_MIN_LENGTH, WIDGET_MAX_LENGTH, clampWidgetScale, clampWidgetLength, normalizeWidgetSettings } from '../electron/widget-layout.mjs';
 import { WidgetLayoutSetting, WidgetScaleSetting, WidgetIntervalSetting } from './widget-settings';
 import { WidgetGrid, useWidgetGeometry, useWidgetPaging } from './widget-view';
+import { WidgetFitRow } from './widget-fit-row';
 
 const formatReset = (resetAt) => {
   if (!resetAt) return '不刷新';
@@ -2011,6 +2012,7 @@ function SettingsDrawer({ variant = 'desktop', accounts, providers, settings, se
       <section className="drawer-section">
         <div className="drawer-section-title"><Monitor size={16} /><span>桌面浮窗</span><TitleHelp>自动排列最多三行三列。自定义按行×列分页，支持 1～15；点击空白处或按 Enter 保存，Esc 取消。鼠标滚轮可翻页。</TitleHelp></div>
         <Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" />
+        <Toggle checked={settings.widgetAlwaysOnTop} onChange={(value) => setSettings((old) => ({ ...old, widgetAlwaysOnTop: value }))} label="浮窗置顶" />
         <WidgetLayoutSetting settings={settings} setSettings={setSettings} />
         <Toggle checked={settings.widgetCarousel} onChange={(value) => setSettings((old) => ({ ...old, widgetCarousel: value }))} label="自动轮播" />
         <WidgetIntervalSetting settings={settings} setSettings={setSettings} />
@@ -2037,28 +2039,14 @@ function WidgetAccounts({ accounts, providers, geometry, tagLimit = 2, loading =
 }
 
 function WidgetRow({ account, provider, tagLimit = 2, scale = 1 }) {
-  const rowRef = useRef(null);
-  const [width, setWidth] = useState(350);
-  useLayoutEffect(() => {
-    const row = rowRef.current;
-    if (!row) return undefined;
-    const measure = () => setWidth(row.clientWidth);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(row);
-    return () => observer.disconnect();
-  }, []);
   if (!account) return null;
-  const detailsWidth = 80 + (account.windows || []).reduce((sum, meter) => sum + formatAmount(meter).length * 8 + 75, 0);
-  const dense = width < detailsWidth * Math.max(0.8, scale);
-  const meters = dense ? (account.windows || []).slice(0, 2) : account.windows || [];
-  return <div ref={rowRef} className={`widget-row widget-cell ${dense ? 'widget-dense' : ''}`} title={account.lastError || account.name}>
-    <Logo provider={provider} size="sm" interactive={false} />
-    {!dense && <div className="widget-account-block"><span className="widget-account">{account.name}</span>{tagLimit > 0 && <span className="widget-tags">{(account.tags || []).slice(0, tagLimit).map((tag) => <em key={tag}>{tag}</em>)}</span>}</div>}
-    <div className="widget-meters">{meters.length ? meters.map((meter) => <span className={`widget-meter ${meter.available === false ? 'off' : ''}`} key={meter.key} title={`${windowCatalog[meter.key]?.label || meter.key} · ${formatAmount(meter)} · ${formatResetAbsolute(meter.resetAt)}`}>
-      {!dense && <b>{windowCatalog[meter.key]?.short}</b>}<em>{formatAmount(meter)}</em>{!dense && <small>{formatResetCompact(meter.resetAt)}</small>}
-    </span>) : <span className="widget-empty">等待同步</span>}</div>
-  </div>;
+  const meters = (account.windows || []).map((meter) => ({
+    key: meter.key, label: windowCatalog[meter.key]?.short,
+    value: formatAmount(meter), reset: formatResetCompact(meter.resetAt), off: meter.available === false,
+    title: `${windowCatalog[meter.key]?.label || meter.key} · ${formatAmount(meter)} · ${formatResetAbsolute(meter.resetAt)}`,
+  }));
+  return <WidgetFitRow name={account.name} error={account.lastError} tags={(account.tags || []).slice(0, tagLimit)}
+    meters={meters} logo={<Logo provider={provider} size="sm" interactive={false} />} scale={Math.max(0.8, scale)} />;
 }
 
 function WidgetPreview({ accounts, providers, settings, onClose }) {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { computeWidgetGeometry, clampWidgetInterval } from '../electron/widget-layout.mjs';
+import { computeWidgetGeometry, clampWidgetInterval, WIDGET_MIN_CELL } from '../electron/widget-layout.mjs';
 
 export function useWidgetGeometry(accounts, settings, formatAmount, preview = false) {
   const fallback = () => ({ width: window.screen.availWidth || 1920, height: window.screen.availHeight || 1080 });
@@ -18,8 +18,8 @@ export function useWidgetGeometry(accounts, settings, formatAmount, preview = fa
   }, []);
   const minimum = useMemo(() => {
     const context = document.createElement('canvas').getContext('2d');
-    if (context) context.font = '700 11px sans-serif';
-    const width = Math.max(170, ...accounts.filter((item) => !item.disabled).map((item) =>
+    if (context) context.font = `700 11px ${getComputedStyle(document.documentElement).fontFamily}`;
+    const width = Math.max(WIDGET_MIN_CELL.width, ...accounts.filter((item) => !item.disabled).map((item) =>
       50 + (item.windows || []).slice(0, 2).reduce((sum, meter) => sum + Math.ceil(context?.measureText(formatAmount(meter)).width || 60) + 12, 0)));
     return { width, height: 36 };
   }, [accounts, formatAmount]);

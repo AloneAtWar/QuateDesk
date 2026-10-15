@@ -85,7 +85,7 @@ export function WidgetLayoutSetting({ settings, setSettings }) {
 export function WidgetScaleSetting({ settings, setSettings }) {
   const percent = Math.round(clampWidgetScale(settings.widgetScale) * 100);
   return <div className="widget-scale-setting"><label htmlFor="widget-scale-slider">单元格大小</label>
-    <input id="widget-scale-slider" type="range" aria-label="单元格大小滑条" min="50" max="100" step="5" value={Math.min(100, percent)}
+    <input id="widget-scale-slider" type="range" aria-label="单元格大小滑条" min="0" max="300" step="5" value={percent}
       onChange={(event) => setSettings((old) => ({ ...old, widgetScale: Number(event.target.value) / 100 }))} />
     <NumberSetting value={percent} label="单元格大小百分比" suffix="%" onCommit={(value) => {
       const next = clampWidgetScale(Number(value) / 100); setSettings((old) => ({ ...old, widgetScale: next })); return Math.round(next * 100);

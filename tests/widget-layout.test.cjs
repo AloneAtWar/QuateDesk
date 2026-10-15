@@ -15,6 +15,8 @@ test('new installations use automatic layout and no carousel', () => {
   assert.equal(settings.widgetCarousel, false);
   assert.equal(settings.widgetCarouselSeconds, 6);
   assert.equal(settings.widgetGridRemembered, false);
+  assert.equal(settings.widgetAlwaysOnTop, true);
+  assert.equal(normalizeWidgetSettings({ widgetAlwaysOnTop: false }).widgetAlwaysOnTop, false);
 });
 
 test('automatic layout favors rows, up to nine accounts on each page', () => {
@@ -77,7 +79,7 @@ test('one by two stays fixed for every page including the last account', () => {
 test('fractional percentages retain precision and respect size limits', () => {
   assert.equal(clampWidgetScale(1.27), 1.27);
   assert.equal(clampWidgetScale(9), 3);
-  assert.equal(clampWidgetScale(0), 0.5);
+  assert.equal(clampWidgetScale(0), 0);
   const geometry = computeWidgetGeometry(1, custom(1, 1, { widgetScale: 1.27 }));
   assert.equal(geometry.cellWidth, 445);
   assert.equal(geometry.cellHeight, 66);
@@ -107,7 +109,43 @@ test('one-quota and two-quota accounts use the same cell geometry', () => {
 test('shortened large cells cap content scale to fit long quota values', () => {
   const geometry = computeWidgetGeometry(2, custom(1, 2, { widgetScale: 3, widgetLength: 0.6 }), { width: 1600, height: 1000 }, { width: 370, height: 36 });
   assert.ok(geometry.scale * 370 <= geometry.cellWidth);
-  assert.equal(geometry.cellWidth, 630);
+  assert.equal(geometry.cellWidth, 800);
+});
+
+test('zero and small requested sizes stop at the readable minimum', () => {
+  const minimum = { width: 143, height: 36 };
+  for (const widgetScale of [0, 0.01, 0.1, 0.2]) {
+    const geometry = computeWidgetGeometry(2, custom(2, 1, { widgetScale }), { width: 1920, height: 1080 }, minimum);
+    assert.equal(geometry.cellWidth, 143);
+    assert.equal(geometry.cellHeight, 36);
+    assert.equal(geometry.height, 72);
+  }
+});
+
+test('shortest length fits icon and values instead of reserving hidden name space', () => {
+  const geometry = computeWidgetGeometry(1, custom(1, 1, { widgetLength: 0.6 }), undefined, { width: 130, height: 36 });
+  assert.equal(geometry.cellWidth, 130);
+});
+
+test('unpinning remains effective when showing or focusing other windows', () => {
+  const main = fs.readFileSync(require.resolve('../electron/main.cjs'), 'utf8');
+  const source = main.slice(main.indexOf('function ensureWidgetOnTop('), main.indexOf('function createWidgetWindow('));
+  const calls = [];
+  let pinned = false;
+  const context = {
+    store: { loadState: () => ({ settings: { widgetAlwaysOnTop: pinned } }) },
+    widgetWindow: { isDestroyed: () => false, isVisible: () => true, setAlwaysOnTop: (...args) => calls.push(args), moveTop: () => calls.push('moveTop') },
+  };
+  vm.createContext(context);
+  vm.runInContext(source, context);
+  context.ensureWidgetOnTop();
+  assert.deepEqual(calls, [[false]]);
+  pinned = true;
+  context.ensureWidgetOnTop();
+  assert.deepEqual(calls, [[false], [true, 'screen-saver'], 'moveTop']);
+  pinned = false;
+  context.ensureWidgetOnTop();
+  assert.deepEqual(calls.at(-1), [false]);
 });
 
 test('carousel interval accepts one through six hundred seconds', () => {

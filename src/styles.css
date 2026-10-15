@@ -1689,13 +1689,20 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .widget-cell .provider-logo.sm { flex: 0 0 auto; width: max(22px, calc(22px * var(--widget-content-scale, 1))); height: max(22px, calc(22px * var(--widget-content-scale, 1))); font-size: max(10px, calc(10px * var(--widget-content-scale, 1))); }
 .widget-cell .widget-account-block { flex: 0 1 104px; max-width: 104px; min-width: 0; overflow: hidden; }
 .widget-cell .widget-account { display: block; max-width: 100%; font-size: max(11px, calc(11px * var(--widget-content-scale, 1))); animation: none; }
-.widget-cell .widget-meters { flex: 0 0 auto; margin-left: auto; gap: 5px; overflow: visible; }
+.widget-cell .widget-meters { flex: 0 0 auto; margin-left: 0; gap: 5px; overflow: visible; }
 .widget-cell .widget-meter { padding: 3px 4px; background: color-mix(in srgb, var(--widget-chip) var(--widget-opacity, 100%), transparent); }
 .widget-cell .widget-meter em { font-size: max(11px, calc(11px * var(--widget-content-scale, 1))); white-space: nowrap; }
 .widget-cell .widget-meter b, .widget-cell .widget-meter small { font-size: max(8px, calc(8px * var(--widget-content-scale, 1))); }
 .widget-cell .widget-tags em { background: color-mix(in srgb, var(--widget-tag-bg) var(--widget-opacity, 100%), transparent); }
-.widget-dense { gap: 5px; padding: 4px 6px; }
-.widget-dense .widget-meter { gap: 0; padding: 3px 4px; }
+.widget-fit-probes { position: fixed; top: 0; left: 0; visibility: hidden; pointer-events: none; display: flex; flex-direction: column; align-items: flex-start; width: max-content; z-index: -1; }
+.widget-fit-probes > .widget-cell { width: max-content; height: auto; min-height: 0; }
+.widget-cell .widget-account-block { display: flex; flex: 0 0 auto; flex-direction: column; align-items: flex-start; gap: 2px; max-width: none; }
+.widget-cell .widget-account { max-width: none; }
+.widget-cell.widget-fit-5 .widget-account-block { flex: 0 1 auto; min-width: var(--widget-name-min); }
+.widget-fit-probes > .widget-fit-5 .widget-account-block { flex: 0 0 var(--widget-name-min); width: var(--widget-name-min); }
+.widget-cell.widget-fit-5 .widget-account { width: 100%; }
+.widget-cell.widget-fit-6 { gap: 5px; padding: 4px 6px; }
+.widget-cell.widget-fit-6 .widget-meter { gap: 0; padding: 3px 4px; }
 body:has(.settings-drawer) .widget-preview-layer { left: 14px; right: auto; }
 @media (max-width: 700px) {
   .widget-preview-layer:has(.widget-grid) { top: 14px; bottom: auto; }

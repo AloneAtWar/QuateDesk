@@ -1,13 +1,13 @@
 export const WIDGET_BASE_SIZE = { width: 350, height: 52 };
 export const WIDGET_MIN_LENGTH = 0.6;
 export const WIDGET_MAX_LENGTH = 1.5;
-export const WIDGET_MIN_CELL = { width: 170, height: 36 };
+export const WIDGET_MIN_CELL = { width: 130, height: 36 };
 
 const clamp = (value, min, max, fallback) => {
   const number = Number(value);
   return Number.isFinite(number) && value !== '' && value != null ? Math.min(max, Math.max(min, number)) : fallback;
 };
-export const clampWidgetScale = (value) => Math.round(clamp(value, 0.5, 3, 0.9) * 100) / 100;
+export const clampWidgetScale = (value) => Math.round(clamp(value, 0, 3, 0.9) * 100) / 100;
 export const clampWidgetLength = (value) => Math.round(clamp(value, WIDGET_MIN_LENGTH, WIDGET_MAX_LENGTH, 0.9) * 100) / 100;
 export const clampWidgetGridNumber = (value, fallback = 1) => Number(value) > 0 ? Math.round(clamp(value, 1, 15, fallback)) : fallback;
 export const clampWidgetInterval = (value) => Math.round(clamp(value, 1, 600, 6));
@@ -28,6 +28,7 @@ export function normalizeWidgetSettings(value = {}) {
     widgetCarousel: value.widgetCarousel === true,
     widgetCarouselSeconds: clampWidgetInterval(value.widgetCarouselSeconds),
     widgetOpacity: clampWidgetOpacity(value.widgetOpacity),
+    widgetAlwaysOnTop: value.widgetAlwaysOnTop !== false,
   };
 }
 
@@ -71,8 +72,13 @@ export function computeWidgetGeometry(count, settings = {}, workArea = { width: 
   let scale = clampWidgetScale(settings.widgetScale);
   if (grid.rows > 5 && grid.columns > 5) scale *= 5 / Math.max(grid.rows, grid.columns);
   const length = clampWidgetLength(settings.widgetLength);
-  scale = Math.min(scale, availableWidth / (columns * WIDGET_BASE_SIZE.width * length), availableHeight / (rows * WIDGET_BASE_SIZE.height));
-  const cellWidth = Math.min(Math.floor(availableWidth / columns), Math.max(Math.ceil(minWidth), Math.round(WIDGET_BASE_SIZE.width * length * scale)));
+  // At the shortest length, use the measured icon + two quota values.
+  // Keep the original 100% width and expanded range unchanged.
+  const baseWidth = length < 1
+    ? minWidth + (Math.max(minWidth, WIDGET_BASE_SIZE.width) - minWidth) * (length - WIDGET_MIN_LENGTH) / (1 - WIDGET_MIN_LENGTH)
+    : Math.max(minWidth, WIDGET_BASE_SIZE.width * length);
+  scale = Math.min(scale, availableWidth / (columns * baseWidth), availableHeight / (rows * WIDGET_BASE_SIZE.height));
+  const cellWidth = Math.min(Math.floor(availableWidth / columns), Math.max(Math.ceil(minWidth), Math.round(baseWidth * scale)));
   const cellHeight = Math.min(Math.floor(availableHeight / rows), Math.max(minHeight, Math.round(WIDGET_BASE_SIZE.height * scale)));
   // Long quota values also limit text/icon scaling when the length is shortened.
   const contentScale = Math.min(scale, cellWidth / minWidth, cellHeight / minHeight);
