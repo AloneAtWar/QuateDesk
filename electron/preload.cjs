@@ -30,8 +30,24 @@ contextBridge.exposeInMainWorld('quotaDesk', {
   testDraft: (draft) => ipcRenderer.invoke('quota:test-draft', draft),
   setWidgetVisible: (visible) => ipcRenderer.invoke('widget:set-visible', visible),
   getWidgetVisible: () => ipcRenderer.invoke('widget:get-visible'),
+  getWidgetShortcutStatus: () => ipcRenderer.invoke('widget:shortcut-status'),
+  setWidgetShortcutRecording: (recording) => ipcRenderer.invoke('widget:shortcut-recording', recording),
+  setWidgetShortcut: (shortcut) => ipcRenderer.invoke('widget:set-shortcut', shortcut),
   setWidgetSize: (size) => ipcRenderer.invoke('widget:set-size', size),
+  getWidgetWorkArea: () => ipcRenderer.invoke('widget:get-work-area'),
+  setWidgetMinimum: (minimum) => ipcRenderer.invoke('widget:set-minimum', minimum),
+  onWidgetWorkAreaChanged: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('widget:work-area-changed', listener);
+    return () => ipcRenderer.removeListener('widget:work-area-changed', listener);
+  },
   setTheme: (theme) => ipcRenderer.invoke('app:set-theme', theme),
+  getSystemTheme: () => ipcRenderer.invoke('app:get-system-theme'),
+  onSystemThemeChanged: (callback) => {
+    const listener = (_event, theme) => callback(theme);
+    ipcRenderer.on('theme:system-changed', listener);
+    return () => ipcRenderer.removeListener('theme:system-changed', listener);
+  },
   openExternal: (url) => ipcRenderer.invoke('app:open-external', url),
   scanCcswitchImport: () => ipcRenderer.invoke('import:scan-ccswitch'),
   applyCcswitchImport: (selectedIds) => ipcRenderer.invoke('import:apply-ccswitch', selectedIds),
@@ -54,6 +70,7 @@ contextBridge.exposeInMainWorld('quotaDesk', {
   getMaximized: () => ipcRenderer.invoke('window:get-maximized'),
   toggleDevTools: () => ipcRenderer.invoke('devtools:toggle'),
   moveWidget: (deltaX, deltaY, pointerX, pointerY) => ipcRenderer.send('widget:move', { deltaX, deltaY, pointerX, pointerY }),
+  endWidgetDrag: () => ipcRenderer.send('widget:move-end'),
   getVersion: () => ipcRenderer.invoke('app:get-version'),
   getAutoLaunch: () => ipcRenderer.invoke('app:get-auto-launch'),
   setAutoLaunch: (enabled) => ipcRenderer.invoke('app:set-auto-launch', enabled),

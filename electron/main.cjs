@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, screen, session, shell, Tray } = require('electron');
+const { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, nativeTheme, net, Notification, screen, session, shell, Tray } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -79,6 +79,13 @@ startupLog(`boot v${app.getVersion()} electron=${process.versions.electron} chro
 
 let mainWindow;
 let widgetWindow;
+let widgetReady;
+let widgetSummon;
+let widgetShortcuts;
+let shortcutTools;
+let widgetPermanentVisible = true;
+let widgetFixedPosition = null;
+let widgetPositionTimer;
 let tray;
 let store;
 let cliUsage;
@@ -104,24 +111,26 @@ const DEEPSEEK_USAGE_URL = 'https://platform.deepseek.com/usage';
 const DEEPSEEK_PLATFORM_ORIGIN = new URL(DEEPSEEK_USAGE_URL).origin;
 const DEEPSEEK_TIMEZONE_OFFSET_SEC = 8 * 60 * 60;
 const ZAI_USAGE_TIMEZONE_OFFSET_SEC = 8 * 60 * 60;
-// 小控件整体等比缩放：一个比例因子同时决定窗口像素尺寸和内容缩放（渲染端 transform）。
-// Windows 显示缩放非 100% 时，反复 setPosition 会因 DIP/物理像素换算误差把窗口
-// 越拖越大，所以拖动时也必须用固定宽高走 setBounds。
+// Shared layout is loaded before any windows or IPC handlers are created.
+let widgetLayout;
+let appearance;
+let activeThemePreference = null;
 const WIDGET_BASE_SIZE = { width: 350, height: 52 };
-// 主窗口默认尺寸，同时也是允许的最小尺寸：界面按 520×470 设计，更小会挤压布局
 const MAIN_WINDOW_MIN = { width: 520, height: 470 };
-const clampWidgetScale = (value) => {
-  const scale = Math.round(Number(value) * 20) / 20;
-  return Number.isFinite(scale) ? Math.min(3, Math.max(0.8, scale)) : 1;
+const clampWidgetScale = (value) => widgetLayout.clampWidgetScale(value);
+const clampWidgetLength = (value) => widgetLayout.clampWidgetLength(value);
+let widgetMinimum = { width: 130, height: 36 };
+const widgetWorkArea = () => widgetWindow && !widgetWindow.isDestroyed()
+  ? screen.getDisplayMatching(widgetWindow.getBounds()).workArea : screen.getPrimaryDisplay().workArea;
+const notifyWidgetWorkArea = () => {
+  if (widgetWindow && !widgetWindow.isDestroyed()) widgetWindow.webContents.send('widget:work-area-changed');
 };
-// 浮窗长度：在等比缩放之外单独调整横向长度（高度不变），最短也要保证额度芯片完整显示
-const WIDGET_MIN_LENGTH = 0.6;
-const WIDGET_MAX_LENGTH = 1.5;
-const clampWidgetLength = (value) => {
-  const length = Math.round(Number(value) * 20) / 20;
-  return Number.isFinite(length) ? Math.min(WIDGET_MAX_LENGTH, Math.max(WIDGET_MIN_LENGTH, length)) : 1;
+const widgetWindowSize = (scale, length = 0.9, area = widgetWorkArea()) => {
+  const state = store?.loadState();
+  const geometry = widgetLayout.computeWidgetGeometry((state?.accounts || []).filter((item) => !item.disabled).length,
+    { ...state?.settings, widgetScale: scale, widgetLength: length }, area, widgetMinimum);
+  return { width: geometry.width, height: geometry.height };
 };
-const widgetWindowSize = (scale, length = 0.9) => ({ width: Math.round(WIDGET_BASE_SIZE.width * scale * clampWidgetLength(length)), height: Math.round(WIDGET_BASE_SIZE.height * scale) });
 // 兼容旧设置：小/中/大档位与像素宽高都折算成比例；新装默认 90%
 const savedWidgetScale = () => {
   const settings = store?.loadState()?.settings || {};
@@ -138,7 +147,7 @@ const historyRetentionDays = () => clampRetentionDays(store?.loadState()?.settin
 const themeColors = (theme) => (theme === 'light'
   ? { main: '#f3f5f1', widget: '#eef1ec' }
   : { main: '#141d1f', widget: '#202c2e' });
-const savedTheme = () => (store?.loadState()?.settings?.theme === 'light' ? 'light' : 'dark');
+const savedTheme = () => appearance.resolveTheme(activeThemePreference ?? store?.loadState()?.settings?.theme, nativeTheme.shouldUseDarkColors);
 const RELEASES_URL = 'https://github.com/AloneAtWar/QuateDesk/releases';
 const distPath = path.join(__dirname, '..', 'dist', 'index.html');
 // dev:desktop 开发模式由 build/dev-desktop.cjs 注入 QD_DEV_URL，渲染页改吃 Vite 开发
@@ -442,6 +451,7 @@ function applyProxySetting() {
 }
 
 const sendState = (state) => {
+  if (widgetWindow && !widgetWindow.isDestroyed()) applyWidgetSize(savedWidgetScale(), savedWidgetLength());
   for (const window of [mainWindow, widgetWindow]) {
     if (window && !window.isDestroyed()) window.webContents.send('state:updated', { ...state, runtime: runtimeStatus() });
   }
@@ -1552,6 +1562,7 @@ function createMainWindow() {
     ensureWidgetOnTop();
   });
   mainWindow.on('focus', () => { if (mainWindow.isAlwaysOnTop()) ensureWidgetOnTop(); });
+  mainWindow.on('blur', () => widgetShortcuts?.setRecording(false));
   mainWindow.webContents.on('did-finish-load', () => { rendererCrashCount = 0; startupLog('renderer: did-finish-load'); });
   mainWindow.webContents.on('did-fail-load', (_event, code, description, url) => startupLog('renderer: did-fail-load', code, description, url));
   // 渲染进程崩溃自愈:白屏的根因多半是环境性崩溃(缓存损坏/DLL 注入/GPU 驱动),
@@ -1605,64 +1616,131 @@ function createMainWindow() {
 // 均不再真正生效，必须显式给非默认级别（'screen-saver'，Windows 上同为 HWND_TOPMOST）。
 // 另外浮窗经 hide() 后再显示、Win+D 显示桌面等场景也可能丢失置顶，展示后统一补一次。
 function ensureWidgetOnTop() {
-  if (!widgetWindow || widgetWindow.isDestroyed() || !widgetWindow.isVisible()) return;
+  if (!widgetWindow || widgetWindow.isDestroyed()) return;
+  const pinned = store?.loadState()?.settings?.widgetAlwaysOnTop !== false;
+  if (!pinned) { widgetWindow.setAlwaysOnTop(false); return; }
+  if (!widgetWindow.isVisible()) return;
   widgetWindow.setAlwaysOnTop(true, 'screen-saver');
   widgetWindow.moveTop();
 }
 
 function createWidgetWindow() {
-  const display = screen.getPrimaryDisplay();
-  const { width, height } = display.workAreaSize;
+  const display = widgetFixedPosition ? screen.getDisplayNearestPoint(widgetFixedPosition) : screen.getPrimaryDisplay();
+  const area = display.workArea;
   widgetScale = savedWidgetScale();
   widgetLength = savedWidgetLength();
-  const size = widgetWindowSize(widgetScale, widgetLength);
+  const requested = widgetWindowSize(widgetScale, widgetLength, area);
+  const size = { width: Math.min(requested.width, area.width), height: Math.min(requested.height, area.height) };
+  const position = widgetFixedPosition || { x: area.x + Math.max(0, area.width - size.width - 16), y: area.y + Math.max(0, area.height - size.height - 14) };
+  const x = Math.max(area.x, Math.min(area.x + area.width - size.width, position.x));
+  const y = Math.max(area.y, Math.min(area.y + area.height - size.height, position.y));
+  widgetFixedPosition = { x, y };
   widgetWindow = new BrowserWindow({
-    width: size.width, height: size.height, x: Math.max(0, width - size.width - 16), y: Math.max(0, height - size.height - 14),
-    minWidth: widgetWindowSize(0.8, WIDGET_MIN_LENGTH).width, maxWidth: widgetWindowSize(3, WIDGET_MAX_LENGTH).width, minHeight: widgetWindowSize(0.8).height, maxHeight: widgetWindowSize(1.5).height,
-    frame: false, resizable: false, movable: true, skipTaskbar: true, alwaysOnTop: true, show: false,
-    backgroundColor: themeColors(savedTheme()).widget, title: 'Quota Desk 浮窗',
+    width: size.width, height: size.height, x, y,
+    frame: false, resizable: false, movable: true, skipTaskbar: true, alwaysOnTop: store?.loadState()?.settings?.widgetAlwaysOnTop !== false, show: false,
+    transparent: true, backgroundColor: '#00000000', title: 'Quota Desk 浮窗',
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: preloadPath },
   });
+  widgetReady = new Promise((resolve) => widgetWindow.once('ready-to-show', () => {
+    if (widgetPermanentVisible && !widgetSummon?.active) { widgetWindow.showInactive(); ensureWidgetOnTop(); }
+    resolve();
+  }));
   loadAppPage(widgetWindow, { widget: '1' });
   enableDevToolsShortcut(widgetWindow);
-  widgetWindow.once('ready-to-show', () => { widgetWindow.showInactive(); ensureWidgetOnTop(); });
+  widgetWindow.on('blur', () => widgetSummon?.blur());
   // 系统恢复可见（显示桌面还原等）时同样补一次置顶
   widgetWindow.on('show', ensureWidgetOnTop);
   widgetWindow.on('restore', ensureWidgetOnTop);
-  // 浮窗右键弹出与托盘一致的菜单
+  // 浮窗只保留常用三项；托盘继续保留退出等完整菜单。
   widgetWindow.webContents.on('context-menu', (event) => {
     event.preventDefault();
-    buildTrayMenu().popup({ window: widgetWindow });
+    widgetSummon?.menu(true);
+    buildWidgetMenu().popup({ window: widgetWindow, callback: () => widgetSummon?.menu(false) });
   });
-  widgetWindow.on('closed', () => { widgetWindow = null; });
+  widgetWindow.on('closed', () => { widgetSummon?.cancel(); widgetWindow = null; });
 }
 
 // 浮窗大小/长度调整：接收缩放比例与长度比例，窗口像素尺寸按基准尺寸换算，右下角保持不动
 function applyWidgetSize(scale, length) {
   widgetScale = clampWidgetScale(scale);
   widgetLength = clampWidgetLength(length ?? widgetLength);
-  const size = widgetWindowSize(widgetScale, widgetLength);
   if (!widgetWindow || widgetWindow.isDestroyed()) return widgetScale;
+  if (widgetSummon?.active) { widgetSummon.reflow(); return widgetScale; }
   const bounds = widgetWindow.getBounds();
   // 按窗口当前所在显示器钳制，副屏上的浮窗调整大小时不会被拽回主屏
   const area = screen.getDisplayMatching(bounds).workArea;
-  const x = Math.max(area.x, Math.min(area.x + area.width - size.width, bounds.x + bounds.width - size.width));
-  const y = Math.max(area.y, Math.min(area.y + area.height - size.height, bounds.y + bounds.height - size.height));
+  const requested = widgetWindowSize(widgetScale, widgetLength, area);
+  const size = { width: Math.min(requested.width, area.width), height: Math.min(requested.height, area.height) };
+  // Windows display scaling can round DIP bounds by one pixel. Treat that as
+  // unchanged, otherwise each quota refresh would move the fixed corner again.
+  const sameWidth = Math.abs(bounds.width - size.width) <= 1;
+  const sameHeight = Math.abs(bounds.height - size.height) <= 1;
+  const x = Math.max(area.x, Math.min(area.x + area.width - size.width, bounds.x + (sameWidth ? 0 : bounds.width - size.width)));
+  const y = Math.max(area.y, Math.min(area.y + area.height - size.height, bounds.y + (sameHeight ? 0 : bounds.height - size.height)));
+  if (bounds.x === x && bounds.y === y && sameWidth && sameHeight) return widgetScale;
   widgetWindow.setBounds({ x, y, width: size.width, height: size.height });
+  widgetFixedPosition = { x, y };
   return widgetScale;
 }
 
 function applyTheme(theme) {
-  const colors = themeColors(theme === 'light' ? 'light' : 'dark');
+  activeThemePreference = appearance.normalizeTheme(theme);
+  const colors = themeColors(appearance.resolveTheme(activeThemePreference, nativeTheme.shouldUseDarkColors));
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setBackgroundColor(colors.main);
-  if (widgetWindow && !widgetWindow.isDestroyed()) widgetWindow.setBackgroundColor(colors.widget);
+  if (widgetWindow && !widgetWindow.isDestroyed()) widgetWindow.setBackgroundColor('#00000000');
   return true;
 }
 
 function setWidgetVisible(visible) {
+  widgetSummon?.restore();
+  widgetSummon?.cancel();
+  saveWidgetVisibility(visible);
   if (!widgetWindow || widgetWindow.isDestroyed()) { if (visible) createWidgetWindow(); return visible; }
-  if (visible) { widgetWindow.showInactive(); ensureWidgetOnTop(); } else widgetWindow.hide();
+  if (visible) {
+    if (widgetFixedPosition) placeWidget(widgetFixedPosition, false);
+    widgetWindow.showInactive(); ensureWidgetOnTop(); notifyWidgetWorkArea();
+  } else widgetWindow.hide();
   return visible;
+}
+
+function saveWidgetVisibility(visible) {
+  widgetPermanentVisible = Boolean(visible);
+  const state = store?.loadState();
+  if (state && (state.settings?.widget !== false) !== widgetPermanentVisible) {
+    const saved = store.saveState({ ...state, settings: { ...state.settings, widget: widgetPermanentVisible } });
+    sendState(saved);
+  }
+}
+
+function placeWidget(position, centered) {
+  if (!widgetWindow || widgetWindow.isDestroyed()) return;
+  const area = screen.getDisplayNearestPoint(position).workArea;
+  const requested = widgetWindowSize(widgetScale, widgetLength, area);
+  const width = Math.min(requested.width, area.width);
+  const height = Math.min(requested.height, area.height);
+  const x = Math.round(Math.max(area.x, Math.min(area.x + area.width - width, position.x - (centered ? width / 2 : 0))));
+  const y = Math.round(Math.max(area.y, Math.min(area.y + area.height - height, position.y - (centered ? height / 2 : 0))));
+  const old = widgetWindow.getBounds();
+  if (old.x !== x || old.y !== y || old.width !== width || old.height !== height) widgetWindow.setBounds({ x, y, width, height });
+}
+
+function persistWidgetPosition() {
+  clearTimeout(widgetPositionTimer);
+  if (widgetFixedPosition) store?.saveWidgetWindowState(widgetFixedPosition);
+}
+
+function rememberWidgetPosition(bounds) {
+  widgetFixedPosition = { x: bounds.x, y: bounds.y };
+  clearTimeout(widgetPositionTimer);
+  widgetPositionTimer = setTimeout(persistWidgetPosition, 250);
+}
+
+function buildWidgetMenu() {
+  return Menu.buildFromTemplate([
+    { label: '打开 Quota Desk', click: () => showMainWindow() },
+    { label: '立即刷新额度', click: () => pollState().catch(() => {}) },
+    { label: '显示 / 隐藏浮窗', click: () => setWidgetVisible(!widgetPermanentVisible) },
+  ]);
 }
 
 function createTrayIcon() {
@@ -1685,7 +1763,7 @@ function buildTrayMenu() {
   return Menu.buildFromTemplate([
     { label: '打开 Quota Desk', click: () => showMainWindow() },
     { label: '立即刷新额度', click: () => pollState().catch(() => {}) },
-    { label: '显示 / 隐藏浮窗', click: () => setWidgetVisible(!widgetWindow?.isVisible()) },
+    { label: '显示 / 隐藏浮窗', click: () => setWidgetVisible(!widgetPermanentVisible) },
     { type: 'separator' },
     { label: '开机自启', type: 'checkbox', checked: getAutoLaunch(), click: (item) => { setAutoLaunch(item.checked); refreshTray(); } },
     { label: '自动检查更新', type: 'checkbox', checked: autoUpdate, click: (item) => setAutoUpdateEnabled(item.checked) },
@@ -1757,7 +1835,13 @@ function registerIpc() {
     // 记录保存前的开关状态：只在“自动检查更新”从关闭切换为开启时补一次立即检查，避免每次保存设置都请求 GitHub
     const previous = migrateState(store.loadState());
     const autoUpdateWasDisabled = previous?.settings?.autoUpdate === false;
-    const saved = store.saveState(cleanState(mergeMainOwnedUsageConnections(state, previous)));
+    const next = cleanState(mergeMainOwnedUsageConnections(state, previous));
+    if (shortcutTools.normalizeWidgetShortcut(next.settings.widgetShortcut) !== shortcutTools.normalizeWidgetShortcut(previous?.settings?.widgetShortcut)) {
+      const result = widgetShortcuts.set(next.settings.widgetShortcut);
+      if (!result.ok) next.settings.widgetShortcut = previous?.settings?.widgetShortcut ?? 'Alt+Q';
+    }
+    const saved = store.saveState(next);
+    if ((previous?.settings?.widgetAlwaysOnTop !== false) !== (saved?.settings?.widgetAlwaysOnTop !== false)) ensureWidgetOnTop();
     // 本机用量后台增量跟随设置开关启停
     cliUsage?.applySettings(saved?.settings);
     const savedIds = new Set((saved.accounts || []).map((account) => account.id));
@@ -1985,6 +2069,21 @@ function registerIpc() {
   });
   ipcMain.handle('widget:set-visible', (_event, visible) => setWidgetVisible(Boolean(visible)));
   ipcMain.handle('widget:get-visible', () => Boolean(widgetWindow?.isVisible()));
+  ipcMain.handle('widget:shortcut-status', () => widgetShortcuts.status());
+  ipcMain.handle('widget:shortcut-recording', (event, recording) => {
+    if (event.sender !== mainWindow?.webContents) return false;
+    return widgetShortcuts.setRecording(recording);
+  });
+  ipcMain.handle('widget:set-shortcut', (event, value) => {
+    if (event.sender !== mainWindow?.webContents) return { ok: false, error: '只能在主面板设置快捷键' };
+    const result = widgetShortcuts.set(value);
+    if (result.ok) {
+      const state = store.loadState() || {};
+      const saved = store.saveState({ ...state, settings: { ...state.settings, widgetShortcut: result.shortcut } });
+      sendState(saved);
+    }
+    return result;
+  });
   ipcMain.handle('window:open-main', () => { showMainWindow(); return true; });
   // Electron 43 默认级别的 setAlwaysOnTop 不生效，置顶/取消固定都要显式传级别（见 ensureWidgetOnTop 注释）
   ipcMain.handle('window:toggle-pin', () => { if (!mainWindow) return false; const next = !mainWindow.isAlwaysOnTop(); mainWindow.setAlwaysOnTop(next, 'screen-saver'); if (next) ensureWidgetOnTop(); return next; });
@@ -2559,7 +2658,18 @@ function registerIpc() {
   });
   ipcMain.handle('update:install', () => { autoUpdater?.quitAndInstall(true, true); return true; });
   ipcMain.handle('widget:set-size', (_event, size) => (size && typeof size === 'object' ? applyWidgetSize(size.scale, size.length) : applyWidgetSize(size)));
+  ipcMain.handle('widget:get-work-area', () => widgetWorkArea());
+  ipcMain.handle('widget:set-minimum', (event, minimum) => {
+    if (event.sender !== widgetWindow?.webContents) return false;
+    const width = Number(minimum?.width);
+    const height = Number(minimum?.height);
+    if (!Number.isFinite(width) || !Number.isFinite(height)) return false;
+    widgetMinimum = { width: Math.max(130, Math.min(10000, Math.ceil(width))), height: Math.max(36, Math.min(1000, Math.ceil(height))) };
+    applyWidgetSize(widgetScale, widgetLength);
+    return true;
+  });
   ipcMain.handle('app:set-theme', (_event, theme) => applyTheme(theme));
+  ipcMain.handle('app:get-system-theme', () => nativeTheme.shouldUseDarkColors ? 'dark' : 'light');
   // 厂商官网等外部链接一律走系统默认浏览器，不在应用窗口内导航
   ipcMain.handle('app:open-external', (_event, url) => {
     const target = String(url || '');
@@ -2567,21 +2677,28 @@ function registerIpc() {
     shell.openExternal(target);
     return true;
   });
-  ipcMain.on('widget:move', (_event, { deltaX, deltaY, pointerX, pointerY }) => {
+  ipcMain.on('widget:move', (event, { deltaX, deltaY, pointerX, pointerY }) => {
+    if (event.sender !== widgetWindow?.webContents) return;
     if (!widgetWindow || widgetWindow.isDestroyed()) return;
     const dx = Math.round(Number(deltaX) || 0);
     const dy = Math.round(Number(deltaY) || 0);
     if (!dx && !dy) return;
-    const size = widgetWindowSize(widgetScale, widgetLength);
     const bounds = widgetWindow.getBounds();
     // 钳制目标取鼠标指针所在显示器而非窗口所在显示器：按窗口 bounds 会形成死锁（窗口永远越不过
     // 当前屏幕边界，getDisplayMatching 也就永远返回同一块屏），导致浮窗无法跨显示器拖动。
     const area = Number.isFinite(pointerX) && Number.isFinite(pointerY)
       ? screen.getDisplayNearestPoint({ x: Math.round(pointerX), y: Math.round(pointerY) }).workArea
       : screen.getDisplayMatching(bounds).workArea;
+    const requested = widgetWindowSize(widgetScale, widgetLength, area);
+    const size = { width: Math.min(requested.width, area.width), height: Math.min(requested.height, area.height) };
     const x = Math.max(area.x, Math.min(area.x + area.width - size.width, bounds.x + dx));
     const y = Math.max(area.y, Math.min(area.y + area.height - size.height, bounds.y + dy));
     widgetWindow.setBounds({ x, y, width: size.width, height: size.height });
+    widgetSummon.dragged();
+    notifyWidgetWorkArea();
+  });
+  ipcMain.on('widget:move-end', (event) => {
+    if (event.sender === widgetWindow?.webContents) persistWidgetPosition();
   });
   // 本机 CLI 用量:handler 只转给 cli-usage facade,不在这里解析任何文件
   cliUsage.registerIpc(ipcMain);
@@ -2606,8 +2723,33 @@ if (!app.requestSingleInstanceLock()) {
     } catch (error) { startupLog('second-instance: 检查失败,强制 reload', String(error)); mainWindow.webContents.reload(); }
   });
   app.whenReady().then(async () => {
+    widgetLayout = await import('./widget-layout.mjs');
+    appearance = await import('./widget-appearance.mjs');
+    shortcutTools = await import('./widget-shortcut.mjs');
+    const { createWidgetSummoner } = await import('./widget-summon.mjs');
+    nativeTheme.themeSource = 'system';
+    nativeTheme.on('updated', () => {
+      applyTheme(activeThemePreference ?? store?.loadState()?.settings?.theme);
+      for (const window of [mainWindow, widgetWindow]) {
+        if (window && !window.isDestroyed()) window.webContents.send('theme:system-changed', nativeTheme.shouldUseDarkColors ? 'dark' : 'light');
+      }
+    });
+    screen.on('display-metrics-changed', () => { applyWidgetSize(widgetScale, widgetLength); notifyWidgetWorkArea(); });
+    screen.on('display-removed', () => { applyWidgetSize(widgetScale, widgetLength); notifyWidgetWorkArea(); });
     startupLog('ready: 初始化开始');
     store = new DesktopStore();
+    widgetPermanentVisible = store.loadState()?.settings?.widget !== false;
+    const savedPosition = store.loadWidgetWindowState();
+    if (Number.isFinite(savedPosition?.x) && Number.isFinite(savedPosition?.y)) widgetFixedPosition = { x: Math.round(savedPosition.x), y: Math.round(savedPosition.y) };
+    widgetSummon = createWidgetSummoner({
+      readyWindow: async () => { if (!widgetWindow || widgetWindow.isDestroyed()) createWidgetWindow(); await widgetReady; return widgetWindow; },
+      getWindow: () => widgetWindow, getCursor: () => screen.getCursorScreenPoint(), place: placeWidget,
+      getFixedPosition: () => widgetFixedPosition, rememberPosition: rememberWidgetPosition,
+      isPermanentVisible: () => widgetPermanentVisible, setPermanentVisible: saveWidgetVisibility,
+      applyPin: ensureWidgetOnTop, notifyArea: notifyWidgetWorkArea,
+    });
+    widgetShortcuts = shortcutTools.createWidgetShortcutManager(globalShortcut, () => widgetSummon.toggle().catch((error) => startupLog('widget shortcut:', error.message)));
+    widgetShortcuts.set(store.loadState()?.settings?.widgetShortcut);
     cliUsage = createCliUsageService({ dbPath: path.join(app.getPath('userData'), 'cli-usage.sqlite') });
     store.purgeAllCycles();
     await scrubLegacyProviderUsagePartitions();
@@ -2649,6 +2791,8 @@ if (!app.requestSingleInstanceLock()) {
 
 app.on('before-quit', () => {
   quitting = true;
+  widgetShortcuts?.dispose();
+  persistWidgetPosition();
   startupLog('quit: before-quit');
   remoteViewServer?.close();
   if (pollTimer) clearInterval(pollTimer);
