@@ -123,7 +123,7 @@ const clampWidgetLength = (value) => {
 };
 const widgetWindowSize = (scale, length = 0.9) => {
   const state = store?.loadState();
-  return computeWidgetWindowSize(scale, clampWidgetLength(length), state?.accounts, state?.settings?.widgetLayout, state?.settings?.widgetGridRows, state?.settings?.widgetGridColumns, state?.settings?.widgetCarousel === true);
+  return computeWidgetWindowSize(scale, clampWidgetLength(length), state?.accounts, state?.settings?.widgetLayout, state?.settings?.widgetGridRows, state?.settings?.widgetGridColumns);
 };
 // 兼容旧设置：小/中/大档位与像素宽高都折算成比例；新装默认 90%
 const savedWidgetScale = () => {

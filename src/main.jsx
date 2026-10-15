@@ -207,26 +207,37 @@ const clampWidgetLength = (value) => {
   const length = Math.round(Number(value) * 20) / 20;
   return Number.isFinite(length) ? Math.min(WIDGET_MAX_LENGTH, Math.max(WIDGET_MIN_LENGTH, length)) : 1;
 };
-const widgetLayoutOptions = new Set(['1xn', '2xn', '3xn', '4xn', '5xn', 'nx1', 'nx2', 'nx3', 'nx4', 'nx5', 'custom']);
+const widgetLayoutOptions = new Set([
+  ...Array.from({ length: 5 }, (_, row) => Array.from({ length: 5 }, (_, column) => `${row + 1}x${column + 1}`)).flat(),
+  '1xn', '2xn', '3xn', '4xn', '5xn', 'nx1', 'nx2', 'nx3', 'nx4', 'nx5', 'custom',
+]);
 const clampWidgetGridNumber = (value, fallback = 1) => {
   const number = Number(value);
   return Number.isFinite(number) ? Math.min(5, Math.max(1, Math.round(number))) : fallback;
 };
-const resolveWidgetGrid = (count, layout = 'nx1', customRows = 1, customColumns = 1) => {
+const resolveWidgetGrid = (count, layout = '1x1', customRows = 1, customColumns = 1) => {
   const total = Math.max(1, Number(count) || 0);
+  const fixedMatch = /^([1-5])x([1-5])$/.exec(String(layout));
+  if (fixedMatch) {
+    const rows = clampWidgetGridNumber(fixedMatch[1]);
+    const columns = clampWidgetGridNumber(fixedMatch[2]);
+    return { rows, columns, pageSize: rows * columns };
+  }
   const rowMatch = /^([1-5])xn$/.exec(String(layout));
   if (rowMatch) {
-    const rows = Math.min(total, clampWidgetGridNumber(rowMatch[1]));
-    return { rows, columns: Math.ceil(total / rows) };
+    const rows = clampWidgetGridNumber(rowMatch[1]);
+    const columns = Number(customColumns) === 1 ? 2 : clampWidgetGridNumber(customColumns, 2);
+    return { rows, columns, pageSize: rows * columns };
   }
   const columnMatch = /^nx([1-5])$/.exec(String(layout));
   if (columnMatch) {
-    const columns = Math.min(total, clampWidgetGridNumber(columnMatch[1]));
-    return { rows: Math.ceil(total / columns), columns };
+    const columns = clampWidgetGridNumber(columnMatch[1]);
+    const rows = Number(customRows) === 1 ? 2 : clampWidgetGridNumber(customRows, 2);
+    return { rows, columns, pageSize: rows * columns };
   }
   const rows = clampWidgetGridNumber(customRows);
   const columns = clampWidgetGridNumber(customColumns);
-  return { rows: Math.max(rows, Math.ceil(total / columns)), columns };
+  return { rows, columns, pageSize: rows * columns };
 };
 // 账号请求超时（秒）：5–120 收敛，缺省 15（与主进程 poller 的 accountTimeoutMs 保持一致）
 const clampAccountTimeout = (value) => {
@@ -250,7 +261,7 @@ const normalizeSettings = (value = {}) => {
     historyDays: [0, 3, 7, 15, 30, 60, 90].includes(Number(value.historyDays)) ? Number(value.historyDays) : 7,
     widgetScale: clampWidgetScale(value.widgetScale ?? byWidth ?? (legacySize ? legacySize / WIDGET_BASE_SIZE.width : 0.9)),
     widgetLength: clampWidgetLength(value.widgetLength ?? 0.9),
-    widgetLayout: widgetLayoutOptions.has(value.widgetLayout) ? value.widgetLayout : (Number(value.widgetColumns) === 2 ? 'nx2' : 'nx1'),
+    widgetLayout: widgetLayoutOptions.has(value.widgetLayout) ? value.widgetLayout : (Number(value.widgetColumns) === 2 ? '2x1' : '1x1'),
     widgetGridRows: clampWidgetGridNumber(value.widgetGridRows),
     widgetGridColumns: clampWidgetGridNumber(value.widgetGridColumns),
     widgetCarousel: value.widgetCarousel === true,
@@ -2042,7 +2053,7 @@ function SettingsDrawer({ variant = 'desktop', accounts, providers, settings, se
       <SharedSettingsPanel settings={settings} setSettings={setSettings} />
        <section className="drawer-section"><div className="drawer-section-title"><Globe size={16} /><span>远程查看</span></div><RemoteViewSettings /></section>
       <section className="drawer-section"><div className="drawer-section-title"><SquareTerminal size={16} /><span>本机用量</span></div><Toggle checked={settings.localCliUsage?.scanWsl !== false} onChange={(value) => setSettings((old) => ({ ...old, localCliUsage: { ...(old.localCliUsage || {}), scanWsl: value } }))} label="统计 WSL 用量" description="Windows 下同时扫描 WSL 各发行版内的 CLI 用量数据；仅统计运行中的发行版，未安装 WSL 时自动忽略" /></section>
-      <section className="drawer-section"><div className="drawer-section-title"><Monitor size={16} /><span>桌面浮窗</span><TitleHelp>排布规则使用“行×列”：1×n 是一行横向铺开，n×1 是一列竖向铺开；也可以选择 2×n、n×3 或自定义行列。自动轮播开启后每 6 秒切换一个账号，关闭后同时显示所有未停用账号。</TitleHelp></div><Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" description="固定在桌面顶层，双击展开主窗口" /><Toggle checked={settings.widgetCarousel === true} onChange={(value) => setSettings((old) => ({ ...old, widgetCarousel: value }))} label="自动轮播" description="开启后每 6 秒切换一个账号；关闭后同时显示全部账号" /><div className="setting-select"><span><b>排列规则</b><small>行×列，n 代表按账号数量自动计算</small></span><select aria-label="浮窗排列规则" value={settings.widgetLayout} onChange={(event) => setSettings((old) => ({ ...old, widgetLayout: event.target.value }))}><option value="1xn">1×n</option><option value="2xn">2×n</option><option value="3xn">3×n</option><option value="4xn">4×n</option><option value="5xn">5×n</option><option value="nx1">n×1</option><option value="nx2">n×2</option><option value="nx3">n×3</option><option value="nx4">n×4</option><option value="nx5">n×5</option><option value="custom">自定义</option></select></div>{settings.widgetLayout === 'custom' && <div className="form-grid"><label className="field"><span>行数</span><input type="number" min="1" max="5" value={settings.widgetGridRows} onChange={(event) => setSettings((old) => ({ ...old, widgetGridRows: clampWidgetGridNumber(event.target.value) }))} /></label><label className="field"><span>列数</span><input type="number" min="1" max="5" value={settings.widgetGridColumns} onChange={(event) => setSettings((old) => ({ ...old, widgetGridColumns: clampWidgetGridNumber(event.target.value) }))} /></label></div>}<label className="size-slider"><span>单元格大小</span><input type="range" min={80} max={300} step={5} value={Math.round(clampWidgetScale(settings.widgetScale) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetScale: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetScale(settings.widgetScale) * 100)}%</b></label><label className="size-slider"><span>单元格长度</span><input type="range" min={Math.round(WIDGET_MIN_LENGTH * 100)} max={Math.round(WIDGET_MAX_LENGTH * 100)} step={5} value={Math.round(clampWidgetLength(settings.widgetLength) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetLength: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetLength(settings.widgetLength) * 100)}%</b></label><button type="button" className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetScale: 0.9, widgetLength: 0.9 }))}>恢复默认单元格大小</button><div className="widget-setting-preview"><div style={{ width: Math.round(WIDGET_BASE_SIZE.width * clampWidgetLength(settings.widgetLength)), maxWidth: '100%', margin: '0 auto' }}>{(() => { const previewAccount = accounts.find((item) => !item.disabled) ?? accounts[0]; return <WidgetRow account={previewAccount} provider={providers.find((item) => item.id === previewAccount?.providerId)} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} />; })()}</div></div><button className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetPreview: true }))}><Eye size={15} /> 预览并调整</button></section>
+       <section className="drawer-section"><div className="drawer-section-title"><Monitor size={16} /><span>桌面浮窗</span><TitleHelp>排列规则按“行×列”确定每页容量，例如 1×2 表示每页一行两个账号，超过两个后用鼠标滚轮切换页面。自动轮播开启后每 6 秒切换下一页，关闭后不自动切换但仍可滚轮翻页。</TitleHelp></div><Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" description="固定在桌面顶层，双击展开主窗口" /><Toggle checked={settings.widgetCarousel === true} onChange={(value) => setSettings((old) => ({ ...old, widgetCarousel: value }))} label="自动轮播" description="开启后每 6 秒切换下一页；关闭后仍可用鼠标滚轮翻页" /><div className="setting-select"><span><b>排列规则</b><small>每页显示指定的行×列数量，账号超过当前页容量后滚轮切页</small></span><select aria-label="浮窗排列规则" value={settings.widgetLayout} onChange={(event) => setSettings((old) => ({ ...old, widgetLayout: event.target.value }))}><optgroup label="固定网格"><option value="1x1">1×1</option><option value="1x2">1×2</option><option value="1x3">1×3</option><option value="1x4">1×4</option><option value="1x5">1×5</option><option value="2x1">2×1</option><option value="2x2">2×2</option><option value="2x3">2×3</option><option value="2x4">2×4</option><option value="2x5">2×5</option><option value="3x1">3×1</option><option value="3x2">3×2</option><option value="3x3">3×3</option><option value="3x4">3×4</option><option value="3x5">3×5</option><option value="4x1">4×1</option><option value="4x2">4×2</option><option value="4x3">4×3</option><option value="4x4">4×4</option><option value="4x5">4×5</option><option value="5x1">5×1</option><option value="5x2">5×2</option><option value="5x3">5×3</option><option value="5x4">5×4</option><option value="5x5">5×5</option></optgroup><optgroup label="兼容规则"><option value="1xn">1×n</option><option value="2xn">2×n</option><option value="3xn">3×n</option><option value="4xn">4×n</option><option value="5xn">5×n</option><option value="nx1">n×1</option><option value="nx2">n×2</option><option value="nx3">n×3</option><option value="nx4">n×4</option><option value="nx5">n×5</option></optgroup><option value="custom">自定义</option></select></div>{settings.widgetLayout === 'custom' && <div className="form-grid"><label className="field"><span>行数</span><input type="number" min="1" max="5" value={settings.widgetGridRows} onChange={(event) => setSettings((old) => ({ ...old, widgetGridRows: clampWidgetGridNumber(event.target.value) }))} /></label><label className="field"><span>列数</span><input type="number" min="1" max="5" value={settings.widgetGridColumns} onChange={(event) => setSettings((old) => ({ ...old, widgetGridColumns: clampWidgetGridNumber(event.target.value) }))} /></label></div>}<label className="size-slider"><span>单元格大小</span><input type="range" min={80} max={300} step={5} value={Math.round(clampWidgetScale(settings.widgetScale) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetScale: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetScale(settings.widgetScale) * 100)}%</b></label><label className="size-slider"><span>单元格长度</span><input type="range" min={Math.round(WIDGET_MIN_LENGTH * 100)} max={Math.round(WIDGET_MAX_LENGTH * 100)} step={5} value={Math.round(clampWidgetLength(settings.widgetLength) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetLength: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetLength(settings.widgetLength) * 100)}%</b></label><button type="button" className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetScale: 0.9, widgetLength: 0.9 }))}>恢复默认单元格大小</button><div className="widget-setting-preview"><div style={{ width: Math.round(WIDGET_BASE_SIZE.width * clampWidgetLength(settings.widgetLength)), maxWidth: '100%', margin: '0 auto' }}>{(() => { const previewAccount = accounts.find((item) => !item.disabled) ?? accounts[0]; return <WidgetRow account={previewAccount} provider={providers.find((item) => item.id === previewAccount?.providerId)} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} />; })()}</div></div><button className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetPreview: true }))}><Eye size={15} /> 预览并调整</button></section>
        {window.quotaDesk?.resetWindowSize && <section className="drawer-section"><div className="drawer-section-title"><AppWindow size={16} /><span>主窗口</span></div><div className="setting-select"><span><b>窗口大小</b><small>拖动窗口边缘自由调整（最小 520 × 470），内容自动多列铺开；大小会被记住</small></span><button className="outline-button" onClick={() => window.quotaDesk.resetWindowSize()}>恢复默认大小</button></div></section>}
        <section className="drawer-section"><div className="drawer-section-title"><Database size={16} /><span>数据管理</span><TitleHelp><span>额度历史：每次成功刷新后记录一条；超过保留时长的记录会自动清理；选择“永久”时，超过 30 天的记录会自动降采样为每小时一条，删除账号也会一并删除该账号的历史。</span><br /><span>数据导入与导出：导出包含账号信息、账号凭据、自定义厂商、额度历史和周期档案；导入会合并数据并跳过重复账号与厂商。导出文件含敏感凭据，请妥善保管。</span></TitleHelp></div><div className="setting-select"><span><b>保留时长</b><small>每次成功刷新后记录一条，用于账号卡片的趋势图</small></span><select value={settings.historyDays} onChange={(event) => setSettings((old) => ({ ...old, historyDays: Number(event.target.value) }))}><option value={3}>3 天</option><option value={7}>7 天（默认）</option><option value={15}>15 天</option><option value={30}>30 天</option><option value={60}>60 天</option><option value={90}>3 个月（最长）</option><option value={0}>永久</option></select></div><button className="outline-button full" onClick={onClearHistory}><Trash2 size={14} /> 清除全部历史记录</button><div className="data-transfer-actions"><button type="button" className="outline-button" disabled={Boolean(dataBusy)} onClick={onExportData}><Download size={14} /> {dataBusy === 'export' ? '正在导出…' : '导出数据'}</button><button type="button" className="outline-button" disabled={Boolean(dataBusy)} onClick={onImportData}><UploadCloud size={14} /> {dataBusy === 'import' ? '正在导入…' : '导入数据'}</button></div></section>
        <section className="drawer-section"><div className="drawer-section-title"><ShieldCheck size={16} /><span>账号与凭据</span><button className="mini-add" onClick={() => openModal('account')}><Plus size={14} /> 添加账号</button></div><div className="settings-list">{accounts.length === 0 && <div className="settings-empty">还没有账号</div>}{accounts.map((account) => <AccountRow key={account.id} account={account} provider={providers.find((item) => item.id === account.providerId)} testing={testingAccountId === account.id} onEdit={(item) => openModal({ type: 'account-edit', account: item })} onTest={onTestAccount} onToggleDisabled={onToggleAccountDisabled} onDelete={onDeleteAccount} />)}</div>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button full drawer-import-button" onClick={() => openModal('import-ccswitch')}><Download size={14} /> 从 cc-switch 导入账号</button>}</section>
@@ -2060,11 +2071,12 @@ function WidgetScaledRow({ scale = 1, length = 1, rows = 1, columns = 1, childre
   return <div className="widget-scale-layer"><div className="widget-scale-space" style={{ width: width * scale, height }}><div className="widget-scale-frame widget-grid" style={{ width, height: height / scale, gap: 8 / scale, gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`, transform: `scale(${scale})` }}>{children}</div></div></div>;
 }
 
-function WidgetAccounts({ accounts, providers, scale = 1, length = 1, layout = 'nx1', gridRows = 1, gridColumns = 1, tagLimit = 2, loading = false }) {
+function WidgetAccounts({ accounts, providers, scale = 1, length = 1, layout = '1x1', gridRows = 1, gridColumns = 1, tagLimit = 2, loading = false, pageIndex = 0 }) {
   const activeAccounts = accounts.filter((account) => !account.disabled);
-  const { rows, columns } = resolveWidgetGrid(activeAccounts.length, layout, gridRows, gridColumns);
+  const { rows, columns, pageSize } = resolveWidgetGrid(activeAccounts.length, layout, gridRows, gridColumns);
+  const pageAccounts = activeAccounts.slice(Math.max(0, pageIndex) * pageSize, Math.max(0, pageIndex) * pageSize + pageSize);
   return <WidgetScaledRow scale={scale} length={length} rows={rows} columns={columns}>{activeAccounts.length
-    ? activeAccounts.map((account) => <WidgetRow key={account.id} account={account} provider={providers.find((provider) => provider.id === account.providerId)} compact tagLimit={tagLimit} length={length} />)
+    ? pageAccounts.map((account) => <WidgetRow key={account.id} account={account} provider={providers.find((provider) => provider.id === account.providerId)} compact tagLimit={tagLimit} length={length} />)
     : loading ? null
     : accounts.length === 0 ? <div className="widget-row widget-placeholder"><span className="widget-placeholder-icon"><Plus size={11} /></span><span>还没有账号 · 双击去添加</span></div>
     : <div className="widget-row widget-placeholder"><CircleStop size={12} /><span>所有账号均已停用</span></div>}</WidgetScaledRow>;
@@ -2131,13 +2143,19 @@ function WidgetRow({ account, provider, compact = false, tagLimit = 2, length = 
   return <div className={classes} ref={rowRef} title={account.lastError || account.name} onDoubleClick={onDoubleClick}><Logo provider={provider} size="sm" interactive={false} /><div className="widget-account-block" style={{ minWidth: fit.squeeze ? 0 : blockFloor.name + blockFloor.tag }}><span className="widget-account-marquee" ref={marqueeRef}><span className="widget-account" ref={nameRef}>{account.name}</span></span>{fit.tagMode > 0 && <span className="widget-tags" ref={tagsRef}>{(account.tags || []).slice(0, 1).map((tag) => <em key={tag} title={tag}>{tag}</em>)}</span>}</div><div className="widget-meters" ref={metersRef}>{visibleMeters.length ? visibleMeters.map((meter) => <span className={`widget-meter ${meter.available === false ? 'off' : ''} ${smallHiddenKeys.has(meter.key) ? 'hide-reset' : ''}`} key={meter.key}><b>{windowCatalog[meter.key]?.short}</b><em>{formatAmount(meter)}</em><small title={formatResetAbsolute(meter.resetAt)}>{formatResetCompact(meter.resetAt)}</small></span>) : <span className="widget-empty">等待同步</span>}</div><span className={`widget-live ${account.status === 'warning' ? 'warning' : ''}`}><i /></span></div>;
 }
 
-function WidgetPreview({ accounts, providers, layout = 'nx1', gridRows = 1, gridColumns = 1, carousel = false, onClose, tagLimit = 2, scale = 1, length = 1 }) {
+function WidgetPreview({ accounts, providers, layout = '1x1', gridRows = 1, gridColumns = 1, carousel = false, onClose, tagLimit = 2, scale = 1, length = 1 }) {
   const clamped = clampWidgetScale(scale);
   const clampedLength = clampWidgetLength(length);
-  const count = carousel ? 1 : Math.max(1, accounts.filter((account) => !account.disabled).length);
+  const activeCount = accounts.filter((account) => !account.disabled).length;
+  const count = Math.max(1, activeCount);
   const grid = resolveWidgetGrid(count, layout, gridRows, gridColumns);
-  const previewAccounts = carousel ? accounts.filter((account) => !account.disabled).slice(0, 1) : accounts;
-  return <div className="widget-preview-layer"><div className="widget-preview-head"><span><Monitor size={14} /> 浮窗预览</span><button className="icon-button" onClick={onClose} aria-label="关闭预览"><X size={15} /></button></div><div className="widget-preview-window" style={{ width: Math.round(WIDGET_BASE_SIZE.width * clamped * clampedLength * grid.columns), maxWidth: '100%', height: Math.round(WIDGET_BASE_SIZE.height * clamped * grid.rows), maxHeight: '70vh' }}>{carousel ? <WidgetScaledRow scale={clamped} length={clampedLength} rows={1} columns={1}><WidgetRow account={previewAccounts[0]} provider={providers.find((provider) => provider.id === previewAccounts[0]?.providerId)} compact tagLimit={tagLimit} length={clampedLength} /></WidgetScaledRow> : <WidgetAccounts accounts={accounts} providers={providers} scale={clamped} length={clampedLength} layout={layout} gridRows={gridRows} gridColumns={gridColumns} tagLimit={tagLimit} />}</div></div>;
+  const pageCount = Math.max(1, Math.ceil(activeCount / grid.pageSize));
+  const [pageIndex, setPageIndex] = useState(0);
+  useEffect(() => { setPageIndex((value) => Math.min(value, pageCount - 1)); }, [pageCount, layout, gridRows, gridColumns]);
+  const cyclePage = (direction) => {
+    setPageIndex((value) => (value + direction + pageCount) % pageCount);
+  };
+  return <div className="widget-preview-layer" onWheel={(event) => { event.preventDefault(); event.stopPropagation(); cyclePage(event.deltaY > 0 ? 1 : -1); }}><div className="widget-preview-head"><span><Monitor size={14} /> 浮窗预览</span><button className="icon-button" onClick={onClose} aria-label="关闭预览"><X size={15} /></button></div><div className="widget-preview-window" style={{ width: Math.round(WIDGET_BASE_SIZE.width * clamped * clampedLength * grid.columns), maxWidth: '100%', height: Math.round(WIDGET_BASE_SIZE.height * clamped * grid.rows), maxHeight: '70vh' }}><WidgetAccounts accounts={accounts} providers={providers} scale={clamped} length={clampedLength} layout={layout} gridRows={gridRows} gridColumns={gridColumns} tagLimit={tagLimit} pageIndex={pageIndex} /></div></div>;
 }
 
 function AccountModal({ providers, onClose, onSave }) {
@@ -2568,14 +2586,15 @@ function ProviderModalV2({ provider, onClose, onSave }) {
 
 function WidgetApp() {
   // accounts 三态：null＝桌面状态还没加载回来（保持空壳，避免老用户启动时闪占位文案）；
-  // []＝确认一个账号都没有（显示占位）；非空＝同时展示未停用账号
+  // []＝确认一个账号都没有（显示占位）；非空＝按当前网格分页展示未停用账号
   const [accounts, setAccounts] = useState(window.quotaDesk ? null : initialAccounts);
   const [providers, setProviders] = useState(providerCatalog);
   const [settings, setSettings] = useState(() => normalizeSettings({ theme: new URLSearchParams(window.location.search).get('theme') }));
   useEffect(() => { document.documentElement.dataset.theme = settings.theme === 'light' ? 'light' : 'dark'; }, [settings.theme]);
   const dragRef = useRef({ active: false, moved: false, x: 0, y: 0 });
-  const [index, setIndex] = useState(0);
+  const [pageIndex, setPageIndex] = useState(0);
   const lastWheelAt = useRef(0);
+  const lastWheelEventAt = useRef(0);
   useEffect(() => {
     let unsubscribe;
     window.quotaDesk?.loadState().then((state) => {
@@ -2589,29 +2608,35 @@ function WidgetApp() {
   }, []);
   const activeAccounts = (accounts || []).filter((item) => !item.disabled);
   const activeCount = activeAccounts.length;
+  const grid = resolveWidgetGrid(activeCount, settings.widgetLayout, settings.widgetGridRows, settings.widgetGridColumns);
+  const pageCount = Math.max(1, Math.ceil(activeCount / grid.pageSize));
   useEffect(() => {
-    setIndex((value) => value % Math.max(activeCount, 1));
+    setPageIndex((value) => Math.min(value, pageCount - 1));
     if (!settings.widgetCarousel) return undefined;
     const timer = setInterval(() => {
       if (Date.now() - lastWheelAt.current < 10_000) return;
-      setIndex((value) => (value + 1) % Math.max(activeCount, 1));
+      setPageIndex((value) => (value + 1) % pageCount);
     }, 6_000);
     return () => clearInterval(timer);
-  }, [activeCount, settings.widgetCarousel]);
-  const cycleAccount = (direction) => {
+  }, [activeCount, pageCount, settings.widgetCarousel, settings.widgetLayout, settings.widgetGridRows, settings.widgetGridColumns]);
+  const cyclePage = (direction) => {
     lastWheelAt.current = Date.now();
-    setIndex((value) => (value + direction + Math.max(activeCount, 1)) % Math.max(activeCount, 1));
+    setPageIndex((value) => (value + direction + pageCount) % pageCount);
+  };
+  const handleWheel = (event) => {
+    event.preventDefault();
+    const now = Date.now();
+    if (now - lastWheelEventAt.current < 250) return;
+    lastWheelEventAt.current = now;
+    cyclePage(event.deltaY > 0 ? 1 : -1);
   };
   const startDrag = (event) => { if (event.button !== 0) return; dragRef.current = { active: true, moved: false, x: event.screenX, y: event.screenY }; event.currentTarget.setPointerCapture?.(event.pointerId); };
   const moveDrag = (event) => { const drag = dragRef.current; if (!drag.active) return; const deltaX = event.screenX - drag.x; const deltaY = event.screenY - drag.y; if (!deltaX && !deltaY) return; drag.moved ||= Math.abs(deltaX) + Math.abs(deltaY) > 2; drag.x = event.screenX; drag.y = event.screenY; window.quotaDesk?.moveWidget(deltaX, deltaY, event.screenX, event.screenY); };
   const stopDrag = () => { dragRef.current.active = false; };
   const scale = clampWidgetScale(settings.widgetScale);
   const length = clampWidgetLength(settings.widgetLength);
-  const carouselAccount = activeAccounts[index % Math.max(activeCount, 1)];
-  return <div className="widget-window-shell" title="拖动移动，双击展开，右键打开菜单" onWheel={settings.widgetCarousel ? (event) => cycleAccount(event.deltaY > 0 ? 1 : -1) : undefined} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag} onDoubleClick={() => { if (!dragRef.current.moved) window.quotaDesk?.openMainWindow(); }}>
-    {settings.widgetCarousel
-      ? <WidgetScaledRow scale={scale} length={length} rows={1} columns={1}>{carouselAccount ? <WidgetRow account={carouselAccount} provider={providers.find((item) => item.id === carouselAccount.providerId)} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={length} /> : accounts === null ? null : <div className="widget-row widget-placeholder"><CircleStop size={12} /><span>{accounts.length ? '所有账号均已停用' : '还没有账号 · 双击去添加'}</span></div>}</WidgetScaledRow>
-      : <WidgetAccounts accounts={accounts || []} providers={providers} loading={accounts === null} scale={scale} length={length} layout={settings.widgetLayout} gridRows={settings.widgetGridRows} gridColumns={settings.widgetGridColumns} tagLimit={Number(settings.widgetTagLimit ?? 2)} />}
+  return <div className="widget-window-shell" title="拖动移动，双击展开，右键打开菜单" onWheel={handleWheel} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag} onDoubleClick={() => { if (!dragRef.current.moved) window.quotaDesk?.openMainWindow(); }}>
+    <WidgetAccounts accounts={accounts || []} providers={providers} loading={accounts === null} scale={scale} length={length} layout={settings.widgetLayout} gridRows={settings.widgetGridRows} gridColumns={settings.widgetGridColumns} tagLimit={Number(settings.widgetTagLimit ?? 2)} pageIndex={pageIndex} />
   </div>;
 }
 

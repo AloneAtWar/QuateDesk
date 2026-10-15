@@ -5,39 +5,51 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const accounts = (count) => Array.from({ length: count }, (_, id) => ({ id }));
 
-test('each added account adds a row by default, without changing the width', () => {
+test('the default 1x1 layout keeps one account per page', () => {
   assert.deepEqual(widgetWindowSize(1, 1, accounts(1)), { width: 350, height: 52 });
-  assert.deepEqual(widgetWindowSize(1, 1, accounts(2)), { width: 350, height: 104 });
-  assert.deepEqual(widgetWindowSize(1, 1, accounts(3)), { width: 350, height: 156 });
+  assert.deepEqual(widgetWindowSize(1, 1, accounts(2)), { width: 350, height: 52 });
+  assert.deepEqual(widgetWindowSize(1, 1, accounts(3)), { width: 350, height: 52 });
 });
 
-test('two columns wrap a third account onto a second row', () => {
-  assert.deepEqual(widgetWindowSize(1, 1, accounts(1), 'nx2'), { width: 350, height: 52 });
-  assert.deepEqual(widgetWindowSize(1, 1, accounts(2), 'nx2'), { width: 700, height: 52 });
+test('a fixed 1x2 layout keeps two cells per page', () => {
+  assert.deepEqual(widgetWindowSize(1, 1, accounts(1), '1x2'), { width: 700, height: 52 });
+  assert.deepEqual(widgetWindowSize(1, 1, accounts(2), '1x2'), { width: 700, height: 52 });
+  assert.deepEqual(widgetWindowSize(1, 1, accounts(3), '1x2'), { width: 700, height: 52 });
+  assert.deepEqual(widgetWindowSize(1, 1, accounts(4), '1x2'), { width: 700, height: 52 });
+});
+
+test('two rows and two columns keep four cells per page', () => {
+  assert.deepEqual(widgetWindowSize(1, 1, accounts(1), '2x2'), { width: 700, height: 104 });
+  assert.deepEqual(widgetWindowSize(1, 1, accounts(4), '2x2'), { width: 700, height: 104 });
+  assert.deepEqual(widgetWindowSize(1, 1, accounts(5), '2x2'), { width: 700, height: 104 });
+});
+
+test('legacy aliases use a fixed two-cell dimension by default', () => {
+  assert.deepEqual(widgetWindowSize(1, 1, accounts(1), 'nx2'), { width: 700, height: 104 });
+  assert.deepEqual(widgetWindowSize(1, 1, accounts(2), 'nx2'), { width: 700, height: 104 });
   assert.deepEqual(widgetWindowSize(1, 1, accounts(3), 'nx2'), { width: 700, height: 104 });
-  assert.deepEqual(widgetWindowSize(1, 1, accounts(4), 'nx2'), { width: 700, height: 104 });
 });
 
-test('carousel mode keeps one cell regardless of account count', () => {
-  assert.deepEqual(widgetWindowSize(1, 1, accounts(1), 'nx1', 1, 1, true), { width: 350, height: 52 });
-  assert.deepEqual(widgetWindowSize(1, 1, accounts(4), 'nx2', 1, 1, true), { width: 350, height: 52 });
+test('auto carousel does not change the selected page grid', () => {
+  assert.deepEqual(widgetWindowSize(1, 1, accounts(1), '1x2'), { width: 700, height: 52 });
+  assert.deepEqual(widgetWindowSize(1, 1, accounts(4), '2x2'), { width: 700, height: 104 });
 });
 
 test('row and column families, plus custom grids, resolve predictably', () => {
-  assert.deepEqual(widgetWindowSize(1, 1, accounts(5), '2xn'), { width: 1050, height: 104 });
+  assert.deepEqual(widgetWindowSize(1, 1, accounts(5), '2xn'), { width: 700, height: 104 });
   assert.deepEqual(widgetWindowSize(1, 1, accounts(5), 'nx3'), { width: 1050, height: 104 });
-  assert.deepEqual(widgetWindowSize(1, 1, accounts(8), 'custom', 2, 3), { width: 1050, height: 156 });
+  assert.deepEqual(widgetWindowSize(1, 1, accounts(8), 'custom', 2, 3), { width: 1050, height: 104 });
 });
 
 test('disabled accounts do not consume space and empty states keep one row', () => {
-  assert.deepEqual(widgetWindowSize(1, 1, [...accounts(2), { disabled: true }], 'nx2'), { width: 700, height: 52 });
-  assert.deepEqual(widgetWindowSize(1, 1, [{ disabled: true }], 'nx2'), { width: 350, height: 52 });
+  assert.deepEqual(widgetWindowSize(1, 1, [...accounts(2), { disabled: true }], 'nx2'), { width: 700, height: 104 });
+  assert.deepEqual(widgetWindowSize(1, 1, [{ disabled: true }], 'nx2'), { width: 700, height: 104 });
   assert.deepEqual(widgetWindowSize(1, 1), { width: 350, height: 52 });
 });
 
 test('size and length retain their independent scaling behavior', () => {
   assert.deepEqual(widgetWindowSize(3, 0.6, accounts(3), 'nx2'), { width: 1260, height: 312 });
-  assert.deepEqual(widgetWindowSize(0.9, 0.9, accounts(2)), { width: 284, height: 94 });
+  assert.deepEqual(widgetWindowSize(0.9, 0.9, accounts(2)), { width: 284, height: 47 });
 });
 
 const createResizeHarness = ({ bounds, area, requested }) => {

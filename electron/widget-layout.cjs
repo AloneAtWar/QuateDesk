@@ -5,26 +5,33 @@ const clampGridNumber = (value, fallback = 1) => {
   return Number.isFinite(number) ? Math.min(5, Math.max(1, Math.round(number))) : fallback;
 };
 
-const resolveWidgetGrid = (count, layout = 'nx1', customRows = 1, customColumns = 1, carousel = false) => {
-  const total = carousel ? 1 : Math.max(1, Number(count) || 0);
-  if (carousel) return { rows: 1, columns: 1 };
+const resolveWidgetGrid = (count, layout = '1x1', customRows = 1, customColumns = 1) => {
+  const total = Math.max(1, Number(count) || 0);
+  const fixedMatch = /^([1-5])x([1-5])$/.exec(String(layout));
+  if (fixedMatch) {
+    const rows = clampGridNumber(fixedMatch[1]);
+    const columns = clampGridNumber(fixedMatch[2]);
+    return { rows, columns, pageSize: rows * columns };
+  }
   const rowMatch = /^([1-5])xn$/.exec(String(layout));
   if (rowMatch) {
-    const rows = Math.min(total, clampGridNumber(rowMatch[1]));
-    return { rows, columns: Math.ceil(total / rows) };
+    const rows = clampGridNumber(rowMatch[1]);
+    const columns = Number(customColumns) === 1 ? 2 : clampGridNumber(customColumns, 2);
+    return { rows, columns, pageSize: rows * columns };
   }
   const columnMatch = /^nx([1-5])$/.exec(String(layout));
   if (columnMatch) {
-    const columns = Math.min(total, clampGridNumber(columnMatch[1]));
-    return { rows: Math.ceil(total / columns), columns };
+    const columns = clampGridNumber(columnMatch[1]);
+    const rows = Number(customRows) === 1 ? 2 : clampGridNumber(customRows, 2);
+    return { rows, columns, pageSize: rows * columns };
   }
   const rows = clampGridNumber(customRows);
   const columns = clampGridNumber(customColumns);
-  return { rows: Math.max(rows, Math.ceil(total / columns)), columns };
+  return { rows, columns, pageSize: rows * columns };
 };
 
-const widgetWindowSize = (scale, length = 0.9, accounts = [], layout = 'nx1', customRows = 1, customColumns = 1, carousel = false) => {
-  const grid = resolveWidgetGrid(accounts.filter((account) => !account.disabled).length, layout, customRows, customColumns, carousel);
+const widgetWindowSize = (scale, length = 0.9, accounts = [], layout = '1x1', customRows = 1, customColumns = 1) => {
+  const grid = resolveWidgetGrid(accounts.filter((account) => !account.disabled).length, layout, customRows, customColumns);
   return {
     width: Math.round(WIDGET_BASE_SIZE.width * scale * length * grid.columns),
     height: Math.round(WIDGET_BASE_SIZE.height * scale * grid.rows),
