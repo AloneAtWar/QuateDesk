@@ -2,11 +2,11 @@ import { useLayoutEffect, useRef, useState } from 'react';
 
 // Probe the actual rendered content before removing anything. The first two
 // quota values and provider icon always survive; names shrink before hiding.
-export function WidgetFitRow({ name, error, tags = [], meters, logo, scale = 1 }) {
+export function WidgetFitRow({ name, error, tags = [], meters, logo, scale = 1, textSettings }) {
   const rowRef = useRef(null);
   const probesRef = useRef(null);
   const [stage, setStage] = useState(0);
-  const minimumNameWidth = Math.max(22, 22 * scale);
+  const minimumNameWidth = 2 * (textSettings?.name?.size || 11) * Math.max(1, scale);
   useLayoutEffect(() => {
     let active = true;
     const measure = () => {
@@ -24,7 +24,7 @@ export function WidgetFitRow({ name, error, tags = [], meters, logo, scale = 1 }
     document.fonts?.ready.then(measure);
     document.fonts?.addEventListener('loadingdone', measure);
     return () => { active = false; observer.disconnect(); document.fonts?.removeEventListener('loadingdone', measure); };
-  }, [name, tags.join('|'), meters.map((meter) => `${meter.key}|${meter.value}|${meter.reset}|${meter.label}`).join('|'), scale]);
+  }, [name, tags.join('|'), meters.map((meter) => `${meter.key}|${meter.value}|${meter.reset}|${meter.label}`).join('|'), scale, JSON.stringify(textSettings)]);
   const contents = (level) => <>
     {logo}
     {level < 6 && <div className="widget-account-block">

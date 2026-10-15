@@ -1703,6 +1703,26 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .widget-cell.widget-fit-5 .widget-account { width: 100%; }
 .widget-cell.widget-fit-6 { gap: 5px; padding: 4px 6px; }
 .widget-cell.widget-fit-6 .widget-meter { gap: 0; padding: 3px 4px; }
+.widget-text-settings { border: 1px solid var(--line); border-radius: 6px; margin: 8px 0 12px; padding: 10px; color: var(--ink-soft); }
+.widget-text-settings summary { font-size: 12px; font-weight: 600; cursor: pointer; }
+.widget-color-bank { display: flex; align-items: center; justify-content: space-between; margin: 12px 0 5px; font-size: 11px; }
+.widget-text-settings select { border: 1px solid var(--line); border-radius: 4px; background: var(--control); color: var(--ink); font-size: 11px; padding: 5px; min-width: 0; }
+.widget-text-hint { color: var(--muted); font-size: 10px; }
+.widget-text-control { display: grid; grid-template-columns: 1fr auto; gap: 7px; margin-top: 12px; }
+.widget-text-control > b { font-size: 11px; }
+.widget-color-state { font-size: 10px; color: var(--muted); }
+.widget-text-fields { grid-column: 1 / -1; display: grid; grid-template-columns: 80px minmax(0, 1fr) 28px 30px; align-items: center; gap: 5px; }
+.widget-text-fields label { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 10px; }
+.widget-text-fields input[type=number] { width: 50px; min-width: 0; height: 28px; padding: 3px; border: 1px solid var(--line); border-radius: 4px; background: var(--control); color: var(--ink); font-size: 11px; }
+.widget-text-fields input[type=color] { width: 28px; height: 28px; padding: 2px; border: 1px solid var(--line); border-radius: 4px; background: var(--control); cursor: pointer; }
+.widget-color-reset { padding: 3px 0; border: 0; background: transparent; color: var(--muted); font-size: 10px; }
+.widget-text-settings .setting-toggle { gap: 8px; }
+.widget-text-settings .setting-toggle i { flex: 0 0 34px; }
+.widget-cell .widget-account { font-size: max(var(--widget-name-size, 11px), calc(var(--widget-name-size, 11px) * var(--widget-content-scale, 1))); font-weight: var(--widget-name-weight, 500); color: var(--widget-name-color, var(--widget-text)); text-shadow: var(--widget-name-shadow, none); }
+.widget-cell .widget-meter em { font-size: max(var(--widget-quota-size, 11px), calc(var(--widget-quota-size, 11px) * var(--widget-content-scale, 1))); font-weight: var(--widget-quota-weight, 700); color: var(--widget-quota-color, var(--widget-chip-value)); text-shadow: var(--widget-quota-shadow, none); }
+.widget-cell .widget-meter b { font-size: max(var(--widget-period-size, 8px), calc(var(--widget-period-size, 8px) * var(--widget-content-scale, 1))); font-weight: var(--widget-period-weight, 500); color: var(--widget-period-color, var(--widget-chip-label)); text-shadow: var(--widget-period-shadow, none); }
+.widget-cell .widget-meter small { font-size: max(var(--widget-reset-size, 8px), calc(var(--widget-reset-size, 8px) * var(--widget-content-scale, 1))); font-weight: var(--widget-reset-weight, 400); color: var(--widget-reset-color, var(--widget-chip-sub)); text-shadow: var(--widget-reset-shadow, none); }
+.onboard-theme-preview.preview-system { background: linear-gradient(110deg, #24312f 50%, #f3f5f1 50%); }
 body:has(.settings-drawer) .widget-preview-layer { left: 14px; right: auto; }
 @media (max-width: 700px) {
   .widget-preview-layer:has(.widget-grid) { top: 14px; bottom: auto; }

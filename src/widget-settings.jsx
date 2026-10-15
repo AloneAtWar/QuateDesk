@@ -60,7 +60,7 @@ function WidgetLayoutPicker({ settings, setSettings }) {
   </div>;
 }
 
-function NumberSetting({ value, label, onCommit, suffix }) {
+export function NumberSetting({ value, label, onCommit, suffix }) {
   const [draft, setDraft] = useState(String(value));
   const editing = useRef(false);
   const cancelBlur = useRef(false);

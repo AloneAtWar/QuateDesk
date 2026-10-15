@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, screen, session, shell, Tray } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, Notification, screen, session, shell, Tray } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -106,6 +106,8 @@ const DEEPSEEK_TIMEZONE_OFFSET_SEC = 8 * 60 * 60;
 const ZAI_USAGE_TIMEZONE_OFFSET_SEC = 8 * 60 * 60;
 // Shared layout is loaded before any windows or IPC handlers are created.
 let widgetLayout;
+let appearance;
+let activeThemePreference = null;
 const WIDGET_BASE_SIZE = { width: 350, height: 52 };
 const MAIN_WINDOW_MIN = { width: 520, height: 470 };
 const clampWidgetScale = (value) => widgetLayout.clampWidgetScale(value);
@@ -138,7 +140,7 @@ const historyRetentionDays = () => clampRetentionDays(store?.loadState()?.settin
 const themeColors = (theme) => (theme === 'light'
   ? { main: '#f3f5f1', widget: '#eef1ec' }
   : { main: '#141d1f', widget: '#202c2e' });
-const savedTheme = () => (store?.loadState()?.settings?.theme === 'light' ? 'light' : 'dark');
+const savedTheme = () => appearance.resolveTheme(activeThemePreference ?? store?.loadState()?.settings?.theme, nativeTheme.shouldUseDarkColors);
 const RELEASES_URL = 'https://github.com/AloneAtWar/QuateDesk/releases';
 const distPath = path.join(__dirname, '..', 'dist', 'index.html');
 // dev:desktop 开发模式由 build/dev-desktop.cjs 注入 QD_DEV_URL，渲染页改吃 Vite 开发
@@ -1659,7 +1661,8 @@ function applyWidgetSize(scale, length) {
 }
 
 function applyTheme(theme) {
-  const colors = themeColors(theme === 'light' ? 'light' : 'dark');
+  activeThemePreference = appearance.normalizeTheme(theme);
+  const colors = themeColors(appearance.resolveTheme(activeThemePreference, nativeTheme.shouldUseDarkColors));
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setBackgroundColor(colors.main);
   if (widgetWindow && !widgetWindow.isDestroyed()) widgetWindow.setBackgroundColor('#00000000');
   return true;
@@ -2570,12 +2573,14 @@ function registerIpc() {
   ipcMain.handle('widget:set-minimum', (event, minimum) => {
     if (event.sender !== widgetWindow?.webContents) return false;
     const width = Number(minimum?.width);
-    if (!Number.isFinite(width)) return false;
-    widgetMinimum = { width: Math.max(130, Math.min(10000, Math.ceil(width))), height: 36 };
+    const height = Number(minimum?.height);
+    if (!Number.isFinite(width) || !Number.isFinite(height)) return false;
+    widgetMinimum = { width: Math.max(130, Math.min(10000, Math.ceil(width))), height: Math.max(36, Math.min(1000, Math.ceil(height))) };
     applyWidgetSize(widgetScale, widgetLength);
     return true;
   });
   ipcMain.handle('app:set-theme', (_event, theme) => applyTheme(theme));
+  ipcMain.handle('app:get-system-theme', () => nativeTheme.shouldUseDarkColors ? 'dark' : 'light');
   // 厂商官网等外部链接一律走系统默认浏览器，不在应用窗口内导航
   ipcMain.handle('app:open-external', (_event, url) => {
     const target = String(url || '');
@@ -2625,6 +2630,14 @@ if (!app.requestSingleInstanceLock()) {
   });
   app.whenReady().then(async () => {
     widgetLayout = await import('./widget-layout.mjs');
+    appearance = await import('./widget-appearance.mjs');
+    nativeTheme.themeSource = 'system';
+    nativeTheme.on('updated', () => {
+      applyTheme(activeThemePreference ?? store?.loadState()?.settings?.theme);
+      for (const window of [mainWindow, widgetWindow]) {
+        if (window && !window.isDestroyed()) window.webContents.send('theme:system-changed', nativeTheme.shouldUseDarkColors ? 'dark' : 'light');
+      }
+    });
     screen.on('display-metrics-changed', () => { applyWidgetSize(widgetScale, widgetLength); notifyWidgetWorkArea(); });
     screen.on('display-removed', () => { applyWidgetSize(widgetScale, widgetLength); notifyWidgetWorkArea(); });
     startupLog('ready: 初始化开始');

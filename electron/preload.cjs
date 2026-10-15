@@ -39,6 +39,12 @@ contextBridge.exposeInMainWorld('quotaDesk', {
     return () => ipcRenderer.removeListener('widget:work-area-changed', listener);
   },
   setTheme: (theme) => ipcRenderer.invoke('app:set-theme', theme),
+  getSystemTheme: () => ipcRenderer.invoke('app:get-system-theme'),
+  onSystemThemeChanged: (callback) => {
+    const listener = (_event, theme) => callback(theme);
+    ipcRenderer.on('theme:system-changed', listener);
+    return () => ipcRenderer.removeListener('theme:system-changed', listener);
+  },
   openExternal: (url) => ipcRenderer.invoke('app:open-external', url),
   scanCcswitchImport: () => ipcRenderer.invoke('import:scan-ccswitch'),
   applyCcswitchImport: (selectedIds) => ipcRenderer.invoke('import:apply-ccswitch', selectedIds),

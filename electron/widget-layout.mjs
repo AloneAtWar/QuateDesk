@@ -1,3 +1,4 @@
+import { normalizeWidgetText } from './widget-appearance.mjs';
 export const WIDGET_BASE_SIZE = { width: 350, height: 52 };
 export const WIDGET_MIN_LENGTH = 0.6;
 export const WIDGET_MAX_LENGTH = 1.5;
@@ -29,6 +30,7 @@ export function normalizeWidgetSettings(value = {}) {
     widgetCarouselSeconds: clampWidgetInterval(value.widgetCarouselSeconds),
     widgetOpacity: clampWidgetOpacity(value.widgetOpacity),
     widgetAlwaysOnTop: value.widgetAlwaysOnTop !== false,
+    ...normalizeWidgetText(value),
   };
 }
 
@@ -66,7 +68,7 @@ export function computeWidgetGeometry(count, settings = {}, workArea = { width: 
   const availableWidth = Math.max(1, Number(workArea.width) || 1920);
   const availableHeight = Math.max(1, Number(workArea.height) || 1080);
   const minWidth = Math.min(availableWidth, Math.max(WIDGET_MIN_CELL.width, minimum.width || 0));
-  const minHeight = Math.min(availableHeight, WIDGET_MIN_CELL.height);
+  const minHeight = Math.min(availableHeight, Math.max(WIDGET_MIN_CELL.height, minimum.height || 0));
   const columns = Math.min(grid.columns, Math.max(1, Math.floor(availableWidth / minWidth)));
   const rows = Math.min(grid.rows, Math.max(1, Math.floor(availableHeight / minHeight)));
   let scale = clampWidgetScale(settings.widgetScale);
