@@ -2,24 +2,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { app, safeStorage } = require('electron');
+const { readJsonSafe, writeJsonDurable } = require('./json-file.cjs');
 const { appendHistoryPoint, pruneHistory } = require('./history.cjs');
 const { extractCycles, mergeCycles, purgeGhostCycles } = require('./waste.cjs');
 const { REMOTE_PORT } = require('./remote-view.cjs');
 
 // 本机预览允许同时存活的会话令牌数:多个预览标签页并存,超出后最旧的先失效
 const LOCAL_PREVIEW_TOKEN_LIMIT = 3;
-
-const readJson = (filePath, fallback) => {
-  try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); }
-  catch { return fallback; }
-};
-
-const writeJson = (filePath, value) => {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tempPath = `${filePath}.tmp`;
-  fs.writeFileSync(tempPath, JSON.stringify(value, null, 2), 'utf8');
-  fs.renameSync(tempPath, filePath);
-};
 
 class DesktopStore {
   constructor() {
@@ -31,34 +20,54 @@ class DesktopStore {
     this.remoteAccessPath = path.join(root, 'remote-access.json');
     this.windowStatePath = path.join(root, 'window-state.json');
     this.localPreviewTokenHashes = [];
+    this.recoveryNotices = [];
+  }
+
+  readJson(filePath, fallback) {
+    const result = readJsonSafe(filePath, fallback);
+    if (result.quarantined || result.recoveredFrom) {
+      const notice = result.recoveredFrom
+        ? `${path.basename(filePath)} 已损坏（现场已隔离到 ${path.basename(result.quarantined)}），从备份 ${path.basename(result.recoveredFrom)} 恢复`
+        : `${path.basename(filePath)} 已损坏且无可用备份（现场已隔离到 ${path.basename(result.quarantined)}），以默认值启动`;
+      this.recoveryNotices.push(notice);
+      try { fs.appendFileSync(path.join(path.dirname(filePath), 'recovery.log'), `[${new Date().toISOString()}] ${notice}\n`, 'utf8'); }
+      catch {}
+    }
+    return result.value;
+  }
+
+  consumeRecoveryNotices() {
+    const notices = this.recoveryNotices;
+    this.recoveryNotices = [];
+    return notices;
   }
 
   // 主窗口尺寸/位置记忆：与 state.json 分开存放，避免渲染进程整体保存 state 时把它冲掉
-  loadMainWindowState() { return readJson(this.windowStatePath, null); }
-  saveMainWindowState(bounds) { writeJson(this.windowStatePath, bounds); return bounds; }
+  loadMainWindowState() { return this.readJson(this.windowStatePath, null); }
+  saveMainWindowState(bounds) { writeJsonDurable(this.windowStatePath, bounds); return bounds; }
 
-  loadState() { return readJson(this.statePath, null); }
-  saveState(state) { writeJson(this.statePath, state); return state; }
+  loadState() { return this.readJson(this.statePath, null); }
+  saveState(state) { writeJsonDurable(this.statePath, state); return state; }
 
   // 额度历史：{ accountId: [{ at, windows: { key: { remaining, amount, unit } } }] }
-  loadHistory() { return readJson(this.historyPath, {}); }
+  loadHistory() { return this.readJson(this.historyPath, {}); }
 
-  saveHistory(history) { writeJson(this.historyPath, history || {}); return history || {}; }
+  saveHistory(history) { writeJsonDurable(this.historyPath, history || {}); return history || {}; }
 
   appendHistory(accountId, windows, retentionDays) {
-    writeJson(this.historyPath, appendHistoryPoint(this.loadHistory(), accountId, windows, Date.now(), retentionDays));
+    writeJsonDurable(this.historyPath, appendHistoryPoint(this.loadHistory(), accountId, windows, Date.now(), retentionDays));
   }
 
   getHistory(accountId, retentionDays) {
     const history = pruneHistory(this.loadHistory(), retentionDays);
-    writeJson(this.historyPath, history);
+    writeJsonDurable(this.historyPath, history);
     return history[accountId] || [];
   }
 
-  clearHistory() { writeJson(this.historyPath, {}); return true; }
+  clearHistory() { writeJsonDurable(this.historyPath, {}); return true; }
 
   loadRemoteAccess() {
-    const saved = readJson(this.remoteAccessPath, {});
+    const saved = this.readJson(this.remoteAccessPath, {});
     const decrypt = (value) => {
       if (!value || !safeStorage.isEncryptionAvailable()) return '';
       try { return safeStorage.decryptString(Buffer.from(value, 'base64')); }
@@ -89,7 +98,7 @@ class DesktopStore {
       tokenHash: device.tokenHash.toLowerCase(),
       pairedAt: typeof device.pairedAt === 'string' ? device.pairedAt : new Date().toISOString(),
     }));
-    writeJson(this.remoteAccessPath, {
+    writeJsonDurable(this.remoteAccessPath, {
       enabled: Boolean(enabled),
       pairingKey: pairingKey ? safeStorage.encryptString(String(pairingKey)).toString('base64') : '',
       devices: safeDevices,
@@ -157,9 +166,9 @@ class DesktopStore {
 
   // 周期浪费档案：{ accountId: [{ window, from, end, kind, observedAt, remaining, amount, limit, gapMs, reliable }] }
   // 永久保留，不受历史保留时长影响；每次全量扫描该账号历史提取，靠 mergeCycles 去重，天然支持回填
-  loadCycles() { return readJson(this.cyclesPath, {}); }
+  loadCycles() { return this.readJson(this.cyclesPath, {}); }
 
-  saveCycles(cycles) { writeJson(this.cyclesPath, cycles || {}); return cycles || {}; }
+  saveCycles(cycles) { writeJsonDurable(this.cyclesPath, cycles || {}); return cycles || {}; }
 
   archiveCycles(accountId, windowKeys) {
     if (!accountId || !Array.isArray(windowKeys) || !windowKeys.length) return;
@@ -171,7 +180,7 @@ class DesktopStore {
     const merged = mergeCycles(purgeGhostCycles(previous), extractCycles(points, windowKeys));
     if (JSON.stringify(merged) !== JSON.stringify(previous)) {
       all[accountId] = merged;
-      writeJson(this.cyclesPath, all);
+      writeJsonDurable(this.cyclesPath, all);
     }
   }
 
@@ -181,25 +190,25 @@ class DesktopStore {
   purgeAllCycles() {
     const all = this.loadCycles();
     const next = Object.fromEntries(Object.entries(all).map(([accountId, cycles]) => [accountId, purgeGhostCycles(cycles)]));
-    if (JSON.stringify(next) !== JSON.stringify(all)) writeJson(this.cyclesPath, next);
+    if (JSON.stringify(next) !== JSON.stringify(all)) writeJsonDurable(this.cyclesPath, next);
   }
 
-  clearCycles() { writeJson(this.cyclesPath, {}); return true; }
+  clearCycles() { writeJsonDurable(this.cyclesPath, {}); return true; }
 
   // 删除账号后清理它的周期档案
   pruneCyclesAccounts(accountIds) {
     const valid = new Set(accountIds);
     const all = this.loadCycles();
     const next = Object.fromEntries(Object.entries(all).filter(([accountId]) => valid.has(accountId)));
-    writeJson(this.cyclesPath, next);
+    writeJsonDurable(this.cyclesPath, next);
   }
 
   // 删除账号后清理它的历史，同时按当前保留天数裁剪
   pruneHistoryAccounts(accountIds, retentionDays) {
-    writeJson(this.historyPath, pruneHistory(this.loadHistory(), retentionDays, Date.now(), new Set(accountIds)));
+    writeJsonDurable(this.historyPath, pruneHistory(this.loadHistory(), retentionDays, Date.now(), new Set(accountIds)));
   }
 
-  loadCredentials() { return readJson(this.credentialsPath, {}); }
+  loadCredentials() { return this.readJson(this.credentialsPath, {}); }
 
   getSecrets(accountId) {
     const encrypted = this.loadCredentials()[accountId];
@@ -219,7 +228,7 @@ class DesktopStore {
     const nextVariables = variables && typeof variables === 'object' ? { ...existing.variables, ...variables } : existing.variables;
     const payload = JSON.stringify({ version: 2, credential: credential || existing.credential || '', variables: nextVariables });
     credentials[accountId] = safeStorage.encryptString(payload).toString('base64');
-    writeJson(this.credentialsPath, credentials);
+    writeJsonDurable(this.credentialsPath, credentials);
     return true;
   }
 
@@ -232,7 +241,7 @@ class DesktopStore {
     delete nextVariables[key];
     const payload = JSON.stringify({ version: 2, credential: existing.credential || '', variables: nextVariables });
     credentials[accountId] = safeStorage.encryptString(payload).toString('base64');
-    writeJson(this.credentialsPath, credentials);
+    writeJsonDurable(this.credentialsPath, credentials);
     return true;
   }
 
@@ -241,7 +250,7 @@ class DesktopStore {
   deleteCredential(accountId) {
     const credentials = this.loadCredentials();
     delete credentials[accountId];
-    writeJson(this.credentialsPath, credentials);
+    writeJsonDurable(this.credentialsPath, credentials);
     return true;
   }
 }

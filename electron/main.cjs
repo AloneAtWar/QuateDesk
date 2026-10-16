@@ -2633,6 +2633,7 @@ if (!app.requestSingleInstanceLock()) {
       try { fs.writeFileSync(versionStampPath, app.getVersion()); } catch { /* 写失败则下次启动再补刷 */ }
     }
     const state = store.loadState();
+    for (const notice of store.consumeRecoveryNotices()) console.warn(`[storage] ${notice}`);
     cliUsage?.applySettings(state?.settings);
     if (state?.settings?.widget !== false) createWidgetWindow();
     createTray();
