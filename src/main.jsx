@@ -1191,7 +1191,7 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
   const [cellH, setCellH] = useState(8);
   const [cellGap, setCellGap] = useState(2);
   // 平移/缩放/右端钉随/渐隐交互与格子测量口径抽在 heatmap-pan.js，与本机用量热力图共用
-  const { handlers: heatmapPanHandlers, zoomRef, measureRef, markMeasured, syncEdges } = useHeatmapPan({ wrapRef: heatmapWrapRef, cellPx, cellGap, weekCount });
+  const { handlers: heatmapPanHandlers, element: heatmapElement, attachRef: attachHeatmap, zoomRef, measureRef, markMeasured, syncEdges } = useHeatmapPan({ wrapRef: heatmapWrapRef, cellPx, cellH, cellGap, weekCount });
   useEffect(() => {
     const el = heatmapWrapRef.current;
     if (!el) return undefined;
@@ -1208,7 +1208,7 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
     observer?.observe(el);
     return () => observer?.disconnect();
-  }, [weekCount, zoomRef, measureRef, markMeasured, syncEdges]);
+  }, [heatmapElement, weekCount, zoomRef, measureRef, markMeasured, syncEdges]);
 
   const refreshUsage = () => {
     forceNextRequest.current = true;
@@ -1412,7 +1412,7 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
       <div
         className="provider-heatmap-scroll"
         role="grid" tabIndex={0} aria-label="近 1 年每日用量热力图，方向键选择日期"
-        ref={heatmapWrapRef}
+        ref={attachHeatmap}
         onKeyDown={handleHeatmapKey}
         {...heatmapPanHandlers}
       >

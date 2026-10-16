@@ -350,6 +350,7 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 
 /* pin/settings/close presented as one grouped pill like the view switcher */
 .titlebar-actions { border: 1px solid var(--line); border-radius: 8px; padding: 2px; background: var(--control); gap: 2px; }
+.app-shell > .titlebar > .titlebar-actions { margin-left: 10px; }
 .titlebar-actions button { width: 25px; height: 21px; border-radius: 5px; }
 
 /* refresh-result toast under the titlebar */
@@ -970,11 +971,14 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .local-cli-page-actions { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .local-cli-view-switch { flex: 0 0 auto; }
 .local-cli-scope-models { min-width: 0; display: flex; align-items: center; gap: 5px; overflow: hidden; color: var(--faint); font-size: 9px; white-space: nowrap; }
-.local-cli-scope-models > span:first-child { flex: 0 0 auto; color: var(--ink-soft); font-weight: 700; }
-.local-cli-model-chip { max-width: 92px; overflow: hidden; text-overflow: ellipsis; padding: 3px 6px; border: 1px solid var(--line-inner); border-radius: 6px; color: var(--cyan); background: var(--surface-2); font-size: 8px; }
+.local-cli-scope-models > span:first-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ink-soft); font-weight: 700; }
+.local-cli-model-tags { position: relative; flex: 1; min-width: 1em; overflow: hidden; }
+.local-cli-model-tags-row { display: flex; align-items: center; gap: inherit; }
+.local-cli-model-tags, .local-cli-model-tags-row { column-gap: inherit; }
+.local-cli-model-measure { position: absolute; top: 0; left: 0; width: max-content; visibility: hidden; pointer-events: none; }
+.local-cli-model-chip { flex: 0 0 auto; max-width: 92px; overflow: hidden; text-overflow: ellipsis; padding: 3px 6px; border: 1px solid var(--line-inner); border-radius: 6px; color: var(--cyan); background: var(--surface-2); font-size: 8px; }
 .local-cli-model-more { flex: 0 0 auto; color: var(--muted); font-size: 8px; cursor: help; }
 .local-cli-scope-models em { color: var(--faint); font-size: 9px; font-style: normal; }
-.local-cli-scope-help { flex: 0 0 auto; display: inline-grid; place-items: center; color: var(--faint); cursor: help; }
 
 /* 状态说明卡(首次使用/空态/错误/加载/桌面限制):统一居中垂直布局 */
 .local-cli-state-card { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px 28px; border: 1px solid var(--line-inner); border-radius: 10px; background: var(--surface-2); color: var(--ink); text-align: center; }
@@ -1647,7 +1651,6 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
   .local-cli-model-chip { font-size: 10px; max-width: 150px; padding: 4px 9px; }
   .local-cli-model-more { font-size: 10px; }
   .local-cli-scope-models em { font-size: 11px; }
-  .local-cli-scope-help svg { width: 15px; height: 15px; }
 }
 
 @media (min-width: 1900px) {
@@ -1655,7 +1658,6 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
   .local-cli-model-chip { font-size: 11px; max-width: 190px; padding: 4px 10px; }
   .local-cli-model-more { font-size: 11px; }
   .local-cli-scope-models em { font-size: 12px; }
-  .local-cli-scope-help svg { width: 17px; height: 17px; }
 }
 
 /* 垂直拖拽分隔条:本机用量、额度浪费共用;静止时只是一条细线,悬停/拖拽才放大 */

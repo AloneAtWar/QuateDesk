@@ -69,7 +69,7 @@ export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate,
   }, [days]);
 
   // 平移/缩放/右端钉随/渐隐交互与官方用量热力图共用一套（heatmap-pan.js）
-  const { handlers: heatmapPanHandlers, zoomRef, measureRef, markMeasured, syncEdges } = useHeatmapPan({ wrapRef, cellPx, cellGap, weekCount });
+  const { handlers: heatmapPanHandlers, element: heatmapElement, attachRef: attachHeatmap, zoomRef, measureRef, markMeasured, syncEdges } = useHeatmapPan({ wrapRef, cellPx, cellH, cellGap, weekCount });
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -89,7 +89,7 @@ export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate,
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [weekCount, zoomRef, measureRef, markMeasured, syncEdges]);
+  }, [heatmapElement, weekCount, zoomRef, measureRef, markMeasured, syncEdges]);
 
   const maxValue = useMemo(() => localHeatmapMax(days), [days]);
   const info = summary?.summary;
@@ -156,7 +156,7 @@ export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate,
       </div>
     </div>
     <div className="provider-heatmap-frame">
-      <div className="provider-heatmap-scroll local-cli-heatmap-scroll" role="grid" tabIndex={0} aria-label="近 1 年本机 CLI Token 热力图,方向键选择日期" ref={wrapRef} onKeyDown={handleKey} {...heatmapPanHandlers}>
+      <div className="provider-heatmap-scroll local-cli-heatmap-scroll" role="grid" tabIndex={0} aria-label="近 1 年本机 CLI Token 热力图,方向键选择日期" ref={attachHeatmap} onKeyDown={handleKey} {...heatmapPanHandlers}>
         <div className="provider-heatmap-board" ref={heatmapRef} style={{ '--hm-cell': `${cellPx}px`, '--hm-cell-h': `${cellH}px`, '--hm-gap': `${cellGap}px` }}>
           <span className="provider-heatmap-corner" aria-hidden="true" />
           <div className="provider-heatmap-months" aria-hidden="true" style={{ width: `${weekCount * cellPx + (weekCount - 1) * cellGap}px` }}>{monthMarkers.filter((_item, index) => index % (cellPx >= 14 ? 1 : cellPx >= 9 ? 2 : cellPx >= 6 ? 3 : 6) === 0).map((item) => <span key={item.key} style={{ left: `${(item.column - 1) * (cellPx + cellGap)}px` }}>{item.label}</span>)}</div>

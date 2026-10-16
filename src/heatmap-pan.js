@@ -1,6 +1,6 @@
 // 热力图竖屏测量与平移/缩放交互：官方用量页(main.jsx)与本机用量热力图(LocalUsageHeatmap)
 // 共用。抽成独立模块而不是互相 import，避免 main.jsx ↔ local-cli-usage 的循环依赖。
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 // 容器窄于该宽度视为竖屏：按「可读格子 + 横向滚动」处理，而不是把格子硬塞到 5px
 export const HEATMAP_NARROW_PX = 620;
@@ -54,7 +54,13 @@ export function computeHeatmapCells(el, weekCount, zoom = 1) {
 // 默认钉在右端(最新)、两端渐隐提示。使用方把 handlers 挂到 .provider-heatmap-scroll 上
 // （外层需包 .provider-heatmap-frame 提供渐隐覆盖层），并在自己的 measure 里调用
 // markMeasured(base, w) 记录缩放基准，measure 函数本身通过 measureRef 暴露给缩放重算。
-export function useHeatmapPan({ wrapRef, cellPx, cellGap, weekCount }) {
+export function useHeatmapPan({ wrapRef, cellPx, cellH, cellGap, weekCount }) {
+  const [element, setElement] = useState(null);
+  // 数据加载后滚动区才挂载；用回调 ref 跟踪真实节点，避免格子数未变时漏掉初始化。
+  const attachRef = useCallback((node) => {
+    wrapRef.current = node;
+    setElement(node);
+  }, [wrapRef]);
   const zoomRef = useRef(1);           // 缩放倍率（相对自动测量值），换数据集后重置
   const baseCellRef = useRef(8);       // 最近一次自动测量的未缩放格子宽
   const cellPxRef = useRef(8);         // 当前格子宽（原生监听闭包里 state 会过期，用镜像）
@@ -94,16 +100,17 @@ export function useHeatmapPan({ wrapRef, cellPx, cellGap, weekCount }) {
   }, []);
 
   // 换数据集：重置缩放与右端钉随
-  useEffect(() => {
+  useLayoutEffect(() => {
     zoomRef.current = 1;
     pinnedRightRef.current = true;
-  }, [weekCount]);
+    anchorRef.current = null;
+  }, [element, weekCount]);
 
   // 滚动跟随：右端钉随状态 + 渐隐；悬停滚轮：Ctrl/Cmd+滚轮缩放，普通竖向滚轮在板可横滚时
   // 转为横向滚动（到头放行整页）。React 合成事件的 wheel 是 passive 的，preventDefault
   // 必须挂在原生非 passive 监听上
   useEffect(() => {
-    const el = wrapRef.current;
+    const el = element;
     if (!el) return undefined;
     const onScroll = () => {
       pinnedRightRef.current = el.scrollLeft >= el.scrollWidth - el.clientWidth - 4;
@@ -133,22 +140,36 @@ export function useHeatmapPan({ wrapRef, cellPx, cellGap, weekCount }) {
       el.removeEventListener('scroll', onScroll);
       el.removeEventListener('wheel', onWheel);
     };
-  }, [weekCount, syncEdges, zoomAt]);
+  }, [element, syncEdges, zoomAt]);
 
   // 格子尺寸落地后校正滚动位置：缩放按锚点换算，平时钉在右端（最新）
-  useEffect(() => {
-    const el = wrapRef.current;
+  useLayoutEffect(() => {
+    const el = element;
     if (!el) return;
     if (anchorRef.current) {
       const { contentX, clientX, cell } = anchorRef.current;
       anchorRef.current = null;
       const rect = el.getBoundingClientRect();
       el.scrollLeft = contentX * (cellPx / cell) - (clientX - rect.left);
+      pinnedRightRef.current = el.scrollLeft >= el.scrollWidth - el.clientWidth - 4;
     } else if (pinnedRightRef.current && el.scrollWidth > el.clientWidth) {
       el.scrollLeft = el.scrollWidth;
     }
     syncEdges();
-  }, [cellPx, cellGap, weekCount, syncEdges]);
+  }, [element, cellPx, cellH, cellGap, weekCount, syncEdges]);
+
+  // CSS 布局、容器宽度或内容宽度改变时也要跟随最新列；这些变化不一定会改变格子 state。
+  // 仅在仍钉在右端时跟随，用户向左翻看历史后保留其位置。
+  useLayoutEffect(() => {
+    if (!element || typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(() => {
+      if (pinnedRightRef.current && !anchorRef.current) element.scrollLeft = element.scrollWidth;
+      syncEdges();
+    });
+    observer.observe(element);
+    if (element.firstElementChild) observer.observe(element.firstElementChild);
+    return () => observer.disconnect();
+  }, [element, syncEdges]);
 
   // 触屏两指捏合缩放（touch-action 已限定 pan-x/pan-y，捏合不被浏览器接管）、
   // 鼠标按住拖动平移（拖动后吞掉误触的点击），触屏单指交给原生滚动
@@ -218,6 +239,8 @@ export function useHeatmapPan({ wrapRef, cellPx, cellGap, weekCount }) {
   };
 
   return {
+    element,
+    attachRef,
     handlers: {
       onPointerDown,
       onPointerMove,

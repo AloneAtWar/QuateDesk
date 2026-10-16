@@ -1,11 +1,12 @@
 // 本机用量页:标题栏第四个全局视图。只读展示本机 CLI 会话的 Token 统计,
 // 与账号额度、官方用量完全独立。首卡确认后才开始扫描,数据只含聚合数值。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Database, HelpCircle, Play, RefreshCw, ShieldCheck } from 'lucide-react';
+import { AlertCircle, Database, Play, RefreshCw, ShieldCheck } from 'lucide-react';
 import useLocalCliUsage from './useLocalCliUsage';
 import ChannelSelect from './ChannelSelect';
 import LocalUsageHeatmap from './LocalUsageHeatmap';
 import LocalUsageModelBreakdown from './LocalUsageModelBreakdown';
+import RelatedModels from './RelatedModels';
 import {
   formatLocalDateTime, localTimeZone, canMergeModelsFor,
 } from './local-cli-usage-format';
@@ -223,18 +224,10 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
   };
 
   const lastScanned = sources.find((source) => source.lastScannedAt)?.lastScannedAt;
-  const matchedModels = scopeMeta.matchedModels;
-  const visibleMatchedModels = matchedModels.slice(0, 2);
 
   return <section className={`${embedded ? '' : 'surface-section '}local-cli-page${embedded ? ' embedded' : ''}`}>
     <div className="local-cli-page-head">
-      {embedded ? <div className="local-cli-scope-models">
-        <span>相关模型</span>
-        {visibleMatchedModels.map((model) => <span className="local-cli-model-chip" key={model.key} title={model.displayName}>{model.displayName}</span>)}
-        {matchedModels.length > visibleMatchedModels.length && <span className="local-cli-model-more" title={matchedModels.slice(visibleMatchedModels.length).map((model) => model.displayName).join('、')}>+{matchedModels.length - visibleMatchedModels.length}</span>}
-        {!matchedModels.length && <em>{summaryBlock.loading ? '读取中…' : '暂无数据'}</em>}
-        <span className="local-cli-scope-help" title="显示当前渠道下实际命中模型规则的本机 CLI 模型。记录可能同时匹配多个厂商，不代表由当前账号产生。"><HelpCircle size={13} /></span>
-      </div> : <div className="local-cli-page-title">
+      {embedded ? <RelatedModels models={scopeMeta.matchedModels} loading={summaryBlock.loading} /> : <div className="local-cli-page-title">
         <b>本机用量</b>
         <small>{lastScanned ? `最后扫描 ${formatLocalDateTime(lastScanned)}` : '尚未完成扫描'}{agentNames[selectedAgent] && selectedAgent !== 'all' ? ` · ${agentNames[selectedAgent]}` : ''}</small>
       </div>}
