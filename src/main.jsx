@@ -1718,6 +1718,21 @@ function StatusView({ accounts, providers, runtime, onTestAccount, testingAccoun
 // 「即将刷新」标题固定在左，仅右侧条目区单行滑动：触屏走浏览器原生横向滚动，鼠标按住拖动
 // 或悬停滚动滚轮平移（滚动条隐藏）；未滑到边时两端渐隐提示还有更多条目
 const REFRESH_DRAG_MOVE_PX = 4;
+// 条目的剩余百分比配色：剩得越多、刷新时浪费越多，颜色越重（<20% 绿 / <40% 青 / <70% 橙 / ≥70% 红）；
+// 窗口已用尽，或同账号更长周期的窗口已耗尽（短周期刷新了也跑不动）时置灰
+const refreshChipTone = (account, meter) => {
+  if (meter.available === false) return 'spent';
+  const remaining = Number(meter.remaining);
+  if (meter.unit !== '%' || !Number.isFinite(remaining)) return '';
+  const capped = (account.windows || []).some((item) => item.key !== meter.key && item.key !== 'balance'
+    && item.unit === '%' && item.available !== false && Number(item.remaining) <= 0
+    && (durationOrder[item.key] || 0) > (durationOrder[meter.key] || 0));
+  if (capped || remaining <= 0) return 'spent';
+  if (remaining < 20) return 'ok';
+  if (remaining < 40) return 'fine';
+  if (remaining < 70) return 'warn';
+  return 'waste';
+};
 function UpcomingRefreshBar({ accounts, providers, onOpenHistory }) {
   const upcoming = useMemo(() => accounts
     .filter((account) => !account.disabled)
@@ -1805,8 +1820,10 @@ function UpcomingRefreshBar({ accounts, providers, onOpenHistory }) {
         {upcoming.map(({ account, meter }) => {
           const provider = providers.find((item) => item.id === account.providerId);
           const label = windowCatalog[meter.key]?.label || meter.key;
-          return <button type="button" className="refresh-chip" key={`${account.id}-${meter.key}`} title={`${account.name} · ${label} · ${formatResetAbsolute(meter.resetAt)}`} onClick={() => onOpenHistory?.(account)}>
-            <Logo provider={provider} size="xs" interactive={false} /><span>{account.name}</span><em>{label}</em><small>{formatResetCompact(meter.resetAt)}</small>
+          const tone = refreshChipTone(account, meter);
+          const percent = meter.unit === '%' && Number.isFinite(Number(meter.remaining)) ? `${Math.round(meter.remaining)}%` : '';
+          return <button type="button" className="refresh-chip" key={`${account.id}-${meter.key}`} title={`${account.name} · ${label}${percent ? ` · 剩余 ${percent}` : ''} · ${formatResetAbsolute(meter.resetAt)}`} onClick={() => onOpenHistory?.(account)}>
+            <Logo provider={provider} size="xs" interactive={false} /><span>{account.name}</span><em>{label}</em>{percent && <b className={tone}>{percent}</b>}<small>{formatResetCompact(meter.resetAt)}</small>
           </button>;
         })}
       </div>

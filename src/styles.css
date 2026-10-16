@@ -470,6 +470,11 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .refresh-chip span { overflow: hidden; text-overflow: ellipsis; }
 .refresh-chip em { flex: 0 0 auto; color: var(--faint); font-size: 9px; font-style: normal; }
 .refresh-chip small { flex: 0 0 auto; color: var(--green-deep); font-size: 9px; font-weight: 700; }
+.refresh-chip b { flex: 0 0 auto; color: var(--green-deep); font-size: 9px; font-weight: 700; }
+.refresh-chip b.fine { color: var(--cyan); }
+.refresh-chip b.warn { color: var(--amber); }
+.refresh-chip b.waste { color: var(--coral); }
+.refresh-chip b.spent { color: var(--faint); }
 .reset-timeline { overflow-x: auto; overflow-y: hidden; cursor: grab; padding: 2px 12px 8px; user-select: none; }
 .reset-timeline:active { cursor: grabbing; }
 .timeline-track { position: relative; height: 62px; }
@@ -1456,7 +1461,7 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
   .refresh-track { gap: 10px; }
   .refresh-bar-title { font-size: 11px; }
   .refresh-chip { font-size: 11px; padding: 4px 11px; }
-  .refresh-chip em, .refresh-chip small { font-size: 10px; }
+  .refresh-chip em, .refresh-chip small, .refresh-chip b { font-size: 10px; }
   .refresh-chip .provider-logo { width: 17px; height: 17px; }
   .overview-grid { gap: 18px; }
   .overview-grid > .overview-card { flex-basis: calc(25% - 14px); max-width: calc(25% - 14px); }
@@ -1484,7 +1489,7 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
   .refresh-track { gap: 12px; }
   .refresh-bar-title { font-size: 12px; }
   .refresh-chip { font-size: 12px; max-width: 220px; padding: 5px 13px; }
-  .refresh-chip em, .refresh-chip small { font-size: 11px; }
+  .refresh-chip em, .refresh-chip small, .refresh-chip b { font-size: 11px; }
   .refresh-chip .provider-logo { width: 19px; height: 19px; }
   .main-shell { max-width: 2040px; }
   .overview-grid { gap: 20px; }
