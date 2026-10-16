@@ -289,6 +289,7 @@ const PROVIDER_USAGE_COPY = {
   zai: {
     display: 'Z.ai',
     loading: '查询最近 1 年的每日模型 Token 用量',
+    connectHint: '使用当前账号的 API Key 读取每日 Token 用量，无需额外登录。',
     reauthDetail: 'Z.ai API Key 无效或已过期',
     reauthHint: '在账号设置中更新 API Key 后即可继续读取 Z.ai 服务端历史。',
     emptyHint: 'Z.ai 已连接，但没有返回可绘制的每日 Token 用量。',
@@ -1233,7 +1234,7 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
   if (status === 'disconnected') return <div className="provider-usage-state connect-guide">
     <span className="provider-usage-state-icon"><Globe size={18} /></span>
     <div><b>{readOnly ? '官方用量尚未连接' : `连接 ${copy.display} 官方用量`}</b><small>{readOnly ? '请在电脑端设置中连接官方账号后查看。' : copy.connectHint}</small>{error && <em>{error}</em>}</div>
-    {!readOnly && <button type="button" className="primary-button" disabled={connecting} onClick={connect}><Globe size={13} />{connecting ? copy.connecting : copy.connectAction}</button>}
+    {!readOnly && <button type="button" className="primary-button" disabled={connecting} onClick={connect}><Globe size={13} />{connecting ? (copy.connecting || '连接中…') : (copy.connectAction || '连接官方用量')}</button>}
   </div>;
   if (status === 'reauth_required') return <div className="provider-usage-state auth-required">
     <span className="provider-usage-state-icon"><AlertCircle size={18} /></span>
