@@ -1371,8 +1371,8 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
   .timeline-track { min-width: 100%; }
 }
 
-/* 账号详情页面板高度链（桌面端，.app-shell 作用域——手机远程页在 remote.css 里
-   有自己的固定高度链）：改为弹性填充。面板吃满窗口剩余高度（不小于 271px），
+/* 账号详情页面板高度链（桌面端，.app-shell 作用域——远程页在 remote.css 里有
+   覆盖所有宽度的同款链）：改为弹性填充。面板吃满窗口剩余高度（不小于 271px），
    「返回」按钮贴底，余量不再堆在页面底部形成大片空白；此前固定高度公式
    (100vh - 210px) 在小窗口低于 271px 下限，在大窗口也低估可用高度 */
 .app-shell .view-stack.history-view { display: flex; flex-direction: column; }

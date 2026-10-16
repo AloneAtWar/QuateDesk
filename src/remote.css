@@ -59,21 +59,22 @@ body.remote-usage-bounded .remote-app { height: 100dvh; }
 .remote-main .overview-card { min-width: 0; }
 .remote-main .account-identity, .remote-main .account-copy, .remote-main .overview-body, .remote-main .overview-meters, .remote-main .overview-meter { min-width: 0; }
 .remote-main > .history-view { width: min(100%, 760px); margin: 0 auto; }
-/* 窄屏(手机)补齐桌面端 ≥800px 的面板高度链：详情页各面板吃满剩余视口，
-   用量视图的热力图行高随之撑开，不再留出大片底部空白 */
-@media (max-width: 799px) {
-  .remote-main .history-view { --history-panel-height: clamp(271px, calc(100dvh - 210px), 2200px); }
-  .remote-main .history-view .trend-view,
-  .remote-main .history-view .waste-view,
-  .remote-main .history-view .local-cli-page.embedded { height: var(--history-panel-height); }
-  /* 用量视图面板独立上限（与桌面端一致）：格子封顶后更高的面板只会留框内空区 */
-  .remote-main .history-view .provider-usage-view { height: min(var(--history-panel-height), 960px); }
-  /* 连接引导/加载/错误等状态视图不跟随面板拉伸，保持紧凑高度（与桌面端一致） */
-  .remote-main .history-view .provider-usage-state { height: 271px; }
-  /* 趋势图与桌面端同一条链：绘图区按面板高度重绘，折线不至于只占面板顶部一小条 */
-  .remote-main .history-view .trend-view > .usage-chart { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-  .remote-main .history-view .trend-view > .usage-chart > svg { flex: 0 0 auto; }
-}
+/* 详情页面板高度链（远程端，所有宽度统一，与桌面端 .app-shell 链同款弹性填充）：
+   面板吃满剩余视口（不小于 271px），热力图格子与趋势图随面板高度撑开，「返回」
+   按钮贴底，下方不再留大片空白。此前该链只写在 max-width:799px 的手机断点里，
+   平板（≥800px）落空、面板回落到固定 271px，下半屏全空 */
+.remote-main:has(> .history-view) { display: flex; flex-direction: column; }
+.remote-main:has(> .history-view) > .history-view { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.remote-app .history-view > .surface-section { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+.remote-app .history-view .history-head { flex: 0 0 auto; }
+.remote-app .history-view .history-tabpanel { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+.remote-app .history-view .trend-view,
+.remote-app .history-view .waste-view,
+.remote-app .history-view .local-cli-page.embedded { flex: 1 1 auto; height: auto; min-height: 271px; }
+/* 用量视图面板独立上限（与桌面端一致）：格子封顶后更高的面板只会留框内空区 */
+.remote-app .history-view .provider-usage-view { flex: 1 1 auto; height: auto; min-height: 271px; max-height: 960px; }
+/* 连接引导/加载/错误等状态视图不跟随面板拉伸，保持紧凑高度（与桌面端一致） */
+.remote-app .history-view .provider-usage-state { height: 271px; }
 
 /* 手机上用量统计卡改为两列网格：单行 5-6 张每张只剩 ~60px，数字全被省略号截断。
    全部卡片保留：本机用量 4 张正好 2×2；官方用量 5 张时末张占满整行
