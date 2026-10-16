@@ -11,6 +11,9 @@
   "scripts": {
     "test": "node --test",
     "dev": "vite",
+    "dev:demo": "vite --host 127.0.0.1",
+    "demo:capture": "node scripts/capture-browser-demo.cjs",
+    "test:demo": "node --test tests/browser-demo.test.js",
     "dev:lan": "vite --host 0.0.0.0",
     "dev:desktop": "node build/dev-desktop.cjs",
     "build": "vite build",

@@ -4030,7 +4030,7 @@ function App() {
   </>;
   const appShellActions = <>
     <button title="设置" aria-label="打开设置" onClick={() => { setViewMenuOpen(false); setSettingsOpen(true); }}><Settings2 size={13} /></button>
-    {bridge && <><button className={pinned ? 'active' : ''} title={pinned ? '取消固定' : '固定在桌面最前面'} aria-label="固定在桌面最前面" onClick={async () => setPinned(await bridge.togglePin())}><Pin size={13} /></button><button title={maximized ? '还原' : '最大化'} aria-label={maximized ? '还原' : '最大化'} onClick={async () => setMaximized(Boolean(await bridge.toggleMaximize()))}>{maximized ? <Copy size={12} /> : <Square size={11} />}</button><button title="关闭到托盘" aria-label="关闭到托盘" onClick={() => bridge.closeMainWindow()}><X size={14} /></button></>}
+    {bridge && !bridge.isDemo && <><button className={pinned ? 'active' : ''} title={pinned ? '取消固定' : '固定在桌面最前面'} aria-label="固定在桌面最前面" onClick={async () => setPinned(await bridge.togglePin())}><Pin size={13} /></button><button title={maximized ? '还原' : '最大化'} aria-label={maximized ? '还原' : '最大化'} onClick={async () => setMaximized(Boolean(await bridge.toggleMaximize()))}>{maximized ? <Copy size={12} /> : <Square size={11} />}</button><button title="关闭到托盘" aria-label="关闭到托盘" onClick={() => bridge.closeMainWindow()}><X size={14} /></button></>}
   </>;
 
   return <AppShell controls={appShellControls} actions={appShellActions}>
@@ -4117,4 +4117,12 @@ export { HistoryView, ProviderUsageView, SettingsDrawer, SharedSettingsPanel, St
 
 const widgetMode = new URLSearchParams(window.location.search).get('widget') === '1';
 const rootElement = document.getElementById('root');
-if (rootElement) createRoot(rootElement).render(widgetMode ? <WidgetApp /> : <App />);
+async function mountApp() {
+  // Keep the fixture out of production and never replace the real Electron API.
+  if (import.meta.env.DEV && !window.quotaDesk && new URLSearchParams(window.location.search).get('demo') !== '0') {
+    const { installBrowserDemo } = await import('./demo/install.js');
+    installBrowserDemo();
+  }
+  createRoot(rootElement).render(widgetMode ? <WidgetApp /> : <App />);
+}
+if (rootElement) mountApp();

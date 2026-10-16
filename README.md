@@ -198,6 +198,8 @@ Quota Desk 可以读取本机 `~/.cc-switch/cc-switch.db`，列出能够识别�
 
 ## 开发
 
+浏览器开发模式默认使用一份脱敏的固定本机快照，支持完整的趋势、浪费与本机用量预览；官方用量使用独立的固定示例。运行 `npm run dev:demo` 即可，数据来源、关闭方式和手动更新方法见 [浏览器固定数据预览](docs/browser-demo.md)。
+
 ```bash
 npm install
 npm test
