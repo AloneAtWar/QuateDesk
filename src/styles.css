@@ -32,10 +32,10 @@
   --bg: #f3f5f1; --bg-grad: #ffffff;
   --surface: #fbfcf9; --surface-2: #f7faf6; --surface-3: #f0f4ef; --surface-trans: rgba(251, 252, 249, .72);
   --control: #ffffff; --control-2: #f5f8f3; --knob: #ffffff;
-  --ink: #1e282d; --ink-soft: #5d6a6e; --muted: #788188; --faint: #9aa4a4;
+  --ink: #1e282d; --ink-soft: #5d6a6e; --muted: #5f6d75; --faint: #66737b;
   --line: #dfe4df; --line-strong: #cfd8d1; --line-inner: #edf0ec; --hover-border: #aab8b0;
   --primary-bg: #1e282d; --primary-text: #ffffff; --primary-bg-hover: #334449;
-  --green: #2e8b66; --green-deep: #2e7756; --green-bg: #e1f2e4; --green-bg-2: #d9efdf; --green-line: #bfe0c8;
+  --green: #277a59; --green-deep: #2e7756; --green-bg: #e1f2e4; --green-bg-2: #d9efdf; --green-line: #bfe0c8;
   --coral: #e5775e; --coral-deep: #bd665b; --coral-bg: #f9e3dc; --coral-bg-2: #f8e2dc; --warn-border: #efd2cb;
   --chip-bg: #eef1ed; --chip-text: var(--ink-soft);
   --toggle: #dfe5df; --backdrop: rgba(31, 41, 41, .28); --backdrop-soft: rgba(31, 41, 41, .12);
