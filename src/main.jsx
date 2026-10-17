@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import {
-  AppWindow, AlertCircle, ArrowLeft, Bell, BellOff, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronLeft, ChevronRight, CircleGauge, CircleStop, Clock3, Copy, Database, Download, Eye, ExternalLink, Globe, HelpCircle, History, LayoutGrid,
+  AppWindow, AlertCircle, Bell, BellOff, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronLeft, ChevronRight, CircleGauge, CircleStop, Clock3, Copy, Database, Download, Eye, ExternalLink, Globe, HelpCircle, History, LayoutGrid,
   Ellipsis, Flame, KeyRound, Monitor, Play, Plus, Power, RefreshCw, Rows3, Settings2, ShieldCheck, SlidersHorizontal, Square, Bot,
   Pencil, Pin, QrCode, Sparkles, SquareTerminal, SunMoon, Tag, Trash2, TrendingUp, Trophy, UploadCloud, X, Zap, Bug,
 } from 'lucide-react';
@@ -1541,6 +1541,17 @@ function HistoryView({ account, provider, onBack, onProviderUsageState, settings
     { key: 'local-usage', label: '本机', reason: localUsageDisabledReason },
     { key: 'waste', label: '浪费', reason: wasteDisabledReason },
   ];
+  // Esc 返回看板：菜单打开、弹窗内、表单控件聚焦时留给它们自己处理
+  useEffect(() => {
+    if (!onBack) return undefined;
+    const onKey = (event) => {
+      if (event.key !== 'Escape') return;
+      if (event.target.closest?.('select, input, textarea, [contenteditable], .history-switch-anchor.open, .modal-backdrop')) return;
+      onBack();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onBack]);
   return <div className="view-stack history-view">
     <section className="surface-section">
       <div className="history-head">
@@ -1559,7 +1570,6 @@ function HistoryView({ account, provider, onBack, onProviderUsageState, settings
         })}<span className="legend-right">{points.length} 条记录</span></div>}
       </div>}</div>
     </section>
-    <div className="history-foot"><button type="button" className="outline-button" onClick={onBack}><ArrowLeft size={14} /> 返回</button></div>
   </div>;
 }
 

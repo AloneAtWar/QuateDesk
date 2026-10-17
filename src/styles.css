@@ -742,8 +742,6 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .account-title-line .tag-pill { flex: 0 4 auto; min-width: 14px; overflow: hidden; text-overflow: ellipsis; }
 /* 行式/周期视图的账号行可点击进入趋势图 */
 .account-window-row.clickable, .priority-row.clickable { cursor: pointer; }
-/* 历史视图底部返回（在卡片外，左对齐） */
-.history-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 2px; }
 .usage-chart.zoomed svg { cursor: grab; }
 .usage-chart.zoomed svg:active { cursor: grabbing; }
 .chart-tools { display: flex; align-items: center; justify-content: space-between; padding: 0 12px 4px; min-height: 18px; }
@@ -1608,7 +1606,6 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
   .local-cli-day-model-card em { font-size: 13.5px; }
   .local-cli-merge-toggle { font-size: 11px; }
   .local-cli-models-hint { font-size: 11.5px; }
-  .history-foot .outline-button { font-size: 12px; padding: 8px 16px; }
 }
 
 @media (min-width: 1900px) {
