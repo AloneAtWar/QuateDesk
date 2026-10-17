@@ -1956,7 +1956,7 @@ const normalizeSharedSettings = (settings = {}) => ({
   })),
 });
 
-function SharedSettingsPanel({ variant = 'desktop', settings = {}, setSettings, onSave, theme, setTheme, mode, setMode }) {
+function SharedSettingsPanel({ variant = 'desktop', desktopSection = 'all', settings = {}, setSettings, onSave, theme, setTheme, mode, setMode }) {
   const remote = variant === 'remote';
   const [draft, setDraft] = useState(() => normalizeSharedSettings(settings));
   const [saving, setSaving] = useState(false);
@@ -1974,21 +1974,25 @@ function SharedSettingsPanel({ variant = 'desktop', settings = {}, setSettings, 
     finally { setSaving(false); }
   };
   if (!remote) return <>
+    {(desktopSection === 'all' || desktopSection === 'general') && <>
     <section className="drawer-section">
       <div className="drawer-section-title"><Bell size={16} /><span>刷新提醒规则</span><button className="mini-add" onClick={() => update((old) => ({ ...old, reminderRules: [...(old.reminderRules || []), { id: `rule-${Date.now()}`, beforeMinutes: 120, minRemaining: 50 }] }))}><Plus size={14} /> 新增规则</button></div>
       <Toggle checked={values.alerts !== false} onChange={(value) => update((old) => ({ ...old, alerts: value }))} label="启用提醒" description="关闭后不发送桌面通知，也不标记命中规则" />
       {rules.length === 0 ? <div className="settings-empty">当前没有运行规则</div> : rules.map((rule, index) => <div className="rule-editor" key={rule.id}>
-        <label><span>刷新前多久（分钟）<small>窗口重置倒计时小于该值才提醒</small></span><input type="number" min="1" value={rule.beforeMinutes} onChange={(event) => update((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, beforeMinutes: event.target.value } : item) }))} /></label>
-        <label><span>剩余至少（百分比）<small>剩余额度不低于该值才提醒</small></span><input type="number" min="0" max="100" value={rule.minRemaining} onChange={(event) => update((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, minRemaining: event.target.value } : item) }))} /></label>
+        <label><span>距重置 ≤（分钟）</span><input type="number" min="1" value={rule.beforeMinutes} onChange={(event) => update((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, beforeMinutes: event.target.value } : item) }))} /></label>
+        <label><span>剩余额度 ≥（%）</span><input type="number" min="0" max="100" value={rule.minRemaining} onChange={(event) => update((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, minRemaining: event.target.value } : item) }))} /></label>
         <button className="icon-button danger rule-delete" title="删除规则" aria-label={`删除 ${rule.label || '规则'}`} onClick={() => update((old) => ({ ...old, reminderRules: old.reminderRules.filter((item) => item.id !== rule.id) }))}><Trash2 size={13} /></button>
       </div>)}
-      <small className="drawer-help">满足“刷新前多久”且“剩余至少”时，额度窗口会标记该规则。可以一条规则都没有。</small>
+      <small className="drawer-help">同时满足两项条件时提醒。</small>
       <div className="setting-select"><span><b>轮询间隔</b><small>所有账号统一检查频率</small></span><select value={values.pollMinutes} onChange={(event) => update((old) => ({ ...old, pollMinutes: event.target.value }))}><option value="5">5 分钟</option><option value="10">10 分钟</option><option value="15">15 分钟</option><option value="30">30 分钟</option></select></div>
     </section>
-    <section className="drawer-section"><div className="drawer-section-title"><Clock3 size={16} /><span>看板</span></div>
+    </>}
+    {(desktopSection === 'all' || desktopSection === 'display') && <>
+    <section className="drawer-section"><div className="drawer-section-title"><SunMoon size={16} /><span>外观显示</span></div>
+      <div className="setting-select"><span><b>界面主题</b><small>主窗口与桌面浮窗同步应用</small></span><select value={values.theme === 'light' ? 'light' : 'dark'} onChange={(event) => update((old) => ({ ...old, theme: event.target.value }))}><option value="dark">暗色</option><option value="light">亮色</option></select></div>
       <Toggle checked={values.showUpcomingRefresh !== false} onChange={(value) => update((old) => ({ ...old, showUpcomingRefresh: value }))} label="显示即将刷新" description="在看板底部按重置时间从近到远列出即将刷新的账号，电脑端与手机远程查看页均生效" />
     </section>
-    <section className="drawer-section"><div className="drawer-section-title"><SunMoon size={16} /><span>主题</span></div><div className="setting-select"><span><b>界面主题</b><small>主窗口与桌面浮窗同步应用</small></span><select value={values.theme === 'light' ? 'light' : 'dark'} onChange={(event) => update((old) => ({ ...old, theme: event.target.value }))}><option value="dark">暗色</option><option value="light">亮色</option></select></div></section>
+    </>}
   </>;
   return <div className="shared-settings-page">
     {remote && <section className="remote-settings-card">
@@ -2032,20 +2036,92 @@ function AccountRow({ account, provider, testing, onEdit, onTest, onToggleDisabl
 }
 
 function SettingsDrawer({ variant = 'desktop', accounts, providers, settings, setSettings, onClose, openModal, onDeleteAccount, onToggleAccountDisabled, onTestAccount, testingAccountId, onEditProvider, autoLaunch, onToggleAutoLaunch, appVersion, update, onOpenUpdate, onCheckUpdate, onClearHistory, runtime, onReopenOnboarding, onOpenDevTools, onExportData, onImportData, dataBusy, onSaveRemoteSettings, theme, setTheme, mode, setMode }) {
+  const [category, setCategory] = useState('general');
+  const drawerRef = useRef(null);
+  const scrollRef = useRef(null);
+  const categoryNavRef = useRef(null);
+  const [categoryScroll, setCategoryScroll] = useState({ left: false, right: false });
+  const updateCategoryScroll = useCallback(() => {
+    const nav = categoryNavRef.current;
+    if (!nav) return;
+    const next = { left: nav.scrollLeft > 1, right: nav.scrollWidth - nav.clientWidth - nav.scrollLeft > 1 };
+    setCategoryScroll((old) => old.left === next.left && old.right === next.right ? old : next);
+  }, []);
+  useLayoutEffect(() => {
+    const nav = categoryNavRef.current;
+    if (!nav) return undefined;
+    updateCategoryScroll();
+    const observer = new ResizeObserver(updateCategoryScroll);
+    observer.observe(nav);
+    const onWheel = (event) => {
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX) || nav.scrollWidth <= nav.clientWidth) return;
+      event.preventDefault();
+      const distance = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? nav.clientWidth : 1);
+      nav.scrollBy({ left: distance, behavior: 'instant' });
+    };
+    nav.addEventListener('wheel', onWheel, { passive: false });
+    return () => { observer.disconnect(); nav.removeEventListener('wheel', onWheel); };
+  }, [variant, updateCategoryScroll]);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    if (variant === 'remote') return undefined;
+    const previousFocus = document.activeElement;
+    drawerRef.current?.focus();
+    const onKeyDown = (event) => {
+      // A dialog opened from settings owns keyboard input until it closes.
+      if (document.querySelector('.modal-backdrop') || event.defaultPrevented) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onCloseRef.current?.();
+      } else if (event.key === 'Tab') {
+        const controls = [...(drawerRef.current?.querySelectorAll('button, input, select, a[href], [tabindex="0"]') || [])].filter((el) => !el.disabled && el.getClientRects().length);
+        const first = controls[0];
+        const last = controls.at(-1);
+        if (event.shiftKey && (document.activeElement === first || document.activeElement === drawerRef.current)) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, [variant]);
+  const selectCategory = (key) => { setCategory(key); scrollRef.current?.scrollTo({ top: 0 }); };
   if (variant === 'remote') return <SharedSettingsPanel variant="remote" settings={settings} onSave={onSaveRemoteSettings} theme={theme} setTheme={setTheme} mode={mode} setMode={setMode} />;
   const proxyMode = ['direct', 'system', 'manual'].includes(settings.proxyMode) ? settings.proxyMode : 'system';
-  return <><div className="drawer-shade" onClick={onClose} /><aside className="settings-drawer" aria-label="设置">
-    <div className="drawer-scroll">
-      <SharedSettingsPanel settings={settings} setSettings={setSettings} />
-       <section className="drawer-section"><div className="drawer-section-title"><Globe size={16} /><span>远程查看</span></div><RemoteViewSettings /></section>
-      <section className="drawer-section"><div className="drawer-section-title"><SquareTerminal size={16} /><span>本机用量</span></div><Toggle checked={settings.localCliUsage?.scanWsl !== false} onChange={(value) => setSettings((old) => ({ ...old, localCliUsage: { ...(old.localCliUsage || {}), scanWsl: value } }))} label="统计 WSL 用量" description="Windows 下同时扫描 WSL 各发行版内的 CLI 用量数据；仅统计运行中的发行版，未安装 WSL 时自动忽略" /></section>
-      <section className="drawer-section"><div className="drawer-section-title"><Monitor size={16} /><span>桌面浮窗</span><TitleHelp>长度只调整横向宽度（60%–150%）。浮窗会展示账号的全部额度窗口（含 1M）；空间不足时会逐级收起：标签先缩成小圆点再隐藏，倒计时按周期从长到短逐个隐藏，最后才收起最长周期的额度。只有一个额度窗口的账号通常不用收起任何内容；名称放不下时会显示省略号，悬停可查看完整内容。</TitleHelp></div><Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" description="固定在桌面顶层，双击展开主窗口" /><Toggle checked={settings.widgetAutoScroll !== false} onChange={(value) => setSettings((old) => ({ ...old, widgetAutoScroll: value }))} label="自动轮换账号" description="多个账号时每隔几秒切换展示；关闭后固定当前账号，滚轮仍可手动切换" /><label className="size-slider"><span>大小</span><input type="range" min={80} max={300} step={5} value={Math.round(clampWidgetScale(settings.widgetScale) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetScale: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetScale(settings.widgetScale) * 100)}%</b></label><label className="size-slider"><span>长度</span><input type="range" min={Math.round(WIDGET_MIN_LENGTH * 100)} max={Math.round(WIDGET_MAX_LENGTH * 100)} step={5} value={Math.round(clampWidgetLength(settings.widgetLength) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetLength: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetLength(settings.widgetLength) * 100)}%</b></label><button type="button" className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetScale: 0.9, widgetLength: 0.9 }))}>恢复默认大小与长度</button><div className="widget-setting-preview"><div style={{ width: Math.round(WIDGET_BASE_SIZE.width * clampWidgetLength(settings.widgetLength)), maxWidth: '100%', margin: '0 auto' }}>{(() => { const previewAccount = accounts.find((item) => !item.disabled) ?? accounts[0]; return <WidgetRow account={previewAccount} provider={providers.find((item) => item.id === previewAccount?.providerId)} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} />; })()}</div></div><button className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetPreview: true }))}><Eye size={15} /> 预览并调整</button></section>
-       {window.quotaDesk?.resetWindowSize && <section className="drawer-section"><div className="drawer-section-title"><AppWindow size={16} /><span>主窗口</span></div><div className="setting-select"><span><b>窗口大小</b><small>拖动窗口边缘自由调整（最小 520 × 470），内容自动多列铺开；大小会被记住</small></span><button className="outline-button" onClick={() => window.quotaDesk.resetWindowSize()}>恢复默认大小</button></div></section>}
-       <section className="drawer-section"><div className="drawer-section-title"><Database size={16} /><span>数据管理</span><TitleHelp><span>额度历史：每次成功刷新后记录一条；超过保留时长的记录会自动清理；选择“永久”时，超过 30 天的记录会自动降采样为每小时一条，删除账号也会一并删除该账号的历史。</span><br /><span>数据导入与导出：导出包含账号信息、账号凭据、自定义厂商、额度历史和周期档案；导入会合并数据并跳过重复账号与厂商。导出文件含敏感凭据，请妥善保管。</span></TitleHelp></div><div className="setting-select"><span><b>保留时长</b><small>每次成功刷新后记录一条，用于账号卡片的趋势图</small></span><select value={settings.historyDays} onChange={(event) => setSettings((old) => ({ ...old, historyDays: Number(event.target.value) }))}><option value={3}>3 天</option><option value={7}>7 天（默认）</option><option value={15}>15 天</option><option value={30}>30 天</option><option value={60}>60 天</option><option value={90}>3 个月（最长）</option><option value={0}>永久</option></select></div><button className="outline-button full" onClick={onClearHistory}><Trash2 size={14} /> 清除全部历史记录</button><div className="data-transfer-actions"><button type="button" className="outline-button" disabled={Boolean(dataBusy)} onClick={onExportData}><Download size={14} /> {dataBusy === 'export' ? '正在导出…' : '导出数据'}</button><button type="button" className="outline-button" disabled={Boolean(dataBusy)} onClick={onImportData}><UploadCloud size={14} /> {dataBusy === 'import' ? '正在导入…' : '导入数据'}</button></div></section>
-       <section className="drawer-section"><div className="drawer-section-title"><ShieldCheck size={16} /><span>账号与凭据</span><button className="mini-add" onClick={() => openModal('account')}><Plus size={14} /> 添加账号</button></div><div className="settings-list">{accounts.length === 0 && <div className="settings-empty">还没有账号</div>}{accounts.map((account) => <AccountRow key={account.id} account={account} provider={providers.find((item) => item.id === account.providerId)} testing={testingAccountId === account.id} onEdit={(item) => openModal({ type: 'account-edit', account: item })} onTest={onTestAccount} onToggleDisabled={onToggleAccountDisabled} onDelete={onDeleteAccount} />)}</div>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button full drawer-import-button" onClick={() => openModal('import-ccswitch')}><Download size={14} /> 从 cc-switch 导入账号</button>}</section>
-      <section className="drawer-section"><div className="drawer-section-title"><LayoutGrid size={16} /><span>厂商适配器</span><button className="mini-add" onClick={() => openModal('provider')}><Plus size={14} /> 新增厂商</button></div><div className="settings-list providers-list">{providers.map((provider) => <div className="settings-account" key={provider.id}><Logo provider={provider} size="sm" /><div><b title={provider.name}>{provider.name}</b><small>{provider.requestConfig?.adapterMode === 'script' ? '脚本适配' : ['grok', 'grokbot'].includes(provider.requestConfig?.adapterMode) ? '专属适配' : '标准映射'}</small></div><button className="row-icon-button" title="编辑厂商" aria-label={`编辑 ${provider.name}`} onClick={() => onEditProvider(provider)}><Pencil size={13} /></button><span className="adapter-state"><Check size={13} /></span></div>)}</div></section>
-       <section className="drawer-section"><div className="drawer-section-title"><Globe size={16} /><span>网络代理</span><TitleHelp>访问 Claude、Codex、Gemini、Grok 等境外厂商时直连常被中断，建议配置可用代理。地址以代理工具实际监听的端口为准（Clash Verge Rev 默认 mixed-port 7897）；只填写 host:port 时按 HTTP 代理处理。切换代理模式后，建议点击账号行的“刷新”验证效果。</TitleHelp></div><div className="setting-select"><span><b>代理模式</b><small>所有账号的额度请求共用，保存后立即生效</small></span><select value={proxyMode} onChange={(event) => setSettings((old) => ({ ...old, proxyMode: event.target.value }))}><option value="system">跟随系统（默认）</option><option value="manual">手动输入</option><option value="direct">不使用代理</option></select></div>{proxyMode === 'manual' && <label className="field drawer-proxy-field"><span>代理地址 <small>留空时退回跟随系统</small></span><input value={settings.proxyUrl ?? ''} onChange={(event) => setSettings((old) => ({ ...old, proxyUrl: event.target.value }))} placeholder="http://127.0.0.1:7897 或 socks5://127.0.0.1:7898" spellCheck="false" autoComplete="off" /></label>}</section>
-      <section className="drawer-section"><div className="drawer-section-title"><Power size={16} /><span>系统与更新</span></div><Toggle checked={autoLaunch} onChange={onToggleAutoLaunch} label="开机自启" description="登录 Windows 后自动启动 Quota Desk" /><Toggle checked={settings.autoUpdate !== false} onChange={(value) => setSettings((old) => ({ ...old, autoUpdate: value }))} label="自动检查更新" description="启动时及每小时自动检查 GitHub 上是否有新版本" /><div className="setting-select"><span><b>版本更新</b><small>当前版本 v{appVersion || '-'}</small></span>{update && ['available', 'downloading', 'downloaded'].includes(update.status) ? <button className="outline-button" onClick={onOpenUpdate}>v{update.version} 可用</button> : <button className="outline-button" disabled={update?.status === 'checking'} onClick={onCheckUpdate}>{update?.status === 'checking' ? '正在检查…' : '检查更新'}</button>}</div>{settings.ignoredUpdateVersion && <div className="setting-select"><span><b>已忽略 v{settings.ignoredUpdateVersion}</b><small>该版本的更新不再主动提醒，进入设置的检查更新仍可用</small></span><button className="outline-button" onClick={() => setSettings((old) => ({ ...old, ignoredUpdateVersion: null }))}>恢复提醒</button></div>}<button type="button" className="outline-button full" onClick={onReopenOnboarding}><Sparkles size={14} /> 重新打开新手指引</button>{onOpenDevTools && <button type="button" className="outline-button full" onClick={onOpenDevTools}><Bug size={14} /> 打开调试面板（F12）</button>}</section>
+  const categories = [['general', '通用'], ['accounts', '账号管理'], ['other', '其他']];
+  return <><div className="drawer-shade" onClick={onClose} /><aside className="settings-drawer" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabIndex={-1} ref={drawerRef}>
+    <div className="drawer-header"><h2 id="settings-title">设置</h2><button type="button" className="icon-button" onClick={onClose} title="关闭（Esc）" aria-label="关闭设置"><X size={17} /></button></div>
+    <div className="settings-nav-strip">
+      <button type="button" className="settings-nav-arrow" hidden={!categoryScroll.left && !categoryScroll.right} aria-label="向左滚动设置分类" disabled={!categoryScroll.left} onClick={() => categoryNavRef.current?.scrollBy({ left: -220 })}><ChevronLeft size={15} /></button>
+      <nav className="settings-nav" aria-label="设置分类" ref={categoryNavRef} onScroll={updateCategoryScroll} onKeyDown={(event) => {
+        const buttons = [...event.currentTarget.querySelectorAll('button')];
+        const index = buttons.indexOf(document.activeElement);
+        const target = event.key === 'ArrowRight' ? buttons[index + 1] : event.key === 'ArrowLeft' ? buttons[index - 1] : event.key === 'Home' ? buttons[0] : event.key === 'End' ? buttons.at(-1) : null;
+        if (target) { event.preventDefault(); target.focus(); }
+      }}>{categories.map(([key, label]) => <button type="button" key={key} aria-current={category === key ? 'page' : undefined} aria-controls="settings-content" onFocus={(event) => event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' })} onClick={() => selectCategory(key)}>{label}</button>)}</nav>
+      <button type="button" className="settings-nav-arrow" hidden={!categoryScroll.left && !categoryScroll.right} aria-label="向右滚动设置分类" disabled={!categoryScroll.right} onClick={() => categoryNavRef.current?.scrollBy({ left: 220 })}><ChevronRight size={15} /></button>
+    </div>
+    <div className="drawer-scroll" id="settings-content" ref={scrollRef}>
+      {category === 'general' && <>
+        <SharedSettingsPanel desktopSection="display" settings={settings} setSettings={setSettings} />
+        {window.quotaDesk?.resetWindowSize && <section className="drawer-section"><div className="drawer-section-title"><AppWindow size={16} /><span>主窗口</span></div><div className="setting-select"><span><b>窗口大小</b><small>拖动窗口边缘自由调整（最小 520 × 470），内容自动多列铺开；大小会被记住</small></span><button className="outline-button" onClick={() => window.quotaDesk.resetWindowSize()}>恢复默认大小</button></div></section>}
+        <section className="drawer-section"><div className="drawer-section-title"><Monitor size={16} /><span>桌面浮窗</span><TitleHelp>长度只调整横向宽度（60%–150%）。浮窗会展示账号的全部额度窗口（含 1M）；空间不足时会逐级收起：标签先缩成小圆点再隐藏，倒计时按周期从长到短逐个隐藏，最后才收起最长周期的额度。只有一个额度窗口的账号通常不用收起任何内容；名称放不下时会显示省略号，悬停可查看完整内容。</TitleHelp></div><Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" description="固定在桌面顶层，双击展开主窗口" /><Toggle checked={settings.widgetAutoScroll !== false} onChange={(value) => setSettings((old) => ({ ...old, widgetAutoScroll: value }))} label="自动轮换账号" description="多个账号时每隔几秒切换展示；关闭后固定当前账号，滚轮仍可手动切换" /><label className="size-slider"><span>大小</span><input type="range" min={80} max={300} step={5} value={Math.round(clampWidgetScale(settings.widgetScale) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetScale: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetScale(settings.widgetScale) * 100)}%</b></label><label className="size-slider"><span>长度</span><input type="range" min={Math.round(WIDGET_MIN_LENGTH * 100)} max={Math.round(WIDGET_MAX_LENGTH * 100)} step={5} value={Math.round(clampWidgetLength(settings.widgetLength) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetLength: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetLength(settings.widgetLength) * 100)}%</b></label><button type="button" className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetScale: 0.9, widgetLength: 0.9 }))}>恢复默认大小与长度</button><div className="widget-setting-preview"><div style={{ width: Math.round(WIDGET_BASE_SIZE.width * clampWidgetLength(settings.widgetLength)), maxWidth: '100%', margin: '0 auto' }}>{(() => { const previewAccount = accounts.find((item) => !item.disabled) ?? accounts[0]; return <WidgetRow account={previewAccount} provider={providers.find((item) => item.id === previewAccount?.providerId)} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} />; })()}</div></div><button className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetPreview: true }))}><Eye size={15} /> 预览并调整</button></section>
+        <section className="drawer-section"><div className="drawer-section-title"><Globe size={16} /><span>远程查看</span></div><RemoteViewSettings /></section>
+        <SharedSettingsPanel desktopSection="general" settings={settings} setSettings={setSettings} />
+      </>}
+      {category === 'accounts' && <>
+        <section className="drawer-section"><div className="drawer-section-title"><ShieldCheck size={16} /><span>账号与凭据</span><button className="mini-add" onClick={() => openModal('account')}><Plus size={14} /> 添加账号</button></div><div className="settings-list">{accounts.length === 0 && <div className="settings-empty">还没有账号</div>}{accounts.map((account) => <AccountRow key={account.id} account={account} provider={providers.find((item) => item.id === account.providerId)} testing={testingAccountId === account.id} onEdit={(item) => openModal({ type: 'account-edit', account: item })} onTest={onTestAccount} onToggleDisabled={onToggleAccountDisabled} onDelete={onDeleteAccount} />)}</div>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button full drawer-import-button" onClick={() => openModal('import-ccswitch')}><Download size={14} /> 从 cc-switch 导入账号</button>}</section>
+        <section className="drawer-section"><div className="drawer-section-title"><LayoutGrid size={16} /><span>厂商适配</span><button className="mini-add" onClick={() => openModal('provider')}><Plus size={14} /> 新增厂商</button></div><div className="settings-list providers-list">{providers.map((provider) => <div className="settings-account" key={provider.id}><Logo provider={provider} size="sm" /><div><b title={provider.name}>{provider.name}</b><small>{provider.requestConfig?.adapterMode === 'script' ? '脚本适配' : ['grok', 'grokbot'].includes(provider.requestConfig?.adapterMode) ? '专属适配' : '标准映射'}</small></div><button className="row-icon-button" title="编辑厂商" aria-label={`编辑 ${provider.name}`} onClick={() => onEditProvider(provider)}><Pencil size={13} /></button><span className="adapter-state"><Check size={13} /></span></div>)}</div></section>
+      </>}
+      {category === 'other' && <>
+        <section className="drawer-section"><div className="drawer-section-title"><Globe size={16} /><span>网络代理</span><TitleHelp>访问 Claude、Codex、Gemini、Grok 等境外厂商时直连常被中断，建议配置可用代理。地址以代理工具实际监听的端口为准（Clash Verge Rev 默认 mixed-port 7897）；只填写 host:port 时按 HTTP 代理处理。切换代理模式后，建议点击账号行的“刷新”验证效果。</TitleHelp></div><div className="setting-select"><span><b>代理模式</b><small>所有账号的额度请求共用，保存后立即生效</small></span><select value={proxyMode} onChange={(event) => setSettings((old) => ({ ...old, proxyMode: event.target.value }))}><option value="system">跟随系统（默认）</option><option value="manual">手动输入</option><option value="direct">不使用代理</option></select></div>{proxyMode === 'manual' && <label className="field drawer-proxy-field"><span>代理地址 <small>留空时退回跟随系统</small></span><input value={settings.proxyUrl ?? ''} onChange={(event) => setSettings((old) => ({ ...old, proxyUrl: event.target.value }))} placeholder="http://127.0.0.1:7897 或 socks5://127.0.0.1:7898" spellCheck="false" autoComplete="off" /></label>}</section>
+        <section className="drawer-section"><div className="drawer-section-title"><Database size={16} /><span>数据管理</span><TitleHelp><span>额度历史：每次成功刷新后记录一条；超过保留时长的记录会自动清理；选择“永久”时，超过 30 天的记录会自动降采样为每小时一条，删除账号也会一并删除该账号的历史。</span><br /><span>数据导入与导出：导出包含账号信息、账号凭据、自定义厂商、额度历史和周期档案；导入会合并数据并跳过重复账号与厂商。导出文件含敏感凭据，请妥善保管。</span></TitleHelp></div><div className="setting-select"><span><b>保留时长</b><small>每次成功刷新后记录，用于账号趋势图</small></span><select value={settings.historyDays} onChange={(event) => setSettings((old) => ({ ...old, historyDays: Number(event.target.value) }))}><option value={3}>3 天</option><option value={7}>7 天（默认）</option><option value={15}>15 天</option><option value={30}>30 天</option><option value={60}>60 天</option><option value={90}>3 个月（最长）</option><option value={0}>永久</option></select></div><button className="outline-button full" onClick={onClearHistory}><Trash2 size={14} /> 清除全部历史记录</button><div className="data-transfer-actions"><button type="button" className="outline-button" disabled={Boolean(dataBusy)} onClick={onExportData}><Download size={14} /> {dataBusy === 'export' ? '正在导出…' : '导出数据'}</button><button type="button" className="outline-button" disabled={Boolean(dataBusy)} onClick={onImportData}><UploadCloud size={14} /> {dataBusy === 'import' ? '正在导入…' : '导入数据'}</button></div></section>
+        <section className="drawer-section"><div className="drawer-section-title"><SquareTerminal size={16} /><span>本机用量</span></div><Toggle checked={settings.localCliUsage?.scanWsl !== false} onChange={(value) => setSettings((old) => ({ ...old, localCliUsage: { ...(old.localCliUsage || {}), scanWsl: value } }))} label="统计 WSL 用量" description="Windows 下同时扫描 WSL 各发行版内的 CLI 用量数据；仅统计运行中的发行版，未安装 WSL 时自动忽略" /></section>
+        <section className="drawer-section"><div className="drawer-section-title"><Power size={16} /><span>系统更新</span></div><Toggle checked={autoLaunch} onChange={onToggleAutoLaunch} label="开机自启" description="登录 Windows 后自动启动 Quota Desk" /><Toggle checked={settings.autoUpdate !== false} onChange={(value) => setSettings((old) => ({ ...old, autoUpdate: value }))} label="自动检查更新" description="启动时及每小时自动检查 GitHub 上是否有新版本" /><div className="setting-select"><span><b>版本更新</b><small>当前版本 v{appVersion || '-'}</small></span>{update && ['available', 'downloading', 'downloaded'].includes(update.status) ? <button className="outline-button" onClick={onOpenUpdate}>v{update.version} 可用</button> : <button className="outline-button" disabled={update?.status === 'checking'} onClick={onCheckUpdate}>{update?.status === 'checking' ? '正在检查…' : '检查更新'}</button>}</div>{settings.ignoredUpdateVersion && <div className="setting-select"><span><b>已忽略 v{settings.ignoredUpdateVersion}</b><small>该版本的更新不再主动提醒，进入设置的检查更新仍可用</small></span><button className="outline-button" onClick={() => setSettings((old) => ({ ...old, ignoredUpdateVersion: null }))}>恢复提醒</button></div>}<button type="button" className="outline-button full" onClick={onReopenOnboarding}><Sparkles size={14} /> 重新打开新手指引</button>{onOpenDevTools && <button type="button" className="outline-button full" onClick={onOpenDevTools}><Bug size={14} /> 打开调试面板（F12）</button>}</section>
+      </>}
     </div>
   </aside></>;
 }

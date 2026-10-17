@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { createDemoBridge } from '../src/demo/bridge.js';
+import { accountCountSnapshot } from '../src/demo/account-scenarios.js';
 
 const require = createRequire(import.meta.url);
 const { DatabaseSync } = require('node:sqlite');
@@ -13,6 +14,28 @@ const snapshot = JSON.parse(fs.readFileSync(new URL('../src/demo/snapshot.json',
 const now = Date.parse(snapshot.capturedAt);
 const sum = (rows, key = 'totalTokens') => rows.reduce((total, row) => total + row[key], 0);
 const query = { agent: 'all', timezone: 'Asia/Shanghai' };
+
+test('account-count previews include zero and many accounts without mutating the fixed snapshot', async () => {
+  const original = JSON.stringify(snapshot);
+  for (const value of ['0', '1', '2', '3', '8', '24', '48']) {
+    const preview = accountCountSnapshot(snapshot, value);
+    const bridge = createDemoBridge(preview, { now });
+    const state = await bridge.loadState();
+    assert.equal(state.accounts.length, Number(value));
+    assert.equal(new Set(state.accounts.map((account) => account.id)).size, Number(value));
+    assert.ok(state.accounts.every((account) => !account.disabled && account.identity.endsWith('@example.test')));
+    for (const account of state.accounts) {
+      assert.ok(Array.isArray(await bridge.getHistory(account.id)));
+      assert.ok(state.providers.some((provider) => provider.id === account.providerId));
+    }
+    if (state.accounts.length) {
+      state.accounts[0].windows.length = 0;
+      await bridge.saveState(state);
+    }
+  }
+  assert.equal(JSON.stringify(snapshot), original);
+  for (const value of [null, '', '-1', '49', '1.5', 'oops']) assert.equal(accountCountSnapshot(snapshot, value), snapshot);
+});
 
 test('capture uses explicit safe fields and never reads credentials or exports identities', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'quota-demo-test-'));
@@ -100,6 +123,8 @@ test('future preview dates keep the same values and relative reset times without
 
 test('edits and clears stay in one page session; a fresh page restores the snapshot', async () => {
   const bridge = createDemoBridge(snapshot, { now });
+  assert.deepEqual(await bridge.readCliLogins(), {});
+  await assert.rejects(bridge.importCliLogin('codex'), /不保存凭据/);
   const state = await bridge.loadState();
   const id = state.accounts[0].id;
   state.accounts[0].name = '临时编辑';

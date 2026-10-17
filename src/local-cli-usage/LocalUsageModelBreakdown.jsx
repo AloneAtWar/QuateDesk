@@ -42,8 +42,7 @@ export default function LocalUsageModelBreakdown({ report, loading, error, range
     <div className="local-cli-model-table">
       <div className="local-cli-model-header" aria-hidden="true">
         <span className="col-model">{hideAgentLabel ? '模型' : '模型 / 渠道'}</span>
-        <span className="col-bar" />
-        <span className="col-total">Token 用量</span>
+        <span className="col-usage">Token 用量</span>
         <span className="col-cache">缓存命中率</span>
         <span className="col-share">占比</span>
       </div>
@@ -70,10 +69,10 @@ export default function LocalUsageModelBreakdown({ report, loading, error, range
                     <b>{row.displayName}</b>
                     {!hideAgentLabel && <small>{agentsLine}{!canMergeModels ? '' : row.agents.length > 1 ? ` · ${row.agents.length} 个渠道` : ''}</small>}
                   </div>
-                  <div className="col-bar">
-                    <span className="local-cli-total-bar" style={{ width: `${row.totalTokens > 0 && maxTotal > 0 ? Math.max(2, Math.round((row.totalTokens / maxTotal) * 100)) : 0}%` }} />
+                  <div className="col-usage">
+                    <div className="col-bar"><span className="local-cli-total-bar" style={{ width: `${row.totalTokens > 0 && maxTotal > 0 ? Math.max(2, Math.round((row.totalTokens / maxTotal) * 100)) : 0}%` }} /></div>
+                    <div className="col-total">{formatLocalTokensCompact(row.totalTokens)}</div>
                   </div>
-                  <div className="col-total">{formatLocalTokensCompact(row.totalTokens)}</div>
                   <div className="col-cache">{ratio === null ? '—' : formatLocalPercent(ratio)}</div>
                   <div className="col-share">{formatLocalPercent(row.share)}</div>
                 </div>;

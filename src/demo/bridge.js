@@ -114,6 +114,7 @@ export function createDemoBridge(snapshot, { now = Date.now(), theme = 'dark' } 
     onStateUpdated: () => () => {},
     pollAll: async () => clone(state), pollAccount: async (id) => stateResult(id), testAccount: async (id) => stateResult(id), testDraft: unsupported,
     saveCredential: unsupported, deleteCredential: async () => true,
+    readCliLogins: async () => ({}), importCliLogin: unsupported,
     getHistory: async (id) => clone(data.history[id] || []), getCycles: async (id) => clone(data.cycles[id] || []),
     getLocalCliUsageSources: async () => clone(data.localUsage.sources), scanLocalCliUsage: async () => clone(data.localUsage.sources),
     getLocalCliUsageSummary: async (query) => summary(query), getLocalCliUsageModels: async (query) => models(query),

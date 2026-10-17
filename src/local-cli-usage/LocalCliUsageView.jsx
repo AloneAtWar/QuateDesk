@@ -225,7 +225,7 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
 
   const lastScanned = sources.find((source) => source.lastScannedAt)?.lastScannedAt;
 
-  return <section className={`${embedded ? '' : 'surface-section '}local-cli-page${embedded ? ' embedded' : ''}`}>
+  return <section className={`${embedded ? '' : 'surface-section '}local-cli-page${embedded ? ' embedded' : ''}`} data-view={activeView}>
     <div className="local-cli-page-head">
       {embedded ? <RelatedModels models={scopeMeta.matchedModels} loading={summaryBlock.loading} /> : <div className="local-cli-page-title">
         <b>本机用量</b>
