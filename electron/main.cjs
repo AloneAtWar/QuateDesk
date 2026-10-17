@@ -203,6 +203,7 @@ async function startRemoteView() {
       getCycles: (accountId) => store.getCycles(accountId),
       getUsage: (accountId) => queryProviderUsage(accountId, { days: 365 }),
       queryUsage: (accountId, options) => queryProviderUsage(accountId, options),
+      refreshAccounts: () => pollState(),
       appVersion: app.getVersion(),
       cliUsage,
     });

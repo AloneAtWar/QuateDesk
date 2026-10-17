@@ -204,7 +204,8 @@ function handleCliUsage({ pathname, url, request, response, cliUsage }) {
   return json(response, 404, { error: 'not_found' });
 }
 
-function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, pairLocalPreview, getHistory, getCycles, getUsage, queryUsage, appVersion, cliUsage, port = REMOTE_PORT, allowedHosts = [] }) {
+function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, pairLocalPreview, getHistory, getCycles, getUsage, queryUsage, refreshAccounts, appVersion, cliUsage, port = REMOTE_PORT, allowedHosts = [] }) {
+  let refreshInFlight = null;
   const hostAllowlist = new Set([...LOOPBACK_HOSTS, ...[].concat(allowedHosts)].map(normalizeHost));
   const server = http.createServer((request, response) => {
     setHeaders(response);
@@ -250,6 +251,14 @@ function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, pa
           pathname, url, request, response, scope,
           deps: { store, cliUsage, getHistory, getCycles, getUsage, queryUsage, appVersion },
         });
+      }
+      if (pathname === '/api/refresh') {
+        if (request.method !== 'POST') return json(response, 405, { error: 'method_not_supported' });
+        if (typeof refreshAccounts !== 'function') return json(response, 503, { error: 'refresh_unavailable' });
+        refreshInFlight ||= Promise.resolve().then(() => refreshAccounts()).finally(() => { refreshInFlight = null; });
+        refreshInFlight.then(() => json(response, 200, { ...publicSnapshot(store.loadState()), readOnly: true }))
+          .catch(() => json(response, 502, { error: 'refresh_failed' }));
+        return;
       }
       if (request.method === 'POST' && pathname !== '/api/cli-usage/scan') return json(response, 405, { error: 'method_not_supported' });
       if (request.method === 'PATCH') {

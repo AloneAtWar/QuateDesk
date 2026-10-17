@@ -2,6 +2,8 @@
 /* overflow-x 只挂在 html 上(传播到视口,横向裁剪不变);不能再挂到 body——那会让 body 成为
    滚动容器,position: sticky 的吸顶标题栏与钉底「即将刷新」栏都会随之失效 */
 html.remote-page { overflow-x: hidden; }
+/* Use the board's gesture instead of the browser's native pull-to-refresh. */
+html.remote-board-pull { overscroll-behavior-y: none; }
 body.remote-page { width: 100%; min-width: 0; }
 .remote-app { min-height: 100dvh; display: flex; flex-direction: column; overflow-x: clip; color: var(--ink); background: radial-gradient(circle at 50% -25%, var(--bg-grad) 0, var(--bg) 58%); }
 .remote-titlebar { position: sticky; top: 0; z-index: 15; flex: 0 0 40px; height: 40px; padding: 0 12px; }

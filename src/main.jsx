@@ -17,6 +17,9 @@ import qrcode from 'qrcode-generator';
 import { AppShell } from './app-shell';
 import { ViewMenu } from './view-menu';
 import { EmptyWorkspace } from './empty-workspace';
+import { useBoardPullRefresh } from './use-board-pull-refresh';
+import { BoardPullRefreshIndicator } from './board-pull-refresh-indicator';
+import { accountRefreshFeedback, TransientToast, useTransientToast } from './transient-toast';
 import './styles.css';
 
 const formatReset = (resetAt) => {
@@ -1846,6 +1849,7 @@ function Toggle({ checked, onChange, label, description }) {
 
 function RemoteViewSettings() {
   const bridge = window.quotaDesk;
+  const [copyToast, setCopyToast] = useTransientToast();
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -1889,6 +1893,17 @@ function RemoteViewSettings() {
   const pairingLink = status?.running && activeLanUrl && status?.pairingKey ? `${activeLanUrl}#pair=${encodeURIComponent(status.pairingKey)}` : '';
   // 本机预览走 127.0.0.1:远程页检测到回环会自动换取预览令牌,链接不再携带配对密钥
   const previewLink = status?.running && status?.localUrl ? status.localUrl : '';
+  const copyPairingLink = async () => {
+    if (!pairingLink || busy) return;
+    setBusy('copy');
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('clipboard_unavailable');
+      await navigator.clipboard.writeText(pairingLink);
+      setCopyToast({ id: Date.now(), ok: true, message: '配对链接已复制' });
+    } catch {
+      setCopyToast({ id: Date.now(), ok: false, message: '复制失败，请重试' });
+    } finally { setBusy(''); }
+  };
   const qrImage = useMemo(() => {
     if (!pairingLink) return '';
     try { const qr = qrcode(0, 'M'); qr.addData(pairingLink); qr.make(); return qr.createDataURL(4, 6); }
@@ -1912,6 +1927,7 @@ function RemoteViewSettings() {
   };
   if (!bridge?.getRemoteViewStatus) return <small className="drawer-help">远程查看设置仅在桌面应用中可用。</small>;
   return <div className="remote-setting">
+    {createPortal(<TransientToast toast={copyToast} />, document.body)}
     <Toggle checked={Boolean(status?.enabled)} onChange={(enabled) => action('toggle', () => bridge.setRemoteViewEnabled(enabled))} label="启用局域网访问" description="允许其他设备连接这台电脑，默认关闭" />
     {!status && !error && <small className="drawer-help">正在读取状态…</small>}
     <div className="remote-setting-port-row">
@@ -1936,6 +1952,7 @@ function RemoteViewSettings() {
       {pairingLink ? <>
         {lanUrls.length > 1 && <label className="field remote-qr-address-field"><span>访问设备</span><select value={activeLanUrl} onChange={(event) => setSelectedLanUrl(event.target.value)}>{lanUrls.map((url) => <option key={url} value={url}>{new URL(url).host}</option>)}</select></label>}
         <div className="remote-setting-qr">{qrImage && <img src={qrImage} alt="配对信息二维码" />}</div>
+        <button type="button" className="outline-button remote-qr-copy" disabled={Boolean(busy)} onClick={copyPairingLink}><Copy size={14} />{busy === 'copy' ? '复制中…' : '复制配对链接'}</button>
       </> : <div className="remote-qr-unavailable">启用局域网访问并连接网络后，可以生成新的配对二维码。</div>}
       <section className="remote-paired-devices">
         <div className="remote-paired-devices-head"><span><b>已配对设备</b><small>重置配对密钥不会移除这些设备</small></span><span>{pairedDevices.length} 台</span></div>
@@ -1950,7 +1967,6 @@ function RemoteViewSettings() {
       </section>
       {error && <small className="remote-setting-error" role="alert">{error}</small>}
       {confirmRotate ? <div className="remote-qr-reset-confirm"><span>只影响之后添加的设备。已配对设备仍可访问。</span><div><button type="button" className="remote-qr-reset-danger" disabled={Boolean(busy)} onClick={resetPairingKey}>{busy === 'rotate' ? '正在重置…' : '确认重置'}</button><button type="button" className="remote-qr-reset-cancel" onClick={() => setConfirmRotate(false)}>取消</button></div></div> : <button type="button" className="remote-setting-link remote-qr-reset" onClick={() => setConfirmRotate(true)}>重置配对密钥</button>}
-      {pairingLink && <small className="drawer-help">配对链接只保存在二维码中；二维码会包含本次配对密钥。</small>}
     </section></div>}
   </div>;
 }
@@ -3116,7 +3132,7 @@ function CopilotDevicePanel({ mode = 'import', reloginAccount = null, onExit, on
     }
   };
   // 「我已授权」：无倒计时——限频间隔内静默等到允许时刻再发，期间只显示「检测中…」；
-  // 结论以页面顶部的轻提示（toast）反馈，成功则直接进入第二步（界面切换即是反馈）
+  // 结论以页面底部的短暂提示反馈，成功则直接进入第二步（界面切换即是反馈）
   const checkNow = async () => {
     if (checkingRef.current) return;
     checkingRef.current = true;
@@ -3805,9 +3821,10 @@ function App() {
   const [dataBusy, setDataBusy] = useState(null);
   const [widgetIndex, setWidgetIndex] = useState(0);
   const [lastSync, setLastSync] = useState(new Date().toISOString());
-  const [desktopError, setDesktopError] = useState('');
-  const [toast, setToast] = useState(null);
-  useEffect(() => { if (!toast) return undefined; const timer = setTimeout(() => setToast(null), 4200); return () => clearTimeout(timer); }, [toast]);
+  const [toast, setToast] = useTransientToast();
+  const setDesktopError = useCallback((message) => {
+    if (message) setToast({ id: Date.now(), ok: false, message });
+  }, [setToast]);
   const [runtime, setRuntime] = useState({ running: Boolean(bridge), checking: false, nextPollAt: null });
   const [testingAccountId, setTestingAccountId] = useState(null);
   const [testResults, setTestResults] = useState({});
@@ -3879,14 +3896,14 @@ function App() {
       if (bridge) {
         const state = await bridge.pollAll();
         setAccounts(state.accounts); setLastSync(state.lastSync);
-        const failed = state.accounts.filter((account) => account.status === 'warning');
-        if (failed.length) setDesktopError(`${failed.length} 个账号检查失败，请到“账号总览”查看原因`);
+        setToast(accountRefreshFeedback(state.accounts));
       } else {
         await new Promise((resolve) => setTimeout(resolve, 500));
         setAccounts((old) => old.map((account) => ({ ...account, lastChecked: new Date().toISOString() })));
         setLastSync(new Date().toISOString());
+        setToast(accountRefreshFeedback(accounts));
       }
-    } catch (error) { setDesktopError(error.message); }
+    } catch { setToast(accountRefreshFeedback(accounts, { allFailed: true })); }
     finally { setRefreshing(false); }
   };
   const testAccount = async (account) => {
@@ -4088,7 +4105,9 @@ function App() {
     if (!inUsageView) { refreshAll(); return; }
     setRefreshing(true);
     const api = inLocalUsageView ? localUsageApiRef.current : wasteApiRef.current;
-    Promise.resolve(api?.refresh?.()).catch((error) => {
+    Promise.resolve(api?.refresh?.()).then(() => {
+      setToast({ id: Date.now(), ok: true, message: '数据已刷新' });
+    }).catch((error) => {
       setToast({ id: Date.now(), ok: false, message: error.message || '数据刷新失败' });
     }).finally(() => { setRefreshing(false); });
   };
@@ -4107,6 +4126,12 @@ function App() {
     setOnboardOpen(false);
   };
 
+  const boardPull = useBoardPullRefresh({
+    enabled: !inUsageView && !onboardOpen && accounts.length > 0 && !historyAccount && !settingsOpen && !modal && !viewMenuOpen,
+    refreshing,
+    onRefresh: refreshAll,
+  });
+
   const appShellControls = <>
     <span className="last-checked" title={inLocalUsageView ? '最后一次本机用量扫描时间' : inWasteView ? '最后一次历史周期读取时间' : '最后一次额度检查时间'}><Clock3 size={11} />{inLocalUsageView ? (localUsageMeta?.lastScannedAt ? formatChecked(localUsageMeta.lastScannedAt) : '未扫描') : inWasteView ? (wasteMeta?.loadedAt ? formatChecked(wasteMeta.loadedAt) : '未读取') : formatChecked(lastSync)}</span>
     {update && ['available', 'downloading', 'downloaded', 'error'].includes(update.status) && !(update.status === 'available' && update.version && update.version === settings.ignoredUpdateVersion) && <button className={`update-badge ${update.status}`} onClick={() => setUpdateOpen(true)} title="查看版本更新"><Download size={11} />{update.status === 'available' && `v${update.version} 可更新`}{update.status === 'downloading' && `下载中 ${update.percent || 0}%`}{update.status === 'downloaded' && '重启升级'}{update.status === 'error' && '更新失败'}</button>}
@@ -4119,9 +4144,10 @@ function App() {
   </>;
 
   return <AppShell controls={appShellControls} actions={appShellActions}>
-    {toast && <div className={`toast ${toast.ok ? 'ok' : 'fail'}`} role="status">{toast.ok ? <Check size={13} /> : <AlertCircle size={13} />}<span>{toast.message}</span></div>}
-    <main className={`main-shell${inUsageView ? ' local-usage-mode' : ''}`}>
-      <div className={`content-area${inUsageView ? ' local-usage-mode' : ''}`}>{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{inUsageView ? <StatisticsView mode={overviewMode} showNavigation={false} accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} Logo={Logo} api={bridge} onLocalApi={(api) => { localUsageApiRef.current = api; }} onLocalMeta={handleLocalUsageMeta} onWasteApi={(api) => { wasteApiRef.current = api; }} onWasteMeta={setWasteMeta} /> : onboardOpen ? <OnboardingWizard settings={settings} setSettings={setSettings} accounts={accounts} providers={providers} ccswitchAvailable={Boolean(bridge?.scanCcswitchImport) || new URLSearchParams(window.location.search).get('onboard') === '1'} onOpenImport={() => setModal('account')} onApplyCcswitch={async (keys, chosen) => {
+    <TransientToast toast={toast} />
+    <main ref={boardPull.ref} className={`main-shell${inUsageView ? ' local-usage-mode' : ''}`}>
+      <BoardPullRefreshIndicator pull={boardPull} />
+      <div className={`content-area${inUsageView ? ' local-usage-mode' : ''}`}>{inUsageView ? <StatisticsView mode={overviewMode} showNavigation={false} accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} Logo={Logo} api={bridge} onLocalApi={(api) => { localUsageApiRef.current = api; }} onLocalMeta={handleLocalUsageMeta} onWasteApi={(api) => { wasteApiRef.current = api; }} onWasteMeta={setWasteMeta} /> : onboardOpen ? <OnboardingWizard settings={settings} setSettings={setSettings} accounts={accounts} providers={providers} ccswitchAvailable={Boolean(bridge?.scanCcswitchImport) || new URLSearchParams(window.location.search).get('onboard') === '1'} onOpenImport={() => setModal('account')} onApplyCcswitch={async (keys, chosen) => {
         if (!bridge) {
           // 网页演示模式：直接把选中的模拟条目变成账号，走与真实导入一致的落库形态
           const stamp = Date.now();

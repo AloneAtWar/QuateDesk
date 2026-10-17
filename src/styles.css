@@ -368,17 +368,21 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .app-shell > .titlebar > .titlebar-actions { margin-left: 10px; }
 .titlebar-actions button { width: 25px; height: 21px; border-radius: 5px; }
 
-/* refresh-result toast under the titlebar */
+/* View menu and transient feedback. */
 .main-view-menu-dismiss { position: fixed; inset: 32px 0 0; z-index: 48; border: 0; background: transparent; }
 .main-view-anchor { position: relative; flex: 0 0 auto; }
 .main-view-anchor.open { z-index: 49; }
 .main-view-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 49; width: 124px; padding: 4px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); box-shadow: 0 8px 24px rgba(20, 40, 30, .14); }
 .main-view-menu button { width: 100%; display: flex; align-items: center; justify-content: space-between; padding: 7px 9px; border: 0; border-radius: 4px; background: transparent; color: var(--ink-soft); font-size: 11px; }
 .main-view-menu button:hover, .main-view-menu button.active { color: var(--green-deep); background: var(--green-bg); }
-.toast { position: fixed; top: 40px; left: 50%; z-index: 60; display: flex; align-items: center; gap: 6px; max-width: calc(100vw - 40px); padding: 7px 12px; border-radius: 8px; font-size: 11px; transform: translateX(-50%); animation: rise-in .2s ease-out; box-shadow: 0 10px 30px rgba(42, 58, 52, .18); }
+.toast { position: fixed; bottom: calc(56px + env(safe-area-inset-bottom, 0px)); left: 50%; z-index: 60; display: flex; align-items: center; gap: 8px; width: max-content; max-width: min(480px, calc(100vw - 32px)); padding: 10px 14px; border-radius: 10px; font-size: 12px; line-height: 1.5; transform: translateX(-50%); animation: toast-in .2s ease-out, toast-out .18s 2.82s ease-in forwards; box-shadow: 0 6px 24px rgba(20, 35, 28, .16); pointer-events: none; }
 .toast.ok { color: var(--green-deep); background: var(--green-bg); border: 1px solid var(--green-line); }
 .toast.fail { color: var(--coral-deep); background: var(--coral-bg); border: 1px solid var(--warn-border); }
-.toast span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toast > svg { flex: 0 0 auto; }
+.toast span { min-width: 0; overflow-wrap: anywhere; }
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+@keyframes toast-out { to { opacity: 0; transform: translate(-50%, 4px); } }
+@media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
 /* variable editor header + small builtin tag */
 .variable-row-head { margin-bottom: 4px; }
 .variable-row-head span { color: var(--faint); font-size: 9px; }
@@ -1705,6 +1709,16 @@ body.row-resizing, body.row-resizing * { cursor: row-resize !important; user-sel
   .local-cli-day-model-card-head small { max-width: 96px; }
   .local-cli-day-model-card em { font-size: 20px; }
 }
+.board-pull-refresh { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; overflow: hidden; color: var(--muted); transition: height 340ms cubic-bezier(.22, 1, .36, 1); }
+.board-pull-refresh.pulling { transition: none; }
+.board-pull-refresh-icon { position: relative; display: grid; place-items: center; flex: 0 0 var(--pull-icon-size); width: var(--pull-icon-size); height: var(--pull-icon-size); border-radius: 50%; background: var(--surface); opacity: 0; transform: scale(.7); transition: opacity 180ms ease, transform 240ms cubic-bezier(.22, 1, .36, 1), color 160ms ease, background 160ms ease; }
+.board-pull-refresh.pulling .board-pull-refresh-icon { opacity: 1; transform: scale(1); }
+.board-pull-refresh-ring { position: absolute; inset: 0; width: 100%; height: 100%; fill: none; stroke: var(--green); stroke-width: 1.5; stroke-linecap: round; transform: rotate(-90deg); }
+.board-pull-refresh-arrow { width: 52%; height: 52%; }
+.board-pull-refresh-ring .board-pull-refresh-track { stroke: var(--line); stroke-width: 1; }
+.board-pull-refresh.ready .board-pull-refresh-icon { color: var(--green); background: var(--green-bg); }
+@media (prefers-reduced-motion: reduce) { .board-pull-refresh, .board-pull-refresh-icon { transition: none; } }
+
 @container (min-height: 320px) {
   .local-cli-day-model-card { width: 280px; gap: 10px; padding: 14px 18px; }
   .local-cli-day-model-card b { font-size: 17px; }
