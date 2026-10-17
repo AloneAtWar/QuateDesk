@@ -1,0 +1,13 @@
+[
+  {
+    "file": "page.png",
+    "state": null,
+    "size": "1080x760",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [
+      "加载错误：Connecting to 'ws://127.0.0.1:5178/?token=zysl36Tonk0N' violates the following Content Security Policy directive: \"connect-src https: ws://localhost:*\". The action has been blocked. http://127.0.0.1:5178/@vite/client"
+    ],
+    "lint": []
+  }
+]

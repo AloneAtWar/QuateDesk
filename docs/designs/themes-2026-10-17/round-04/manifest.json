@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "project": "Quota Desk · 大胆主题探索",
+  "brief": "四套更大胆的完整皮肤。相同六个账号、相同额度和比较画布；默认亮暗主题保留。",
+  "round": "04 · 大胆主题",
+  "nativeViewport": "1200x820",
+  "candidates": [
+    {
+      "id": "acid",
+      "name": "酸性铬金",
+      "concept": "高压荧光绿与液态银相撞：像一块带金属铭牌的地下电子仪表。",
+      "typography": "Bahnschrift 重标题 / Consolas 额度；银色铭牌使用黑字，暗区使用荧光与白字。",
+      "palette": [
+        "#c5f326",
+        "#161919",
+        "#d7dce0",
+        "#e5ff98"
+      ],
+      "traits": [
+        "荧光整面背景",
+        "液态铬金铭牌",
+        "切角黑面板与强对比数字"
+      ],
+      "source": "acid.html"
+    },
+    {
+      "id": "collage",
+      "name": "街头拼贴",
+      "concept": "像把额度剪成海报贴在工作墙：黑白撕边、荧光橙胶带、错位纸层，信息仍清楚地排在纸上。",
+      "typography": "Bahnschrift 粗标题 / Segoe UI / 微软雅黑；账户名称粗黑，数字像醒目印刷。",
+      "palette": [
+        "#ff7448",
+        "#17181b",
+        "#fff9e9",
+        "#d7f15b"
+      ],
+      "traits": [
+        "橙色海报墙与斜纹",
+        "撕边纸片和胶带",
+        "黑白强对比与错位叠层"
+      ],
+      "source": "collage.html"
+    },
+    {
+      "id": "memphis",
+      "name": "孟菲斯玩具",
+      "concept": "把数据界面做成一组可触碰的玩具：紫蓝舞台、糖果色曲线、圆角厚边与凸起按钮。",
+      "typography": "Segoe UI / 微软雅黑；粗圆润标题，Bahnschrift 数字；胶囊形状态和按钮。",
+      "palette": [
+        "#3e38b5",
+        "#f0d7ef",
+        "#2e225e",
+        "#ffb75a",
+        "#5ed3c4"
+      ],
+      "traits": [
+        "紫蓝舞台和大尺度几何",
+        "厚边玩具面板",
+        "柔韧曲线与胶囊按钮"
+      ],
+      "source": "memphis.html"
+    },
+    {
+      "id": "orbital",
+      "name": "太空舱仪表",
+      "concept": "把账号变成嵌入式舱内设备：瓷白外壳、黑色仪表芯、橙色标识和硬件凹槽。",
+      "typography": "Bahnschrift 设备标题 / Consolas 仪表数字 / 微软雅黑；单色数据芯与橙色标签。",
+      "palette": [
+        "#1c2932",
+        "#dce4e4",
+        "#f7f8f0",
+        "#ec6f36",
+        "#233640"
+      ],
+      "traits": [
+        "瓷白设备壳与深色舞台",
+        "螺钉和凹槽细节",
+        "黑色仪表芯与橙色标识"
+      ],
+      "source": "orbital.html"
+    }
+  ]
+}

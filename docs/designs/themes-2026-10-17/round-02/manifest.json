@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "project": "Quota Desk · 主题设计探索",
+  "brief": "默认亮暗色继续保留。以下是三套有完整材质、字体、形状和氛围语言的额外主题；使用同一份账号数据。",
+  "round": "02 · 完整视觉主题",
+  "nativeViewport": "1200x820",
+  "candidates": [
+    {
+      "id": "blueprint",
+      "name": "工程蓝图",
+      "concept": "把额度看板变成精密仪器：细网格、制图角标、刻度圆环，共同表达正在监控的系统。",
+      "typography": "Consolas 等宽数字 / Segoe UI / 微软雅黑；标题紧凑，计量信息对齐。",
+      "palette": [
+        "#071c32",
+        "#14334c",
+        "#78d7ef",
+        "#e7f4fc"
+      ],
+      "traits": [
+        "工程网格与制图角标",
+        "硬边面板与刻度圆环",
+        "等宽数字"
+      ],
+      "source": "blueprint.html"
+    },
+    {
+      "id": "letterpress",
+      "name": "纸本编辑",
+      "concept": "像翻阅一份精心排印的额度账簿：纸张肌理、衬线标题、细墨线与印章式数据。",
+      "typography": "Georgia / 宋体用于账号标题和额度数字；Segoe UI / 微软雅黑用于操作和辅助信息。",
+      "palette": [
+        "#e8e2d6",
+        "#faf6ec",
+        "#302b26",
+        "#9b3f36"
+      ],
+      "traits": [
+        "纸张颗粒与印刷墨线",
+        "衬线标题及账簿排版",
+        "低饱和印刷色圆环"
+      ],
+      "source": "letterpress.html"
+    },
+    {
+      "id": "aurora",
+      "name": "极光玻璃",
+      "concept": "额度悬浮在夜色与极光之间：磨砂玻璃、弧光背景和透亮圆环，给桌面监控一个有氛围的外观。",
+      "typography": "Segoe UI / 微软雅黑；轻字重数字与圆润控件；标题 15px、主额度 21px。",
+      "palette": [
+        "#111223",
+        "#203b46",
+        "#aeece1",
+        "#c5b3ff"
+      ],
+      "traits": [
+        "弧形极光与磨砂玻璃",
+        "柔光边缘与悬浮表面",
+        "透亮圆环及胶囊控件"
+      ],
+      "source": "aurora.html"
+    }
+  ]
+}

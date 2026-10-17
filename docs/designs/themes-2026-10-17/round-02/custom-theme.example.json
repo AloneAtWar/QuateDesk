@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 2,
+  "id": "custom-letterpress",
+  "name": "我的纸本",
+  "version": "1.0.0",
+  "author": "Your name",
+  "description": "完整视觉主题格式的设计提案；尚未接入正式应用。",
+  "extends": "builtin.letterpress",
+  "mode": "light",
+  "colors": {
+    "window": "#E8E2D6",
+    "surface": "#FAF6EC",
+    "text": "#302B26",
+    "accent": "#9B3F36"
+  },
+  "typography": {
+    "body": ["Segoe UI", "Microsoft YaHei", "sans-serif"],
+    "heading": ["Georgia", "SimSun", "serif"],
+    "numeric": ["Georgia", "serif"]
+  },
+  "shape": {
+    "cardRadius": 0,
+    "controlRadius": 2,
+    "tagRadius": 2,
+    "borderWidth": 1
+  },
+  "material": {
+    "preset": "paper",
+    "textureOpacity": 0.05,
+    "surfaceOpacity": 1,
+    "blur": 0,
+    "shadowPreset": "offset-paper"
+  },
+  "charts": {
+    "rings": ["#538B87", "#8C839B", "#B2634D", "#7C8957"],
+    "ringWidth": 6,
+    "outerDecoration": "fine-rule"
+  },
+  "widget": {
+    "material": "solid",
+    "background": "#F3ECDF",
+    "text": "#302B26"
+  },
+  "assets": {},
+  "capabilities": ["paper-texture", "offset-shadow"]
+}

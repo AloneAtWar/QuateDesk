@@ -1,0 +1,55 @@
+[
+  {
+    "file": "stitch.png",
+    "width": 1344,
+    "height": 1028,
+    "columns": 2,
+    "items": [
+      {
+        "naturalWidth": 1080,
+        "naturalHeight": 760,
+        "width": 640,
+        "height": 450,
+        "labelHeight": 32,
+        "x": 24,
+        "y": 24,
+        "label": "松墨",
+        "labelY": 482
+      },
+      {
+        "naturalWidth": 1080,
+        "naturalHeight": 760,
+        "width": 640,
+        "height": 450,
+        "labelHeight": 32,
+        "x": 680,
+        "y": 24,
+        "label": "瓷白",
+        "labelY": 482
+      },
+      {
+        "naturalWidth": 1080,
+        "naturalHeight": 760,
+        "width": 640,
+        "height": 450,
+        "labelHeight": 32,
+        "x": 24,
+        "y": 522,
+        "label": "深海",
+        "labelY": 980
+      },
+      {
+        "naturalWidth": 1080,
+        "naturalHeight": 760,
+        "width": 640,
+        "height": 450,
+        "labelHeight": 32,
+        "x": 680,
+        "y": 522,
+        "label": "暖砂",
+        "labelY": 980
+      }
+    ],
+    "issues": []
+  }
+]

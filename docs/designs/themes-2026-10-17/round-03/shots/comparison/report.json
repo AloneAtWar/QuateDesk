@@ -1,0 +1,55 @@
+[
+  {
+    "file": "stitch.png",
+    "width": 1344,
+    "height": 1002,
+    "columns": 2,
+    "items": [
+      {
+        "naturalWidth": 1200,
+        "naturalHeight": 820,
+        "width": 640,
+        "height": 437,
+        "labelHeight": 32,
+        "x": 24,
+        "y": 24,
+        "label": "像素终端",
+        "labelY": 469
+      },
+      {
+        "naturalWidth": 1200,
+        "naturalHeight": 820,
+        "width": 640,
+        "height": 437,
+        "labelHeight": 32,
+        "x": 680,
+        "y": 24,
+        "label": "几何构成",
+        "labelY": 469
+      },
+      {
+        "naturalWidth": 1200,
+        "naturalHeight": 820,
+        "width": 640,
+        "height": 437,
+        "labelHeight": 32,
+        "x": 24,
+        "y": 509,
+        "label": "漫画波普",
+        "labelY": 954
+      },
+      {
+        "naturalWidth": 1200,
+        "naturalHeight": 820,
+        "width": 640,
+        "height": 437,
+        "labelHeight": 32,
+        "x": 680,
+        "y": 509,
+        "label": "静谧水墨",
+        "labelY": 954
+      }
+    ],
+    "issues": []
+  }
+]

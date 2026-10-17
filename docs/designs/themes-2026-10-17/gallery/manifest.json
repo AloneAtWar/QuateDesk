@@ -1,0 +1,389 @@
+{
+  "schemaVersion": 1,
+  "project": "Quota Desk · 全部主题设计合集",
+  "brief": "五轮共 16 套主题，另含主题选择、自定义编辑稿及完整设计说明。全部资源内嵌，可离线查看；用单张模式按实际尺寸放大比较。",
+  "round": "全部设计 · 01—05",
+  "nativeViewport": "1200x820",
+  "candidates": [
+    {
+      "id": "r1-pine",
+      "name": "松墨",
+      "concept": "保留熟悉的松墨底色，让额度和倒计时始终先被看见。",
+      "typography": "沿用项目 Manrope / Noto Sans SC；字体不可用时使用系统无衬线字体",
+      "palette": [
+        "#141d1f",
+        "#1a2527",
+        "#e8efeb",
+        "#dfeae5"
+      ],
+      "traits": [
+        "01 · 配色基础稿",
+        "深色主题",
+        "原有深色的延续 · 低调青绿",
+        "现有布局与圆环原色"
+      ],
+      "source": "../pine.html",
+      "nativeViewport": "1080x760"
+    },
+    {
+      "id": "r2-porcelain",
+      "name": "瓷白",
+      "concept": "像桌面上的一张干净报表，白天阅读时层次清楚。",
+      "typography": "沿用项目 Manrope / Noto Sans SC；字体不可用时使用系统无衬线字体",
+      "palette": [
+        "#eef1f5",
+        "#ffffff",
+        "#202c3c",
+        "#284f80"
+      ],
+      "traits": [
+        "01 · 配色基础稿",
+        "浅色主题",
+        "中性冷白 · 清晰利落",
+        "现有布局与圆环原色"
+      ],
+      "source": "../porcelain.html",
+      "nativeViewport": "1080x760"
+    },
+    {
+      "id": "r3-ocean",
+      "name": "深海",
+      "concept": "降低大面积绿色的存在感，用海军蓝托住原有多色圆环。",
+      "typography": "沿用项目 Manrope / Noto Sans SC；字体不可用时使用系统无衬线字体",
+      "palette": [
+        "#0e1627",
+        "#172238",
+        "#e8eef9",
+        "#b9d4ff"
+      ],
+      "traits": [
+        "01 · 配色基础稿",
+        "深色主题",
+        "海军蓝底 · 冷静专注",
+        "现有布局与圆环原色"
+      ],
+      "source": "../ocean.html",
+      "nativeViewport": "1080x760"
+    },
+    {
+      "id": "r4-sand",
+      "name": "暖砂",
+      "concept": "用低饱和暖纸色减轻白底的刺眼感，不给监控界面增加装饰。",
+      "typography": "沿用项目 Manrope / Noto Sans SC；字体不可用时使用系统无衬线字体",
+      "palette": [
+        "#eee8dd",
+        "#fbf8f1",
+        "#382f28",
+        "#70553c"
+      ],
+      "traits": [
+        "01 · 配色基础稿",
+        "浅色主题",
+        "暖纸底色 · 柔和耐看",
+        "现有布局与圆环原色"
+      ],
+      "source": "../sand.html",
+      "nativeViewport": "1080x760"
+    },
+    {
+      "id": "r5-blueprint",
+      "name": "工程蓝图",
+      "concept": "把额度看板变成精密仪器：细网格、制图角标、刻度圆环，共同表达正在监控的系统。",
+      "typography": "Consolas 等宽数字 / Segoe UI / 微软雅黑；标题紧凑，计量信息对齐。",
+      "palette": [
+        "#071c32",
+        "#14334c",
+        "#78d7ef",
+        "#e7f4fc"
+      ],
+      "traits": [
+        "02 · 完整视觉主题",
+        "工程网格与制图角标",
+        "硬边面板与刻度圆环",
+        "等宽数字"
+      ],
+      "source": "../round-02/blueprint.html",
+      "nativeViewport": "1200x820"
+    },
+    {
+      "id": "r6-letterpress",
+      "name": "纸本编辑",
+      "concept": "像翻阅一份精心排印的额度账簿：纸张肌理、衬线标题、细墨线与印章式数据。",
+      "typography": "Georgia / 宋体用于账号标题和额度数字；Segoe UI / 微软雅黑用于操作和辅助信息。",
+      "palette": [
+        "#e8e2d6",
+        "#faf6ec",
+        "#302b26",
+        "#9b3f36"
+      ],
+      "traits": [
+        "02 · 完整视觉主题",
+        "纸张颗粒与印刷墨线",
+        "衬线标题及账簿排版",
+        "低饱和印刷色圆环"
+      ],
+      "source": "../round-02/letterpress.html",
+      "nativeViewport": "1200x820"
+    },
+    {
+      "id": "r7-aurora",
+      "name": "极光玻璃",
+      "concept": "额度悬浮在夜色与极光之间：磨砂玻璃、弧光背景和透亮圆环，给桌面监控一个有氛围的外观。",
+      "typography": "Segoe UI / 微软雅黑；轻字重数字与圆润控件；标题 15px、主额度 21px。",
+      "palette": [
+        "#111223",
+        "#203b46",
+        "#aeece1",
+        "#c5b3ff"
+      ],
+      "traits": [
+        "02 · 完整视觉主题",
+        "弧形极光与磨砂玻璃",
+        "柔光边缘与悬浮表面",
+        "透亮圆环及胶囊控件"
+      ],
+      "source": "../round-02/aurora.html",
+      "nativeViewport": "1200x820"
+    },
+    {
+      "id": "r8-terminal",
+      "name": "像素终端",
+      "concept": "让额度像运行中的程序状态：阶梯边角、荧光数字、控制台边框，带一点复古游戏感。",
+      "typography": "Consolas / 微软雅黑；等宽额度，方形标签，终端反白标题。",
+      "palette": [
+        "#101811",
+        "#1c2b1b",
+        "#c9ef82",
+        "#ffbd69"
+      ],
+      "traits": [
+        "03 · 更多风格",
+        "阶梯边角与像素点阵",
+        "终端反白标题",
+        "荧光数字与方形控件"
+      ],
+      "source": "../round-03/terminal.html",
+      "nativeViewport": "1200x820"
+    },
+    {
+      "id": "r9-bauhaus",
+      "name": "几何构成",
+      "concept": "用包豪斯的几何秩序组织额度：红黄蓝计量、粗细线条与结构化白面板。",
+      "typography": "Bahnschrift / 微软雅黑；几何无衬线标题，粗额度数字，平直控件。",
+      "palette": [
+        "#efece4",
+        "#fffdf7",
+        "#20221e",
+        "#c34633",
+        "#e1b547",
+        "#3566a2"
+      ],
+      "traits": [
+        "03 · 更多风格",
+        "几何原色与构成背景",
+        "黑色硬边与结构线",
+        "几何无衬线数字"
+      ],
+      "source": "../round-03/bauhaus.html",
+      "nativeViewport": "1200x820"
+    },
+    {
+      "id": "r10-pop",
+      "name": "漫画波普",
+      "concept": "把高频工具做得有精神：网点纸、粗墨线、贴纸标签和硬阴影，数据保持水平清楚。",
+      "typography": "Bahnschrift / 微软雅黑；厚标题、粗额度、漫画气泡式标签。",
+      "palette": [
+        "#f7e6ec",
+        "#fffaf0",
+        "#292339",
+        "#e9bd3b",
+        "#b04c83",
+        "#4084a1"
+      ],
+      "traits": [
+        "03 · 更多风格",
+        "漫画网点与粗墨线",
+        "贴纸卡片和硬阴影",
+        "气泡标签与明亮圆环"
+      ],
+      "source": "../round-03/pop.html",
+      "nativeViewport": "1200x820"
+    },
+    {
+      "id": "r11-ink",
+      "name": "静谧水墨",
+      "concept": "以水墨的虚实承托监控信息：雾白、墨池、朱砂小印，表面轻，额度清。",
+      "typography": "楷体标题 / 微软雅黑正文 / Georgia 数字；素面控件与朱砂标签。",
+      "palette": [
+        "#e6ebe5",
+        "#f7f9f3",
+        "#2c3933",
+        "#67816f",
+        "#9d4b3d"
+      ],
+      "traits": [
+        "03 · 更多风格",
+        "雾白留空与墨色晕染",
+        "楷体标题及朱砂小印",
+        "极细轮廓和柔边面板"
+      ],
+      "source": "../round-03/ink.html",
+      "nativeViewport": "1200x820"
+    },
+    {
+      "id": "r12-acid",
+      "name": "酸性铬金",
+      "concept": "高压荧光绿与液态银相撞：像一块带金属铭牌的地下电子仪表。",
+      "typography": "Bahnschrift 重标题 / Consolas 额度；银色铭牌使用黑字，暗区使用荧光与白字。",
+      "palette": [
+        "#c5f326",
+        "#161919",
+        "#d7dce0",
+        "#e5ff98"
+      ],
+      "traits": [
+        "04 · 大胆主题",
+        "荧光整面背景",
+        "液态铬金铭牌",
+        "切角黑面板与强对比数字"
+      ],
+      "source": "../round-04/acid.html",
+      "nativeViewport": "1200x820"
+    },
+    {
+      "id": "r13-collage",
+      "name": "街头拼贴",
+      "concept": "像把额度剪成海报贴在工作墙：黑白撕边、荧光橙胶带、错位纸层，信息仍清楚地排在纸上。",
+      "typography": "Bahnschrift 粗标题 / Segoe UI / 微软雅黑；账户名称粗黑，数字像醒目印刷。",
+      "palette": [
+        "#ff7448",
+        "#17181b",
+        "#fff9e9",
+        "#d7f15b"
+      ],
+      "traits": [
+        "04 · 大胆主题",
+        "橙色海报墙与斜纹",
+        "撕边纸片和胶带",
+        "黑白强对比与错位叠层"
+      ],
+      "source": "../round-04/collage.html",
+      "nativeViewport": "1200x820"
+    },
+    {
+      "id": "r14-memphis",
+      "name": "孟菲斯玩具",
+      "concept": "把数据界面做成一组可触碰的玩具：紫蓝舞台、糖果色曲线、圆角厚边与凸起按钮。",
+      "typography": "Segoe UI / 微软雅黑；粗圆润标题，Bahnschrift 数字；胶囊形状态和按钮。",
+      "palette": [
+        "#3e38b5",
+        "#f0d7ef",
+        "#2e225e",
+        "#ffb75a",
+        "#5ed3c4"
+      ],
+      "traits": [
+        "04 · 大胆主题",
+        "紫蓝舞台和大尺度几何",
+        "厚边玩具面板",
+        "柔韧曲线与胶囊按钮"
+      ],
+      "source": "../round-04/memphis.html",
+      "nativeViewport": "1200x820"
+    },
+    {
+      "id": "r15-orbital",
+      "name": "太空舱仪表",
+      "concept": "把账号变成嵌入式舱内设备：瓷白外壳、黑色仪表芯、橙色标识和硬件凹槽。",
+      "typography": "Bahnschrift 设备标题 / Consolas 仪表数字 / 微软雅黑；单色数据芯与橙色标签。",
+      "palette": [
+        "#1c2932",
+        "#dce4e4",
+        "#f7f8f0",
+        "#ec6f36",
+        "#233640"
+      ],
+      "traits": [
+        "04 · 大胆主题",
+        "瓷白设备壳与深色舞台",
+        "螺钉和凹槽细节",
+        "黑色仪表芯与橙色标识"
+      ],
+      "source": "../round-04/orbital.html",
+      "nativeViewport": "1200x820"
+    },
+    {
+      "id": "r16-street-signal",
+      "name": "街区信号",
+      "concept": "让额度监控像一台来自街区录像店的终端：黑灰设备壳、荧光黄铭牌与唱片式仪表。",
+      "typography": "Bahnschrift 压缩粗体及斜体数字 / Segoe UI / 微软雅黑，中文优先保证可读。",
+      "palette": [
+        "#171916",
+        "#2b2d2a",
+        "#d7f84a",
+        "#dfe3d7"
+      ],
+      "traits": [
+        "05 · 绝区零风格",
+        "厚设备边框与圆角铭牌",
+        "荧光黄选中态",
+        "唱片仪表和电视菜单式控件"
+      ],
+      "source": "../round-05-zenless/street-signal.html",
+      "nativeViewport": "1200x820"
+    },
+    {
+      "id": "theme-picker",
+      "name": "主题选择设置稿",
+      "concept": "最初的设置入口与主题库布局，后续主题内容已扩展。",
+      "typography": "沿用项目字体",
+      "palette": [
+        "#141d1f",
+        "#1a2527",
+        "#e8efeb"
+      ],
+      "traits": [
+        "功能界面设计稿",
+        "静态状态"
+      ],
+      "nativeViewport": "1080x760",
+      "source": "../theme-picker.html"
+    },
+    {
+      "id": "theme-custom",
+      "name": "自定义主题编辑稿",
+      "concept": "最初的编辑界面；完整皮肤能力与导入格式见设计说明。",
+      "typography": "沿用项目字体",
+      "palette": [
+        "#141d1f",
+        "#1a2527",
+        "#e8efeb"
+      ],
+      "traits": [
+        "功能界面设计稿",
+        "静态状态"
+      ],
+      "nativeViewport": "1080x760",
+      "source": "../theme-custom.html"
+    },
+    {
+      "id": "design-notes",
+      "name": "设计说明与主题规范",
+      "concept": "汇总全部设计说明、自定义主题包内容、参数样例、样式插槽及早期颜色配置。可点击展开全文。",
+      "typography": "系统中文字体 / Consolas",
+      "palette": [
+        "#f5f5f2",
+        "#ffffff",
+        "#252924"
+      ],
+      "traits": [
+        "设计说明全文",
+        "自定义主题规范",
+        "历史提案与样例"
+      ],
+      "nativeViewport": "1200x820",
+      "interactive": true,
+      "source": "design-notes.html"
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+[
+  {
+    "file": "stitch.png",
+    "width": 1344,
+    "height": 1002,
+    "columns": 2,
+    "items": [
+      {
+        "naturalWidth": 1200,
+        "naturalHeight": 820,
+        "width": 640,
+        "height": 437,
+        "labelHeight": 32,
+        "x": 24,
+        "y": 24,
+        "label": "酸性铬金",
+        "labelY": 469
+      },
+      {
+        "naturalWidth": 1200,
+        "naturalHeight": 820,
+        "width": 640,
+        "height": 437,
+        "labelHeight": 32,
+        "x": 680,
+        "y": 24,
+        "label": "街头拼贴",
+        "labelY": 469
+      },
+      {
+        "naturalWidth": 1200,
+        "naturalHeight": 820,
+        "width": 640,
+        "height": 437,
+        "labelHeight": 32,
+        "x": 24,
+        "y": 509,
+        "label": "孟菲斯玩具",
+        "labelY": 954
+      },
+      {
+        "naturalWidth": 1200,
+        "naturalHeight": 820,
+        "width": 640,
+        "height": 437,
+        "labelHeight": 32,
+        "x": 680,
+        "y": 509,
+        "label": "太空舱仪表",
+        "labelY": 954
+      }
+    ],
+    "issues": []
+  }
+]

@@ -1,0 +1,50 @@
+[
+  {
+    "file": "page.png",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [
+      "图片没加载出来：",
+      "图片没加载出来：",
+      "图片没加载出来：",
+      "图片没加载出来：",
+      "图片没加载出来：",
+      "图片没加载出来：",
+      "图片没加载出来：",
+      "图片没加载出来：",
+      "图片没加载出来：",
+      "图片没加载出来：",
+      "图片没加载出来：",
+      "WebGL：绘图上下文丢失 1 次"
+    ],
+    "lint": [
+      {
+        "rule": "smallText",
+        "label": "正文小于 13px",
+        "count": 2,
+        "examples": [
+          "div.home-video__summary-title「Phoenix Character Demo -」（11.8125px）",
+          "p「Epic, Epic Games, Epic G」（12px）"
+        ]
+      },
+      {
+        "rule": "tightLeading",
+        "label": "多行正文行高过紧",
+        "count": 1,
+        "examples": [
+          "div.home-video__summary-title「Phoenix Character Demo -」（1.10）"
+        ]
+      },
+      {
+        "rule": "longMeasure",
+        "label": "正文行太长",
+        "count": 1,
+        "examples": [
+          "p「Epic, Epic Games, Epic G」（每行约 180 个字符）"
+        ]
+      }
+    ]
+  }
+]

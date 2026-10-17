@@ -1,0 +1,17 @@
+/* 公开主题接口提案，当前项目尚未提供这些 hooks。
+   放入完整包并在 manifest 中声明 stylesheet: "theme.css" 后才加载。
+   此文件不覆盖布局、业务对象与交互命中范围。 */
+[data-qd-theme="custom-letterpress"] [data-theme-part="surface-account"] {
+  border-radius: 0;
+  border: 1px solid var(--qd-border);
+  background: var(--qd-surface);
+  box-shadow: 3px 4px 0 rgb(80 60 30 / 12%);
+}
+[data-qd-theme="custom-letterpress"] [data-theme-part="account-heading"] {
+  font-family: var(--qd-font-heading);
+  font-weight: 600;
+}
+[data-qd-theme="custom-letterpress"] [data-theme-part="quota-core"] {
+  border: 1px solid var(--qd-border-strong);
+  box-shadow: inset 0 0 0 3px var(--qd-surface);
+}

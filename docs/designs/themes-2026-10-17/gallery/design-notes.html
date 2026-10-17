@@ -1,0 +1,670 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>设计说明与主题规范</title><style>body{margin:0;background:#f5f5f2;color:#252924;font:15px/1.75 'Segoe UI','Microsoft YaHei',sans-serif}main{max-width:1000px;margin:auto;padding:32px}h1{font-size:24px;margin:0 0 8px}p{color:#535b53}details{margin:14px 0;border:1px solid #ccd3c8;border-radius:8px;background:white}summary{padding:15px 18px;cursor:pointer;font-weight:600}pre{border-top:1px solid #dce1d8;margin:0;padding:20px;white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.8 Consolas,'Microsoft YaHei',monospace}details:first-of-type{border-color:#8aa37c}</style></head><body><main><h1>设计说明与自定义主题规范</h1><p>共 16 套主题、2 张设置稿。所有候选均为静态设计，未接入正式应用。第一轮格式是历史配色提案，完整皮肤设计以第二轮及后续说明为准。点击条目展开全文。</p><details><summary>完整主题设计与自定义主题包规范</summary><pre># Quota Desk：完整视觉主题提案 · 第二轮
+
+阶段：主题首屏效果探索；未接入正式应用。第一轮配色稿已被本轮方向取代，第一轮 JSON 格式也不作为最终约束。
+
+## 设计目标
+
+保留当前亮色、暗色作为「默认」主题的两个模式；额外主题提供完整的视觉语言，不再只是换色。用户首要任务仍是扫视账号、剩余额度和重置时间。设计北极星：**让桌面看板有个性，同时让额度比装饰更容易被看到。**
+
+品类是桌面额度监控工具，不是宣传页。真实内容沿用项目浏览器演示快照的六个匿名账号，同一批数据用于三个候选。账号 Logo、对象顺序、额度单位、周期与连接状态保留。为了在一张图上展示材质与字形，本轮统一使用 1200×820、三列两行和放大后的阅读字号；这是比较用画布，未决定主题可以改变正式应用的网格布局。
+
+项目现有 DESIGN.md 是默认主题的基线。本轮用户明确要求探索额外主题，字体、表面、形状和视觉效果属于探索范围；不覆盖已确认的默认主题约定。
+
+## 三套新主题
+
+| 主题 | 引擎与识别点 | 字体和控件 | 边界 |
+| --- | --- | --- | --- |
+| 工程蓝图 | 从「监控仪器」出发；细网格、制图角标、刻度圆环；硬边半透明面板 | Consolas 等宽数字、直角按钮、细线分区 | 背景线不得穿过正文；角标只做表面装饰 |
+| 纸本编辑 | 从「额度账簿」出发；纸张颗粒、墨线、偏移纸页阴影 | Georgia / 宋体账号标题与数字，印章式标签 | 纹理透明度低；文字与金额保持锐利完整 |
+| 极光玻璃 | 从「常驻桌面的环境光」出发；弧光背景、磨砂表面、透亮圆环 | 轻字重额度、圆润卡片、胶囊控件 | 卡片有稳定底色；不让壁纸决定文字对比度 |
+
+这是同一功能的三套主题，不是三套产品架构，因此有意保持账号内容、导航与卡片网格相同；差异体现在材质、字体、轮廓、控件和图形处理。图像不承担业务信息，本轮用 CSS 与内嵌 SVG 制作几何弧光和纸纹，不需要额外生成位图，也不依赖网络图片或字体下载。
+
+## 内置主题怎么组织
+
+建议首批：默认（已有亮/暗）、工程蓝图（暗）、纸本编辑（亮）、极光玻璃（暗）。不要为每个主题机械生成深浅两版，材质不一定在相反明暗下成立。选择器将「主题」与「明暗策略」分开：
+
+- 主题库：卡片展示真实缩略图、名称、支持的亮/暗模式；默认主题原样保留。
+- 明暗策略：手动明暗或跟随系统。跟随系统时分别记住用户选定的浅色主题和深色主题，避免把纸本强行反色。
+- 桌面浮窗默认沿用主窗口主题，主题作者需提供浮窗视觉；远程页面保留单独偏好，缺字体或图形能力时使用继承主题回退。
+- 入口继续放在「设置 → 通用 → 外观显示」，不新增主导航。创建和导入后先预览，保存并应用后才写入配置。
+
+## 自定义主题要放什么
+
+建议同时支持简单 JSON 和完整 `.qdtheme` 包（ZIP 容器），使用同一份 manifest。完整包如下：
+
+```text
+my-theme.qdtheme
+├─ theme.json          必需：身份、继承关系、样式参数与能力声明
+├─ theme.css           可选：进阶表面、图形与控件皮肤
+├─ preview.png         可选：作者预览，导入后仍生成本机实际缩略图
+└─ assets/             可选：背景、纸纹、字体和装饰 SVG
+   ├─ paper.webp
+   ├─ backdrop.webp
+   └─ display.woff2
+```
+
+没有图像也可以制作完整主题，工程网格、弧光、纸纹均可由预设效果实现。不要要求每个主题作者提交整套界面截图、每个厂商 Logo 或背景壁纸。图片是可选风格资产，不是主题成立的必要条件。
+
+### theme.json 的内容分层
+
+| 层 | 内容 | 缺省行为 |
+| --- | --- | --- |
+| 身份 | schemaVersion、id、name、version、author、description | 名称等核心身份必填，其余可选 |
+| 继承与模式 | extends、mode、主题包最低宿主版本 | 只能继承内置主题，先不支持任意继承链 |
+| 颜色 | 窗口、各层表面、文字四层、边框、控件、强调、焦点 | 只覆盖填写项，继承其余值 |
+| 字体 | 正文、标题、数字字族；本地字体资源和系统回退 | 正文使用系统中文字体；保留用户字号偏好 |
+| 形状 | 卡片/按钮/输入/标签的圆角、描边宽度与样式 | 继承现有组件，不暴露任意布局规则 |
+| 材质与效果 | solid / paper / glass / blueprint；纹理强度、透明度、模糊、阴影、发光 | 无素材和效果支持时回退实色表面 |
+| 图表 | 圆环颜色与粗细、轨道、外缘刻度、模型图颜色 | 默认沿用原来按圆环层级的颜色，不能按周期自动重排 |
+| 状态 | 正常/告警/不可用的前景、背景和边线 | 状态文本与图标保留；告警不只靠颜色区分 |
+| 浮窗 | 背景、行表面、标签、数值、材质强度 | 继承主主题，可专门减少模糊与阴影 |
+| 素材与能力 | assets 路径、preview、stylesheet、使用的效果类型 | 相对路径引用包内文件，素材缺失时回退继承值 |
+
+### 两种作者体验
+
+普通用户：从内置主题复制，使用颜色、圆角、字体选择和材质强度滑杆，导出一个 JSON 即可。材质选项只显示当前预设支持的字段，不把所有 CSS 参数摊给用户。
+
+进阶作者：添加 theme.css 和 assets，覆盖宿主公开的主题插槽。CSS 是高级可选项，JSON 参数是稳定接口。作者不需要了解每个 React 组件的私有类名。
+
+建议公开的插槽：app-background、titlebar、surface-account、quota-ring、quota-track、quota-core、control、input、tag、drawer、dialog、tooltip、chart、widget、ticker。伪元素用于网格/角标/纹理等装饰。字体、颜色、圆角和层级由稳定变量连接这些插槽。
+
+主题 CSS 限定在根部主题作用域及公开插槽内；设置抽屉和 portal 弹层也必须获得相同作用域。主题不能控制对象顺序、网格列数、可见性、按钮命中范围或真实数据。样式和素材使用包内资源，不装入脚本或外部资源。导入时报告不支持的字段与缺失素材，不默默吞掉整份配置。
+
+### 预览、保存与失败恢复
+
+1. 创建/导入后显示草稿，不立即替换已保存主题。
+2. 预览主看板、告警账号、抽屉、输入焦点、图表、浮窗及缺素材状态。
+3. 检查文字和控件在实际表面上的对比度；玻璃主题检查背景最亮处，纸纹检查纹理最深处。
+4. 有问题时定位到具体颜色或素材；输入和草稿保留，可以恢复继承值。
+5. 保存成功才应用到持久配置；失败继续停留在草稿。取消预览、Esc 或重新启动应恢复上次保存主题。
+6. id 重复时允许覆盖已安装版本或另存副本；更新包保留用户选中的主题引用。删除当前自定义主题回退到默认同明暗版本。
+
+### 动效提案
+
+正式实现时：主题切换的表面过渡约 180ms；主题卡片选中态约 120ms；预览展开约 180ms。不常驻播放扫描、闪烁或漂移，不在每次额度刷新时重新播放装饰。遵守系统减少动态效果偏好。本轮是静态首屏，未实现或验证这些动效。
+
+## 交付与验证
+
+- `style-explorer.html`：三套首屏对比，可单张放大查看；无需运行项目。
+- `blueprint.html` / `letterpress.html` / `aurora.html`：独立 HTML 效果稿。
+- `shots/&lt;主题&gt;/page.png`：1200×820 的实际浏览器截图。
+- `custom-theme.example.json`：扩展格式的内容样例，尚不是正式导入接口；字段以未来实现时的 schema 为准。
+- `theme-hooks.example.css`：公开主题插槽的高级皮肤样例，尚未接入项目。
+
+主 Agent 自查三套截图，修正金额裁切与首屏空隙；没有独立评审。首屏探索阶段不做业务交互、动效、响应式、生产构建或全量测试。截图工具未报页面横向溢出、控制台错误或图片加载失败。原有账号副标题、时间和底栏仍采用高密度工具的小字，未扩大本次范围去改默认产品字号。界面只补充「账号看板 / 6 个账号」作为共同阅读上下文，没有宣传口号或重复解释；没有额外需要删减的营销文案。
+
+未更改业务源文件、路由、入口或根目录 DESIGN.md。额外主题、作者接口与动效均待用户选定方向后落地。第一轮设置稿仅保留入口位置参考，其「只改颜色」的编辑范围由本说明取代。
+</pre></details><details><summary>第三轮设计说明</summary><pre># Quota Desk 主题探索 · 第三轮
+
+用户要求在第二轮之外继续比较其他风格。本轮交付四套静态首屏，未选定正式主题，未改业务代码或根目录 DESIGN.md。
+
+北极星：在保留账号、额度、周期与重置时间的前提下，让每套主题在字体、图形、卡片、控件和背景上有完整的性格。
+
+默认亮暗主题继续保留。三列两行、1200×820、六个匿名账号沿用第二轮比较画布，方便直接对照；不是给正式应用新增的布局约束。数据来自同一份浏览器演示快照。
+
+| 候选 | 视觉来源与具体选择 | 更适合的偏好 |
+| --- | --- | --- |
+| 像素终端 | 复古控制台；荧光数字、阶梯边角、点阵背景、等宽排字、方形标签。当前字体为 Consolas，并非定制像素字库 | 喜欢终端和复古游戏的开发者 |
+| 几何构成 | 包豪斯几何语法；原色圆环、粗细线条、黑色硬阴影、几何无衬线数字 | 喜欢明确秩序和图形感 |
+| 漫画波普 | 网点印刷；粗墨边、贴纸卡片、气泡标签和背景爆炸形。数据本身不旋转或变形 | 想让桌面工具更活泼、有趣 |
+| 静谧水墨 | 水墨虚实；雾白表面、墨色晕染、楷体标题、朱砂小印、细轮廓 | 喜欢东方文字与安静材质 |
+
+本轮刻意沿用相同导航、对象顺序与额度层级，只比较皮肤，不引入新任务路径。Logo 保留原图；图标沿用现有图标体系，只改变外层控件造型。圆环配色按既有层级映射，不改周期和业务含义。
+
+建议优先从「像素终端」与「漫画波普」挑选：它们与默认主题和上一轮候选的差距最大。若作为一套内置主题库，「几何构成」适合提供有图形感的日间款，「静谧水墨」适合东方审美款。这里是设计判断，不是用户已作出的选择。
+
+## 对自定义主题能力的补充
+
+继续沿用第二轮的 theme.json + 可选 theme.css + 可选 assets 方案。本轮进一步说明应覆盖的参数：
+
+- 边角语言：直角、阶梯式边角、不对称圆角；由预设或样式插槽实现，不改变命中区域。
+- 图形背景：点阵、网点、几何构成、墨色层。装饰独立于业务内容，不占布局位置、不截获点击。
+- 表面语言：线条粗细、虚实线、硬偏移阴影、微弱墨色投影、内边缘。
+- 字体角色：中文标题、账号标题、正文、数字分别可指定字体与回退。不要靠全局字体替换来实现所有角色。
+- 标签与状态：气泡、印章、反白矩形等外形可变；状态文案和图标始终保留。
+- 图表外观：调色和轨道可变，进度计算与周期映射不变；不能为了主题造型改变额度读取方式。
+
+这些方向均可用代码生成几何形状，不必让用户提供图片；手绘墨迹、专用像素字体等独有资产才需要额外放入 assets。当前截图中的点阵、网点与墨色均为 CSS，不使用外部图片或字体下载。
+
+## 检查与交付边界
+
+- 四个独立 HTML 已以 1200×820 在真实浏览器截图，主 Agent 逐张查看，金额、周期、重置时间没有发现裁切。
+- 截图工具未报告控制台错误、横向溢出、图片加载失败或新增可读性提示。
+- 高密度账号副标题和底栏保留原有小字；点阵、网点与硬阴影是主动保留的主题语言，正文区域使用稳定实色面板。
+- 本轮未做独立评审、交互、响应式或动效，不宣称正式功能可用。没有新增或修改生产源码，不需要运行生产构建或业务测试。
+- 动效留待方向选定后处理；终端版目前没有闪烁、扫描或字符动画。未来遵守减少动态效果偏好。
+- 本轮没有营销段落，界面仅保留共同上下文「账号看板」「6 个账号」，无需删减重复说明。
+
+入口：`style-explorer.html`。原始图：`shots/&lt;候选&gt;/page.png`。四宫格：`shots/comparison/stitch.png`。单张原尺寸适合检查字形与细节，四宫格只用于比较整体风格。
+</pre></details><details><summary>大胆主题设计说明</summary><pre># 大胆主题探索 · 第四轮
+
+范围：继续探索额外内置主题，强化视觉冲击；不改正式业务代码、入口、默认亮暗主题或 DESIGN.md。
+
+北极星：让主题在一眼之间有明确的材质与性格，但账号、额度、单位、周期和重置时间始终比装饰更容易阅读。
+
+共同内容与设备：沿用前三轮的六个匿名账号快照，统一 1200×820、三列两行。账号顺序、额度值和周期映射不变。画布与字号用于主题比较，未决定正式应用的网格布局。
+
+| 方向 | 与前三轮拉开差异的手法 | 控件与文字 |
+| --- | --- | --- |
+| 酸性铬金 | 整面荧光底、液态银色铭牌、非对称黑面板、背景大尺度金属环 | 银色头部用黑字，暗面板用浅字；等宽额度、硬边按钮 |
+| 街头拼贴 | 高饱和海报墙、撕边纸张、胶带、斜纹与错位纸层 | 倾斜仅用于标题和装饰，账号数据保持水平；粗黑数字 |
+| 孟菲斯玩具 | 紫蓝舞台、糖果色几何、厚边非对称圆角、凸起阴影 | 胶囊按钮、圆润标题、厚实仪表；背景图形从留白处露出 |
+| 太空舱仪表 | 瓷白硬件外壳、嵌入式暗色读数芯、凹槽、螺钉和橙色设备标识 | 设备标题、等宽仪表、稳定实色表面，避免装饰假装成按钮 |
+
+第一优先推荐「酸性铬金」：视觉冲击最强，与默认主题和前三轮最不同。「街头拼贴」更适合有表达欲的桌面；「太空舱仪表」更偏可长期使用的材质设计。这是设计建议，尚无用户选择。
+
+四套图形均由 CSS 几何、渐变和阴影制作，Logo 复用项目现有资源；不依赖外部图像、网络字体或收费服务。没有使用不存在的用户数据、指标或背书。页面只保留必要阅读上下文，没有新增宣传文案。
+
+## 自定义主题进一步需要支持什么
+
+继承第二轮的 theme.json + 可选 theme.css + 可选 assets 结构，本轮揭示出几个额外需求：
+
+1. **按表面定义前景色**：同一主题可以同时存在亮色铭牌、暗色面板与暗色底栏。不能只用一组全局 ink/背景变量；应支持 titlebar、accountHeader、accountBody、drawer、widget、ticker 等表面自身的文字与边界。
+2. **局部材质**：允许把铬金只用于账号头部，不能让文字也变成渐变或依赖反射高光才可见。
+3. **轮廓与装饰分离**：撕边、切角、胶带和螺钉作为视觉层，不改业务对象、点击区域或进度计算；裁切只作用于装饰底板，正式实现不能裁掉焦点轮廓。
+4. **可选的大尺度背景层**：背景几何不得占布局空间、遮挡数据或截获点击；用户可降低装饰强度，桌面浮窗单独减少纹理和阴影。
+5. **素材不是必填**：参数预设即可生成这些风格。只有独有手绘图、金属贴图或授权字体才放入 assets。
+
+明暗模式不足以描述混合主题，应保留主题的 mode 元数据，同时以实际表面检查可读性。跟随系统选择合适主题，不机械反色。
+
+## 验证与边界
+
+四套候选均已实际浏览器截图，主 Agent 逐张查看；初轮发现三个混合主题底栏的「即将刷新」沿用了深色文字，已改成底栏独立浅色文字并重新截图。数据区域没有发现金额、周期或重置时间裁切。
+
+仅为静态候选探索，未独立评审，未实现响应式、动效、主题保存或导入，未运行生产构建和业务测试。背景装饰保持静止，不增加闪烁。默认小字与原始图标沿用项目，没有为效果稿重绘厂商 Logo。
+
+保留的强荧光、斜纹、硬阴影、大背景几何是本轮用户要求的大胆风格，不推广到默认主题；主数据使用稳定实色表面。后续选定后需验证窄窗、长名称、告警、不可用、键盘焦点、浮窗与弹层。
+
+入口：`style-explorer.html`。四套独立稿：`acid.html`、`collage.html`、`memphis.html`、`orbital.html`。截图：`shots/&lt;方向&gt;/page.png`；四宫格：`shots/comparison/stitch.png`。
+</pre></details><details><summary>街区信号设计说明与参考来源</summary><pre># 街区信号 · 绝区零风格主题探索
+
+范围：用户指定绝区零类似风格，方向已经明确，本轮只做一套主题首屏。未修改生产源码、默认主题、入口或根目录 DESIGN.md。
+
+设计北极星：让额度看板像一台街区录像店里的电子终端。以厚实黑灰设备壳、荧光黄选中态、压缩粗排字、胶囊铭牌和唱片仪表共同建立辨识度。主任务仍是查看账号额度与重置时间。
+
+## 实际参考与取舍
+
+已查看并留存官方首页和官方 HDD 界面说明截图：
+
+- 官方首页：https://zenless.hoyoverse.com/en-us/main
+- 官方 HDD 说明来源：https://zenless.hoyoverse.com/zh-tw/news/113767
+- 官方 HDD 说明图片：https://fastcdn.hoyoverse.com/content-v2/nap/113767/fdf28a2542e5e4e624e63079194ab881_8492351174148631533.png
+
+截图位置：`reference-loaded/page.png`（首页）、`reference-hdd/page.png`（HDD 图）。首次首页截图停在加载状态，保存在 `reference/page.png`，不作为视觉参考。加载后的首页仍有部分资源失败，但实际构图与导航可见；HDD 静态图完整可见。参考页面的 WebGL 与资源告警属于外部官网，不影响本地稿件。
+
+从实际画面提炼：
+
+1. 首页黑白强对比中用荧光色标记主操作；借用小面积高亮，而非整屏角色海报。
+2. 导航是厚实的圆角胶囊，选中后实底反色；转成顶部按键和账号铭牌。
+3. 品牌排字倾斜、压缩、粗黑，轮廓鲜明；本项目使用系统 Bahnschrift 的粗/斜体，中文回退到微软雅黑，不声称使用官方字体。
+4. 首图由斜切构图、粗轮廓与层叠框架建立街头感；转成标题斜切符号和背景斜纹，不扭曲额度正文。
+5. HDD 是包住内容的实体设备壳，外圈和屏幕有明确深度；转成双层黑灰卡片边框。
+6. 深色设备表面与亮色标签分区；主数据仍在稳定暗面板上，避免随素材变化。
+7. 圆形控件与矩形装置并存；保留 Quota Desk 的同心圆语法，用轨道、凹槽和核心底色强化唱片质感。
+8. 页面内容和品牌图形层级分明；保留 Quota Desk Logo、厂商 Logo、匿名账号数据与真实额度口径，不插入游戏角色、游戏标志或游戏菜单文案。
+
+本稿是受上述视觉语言启发的原创产品皮肤，不是某个游戏页面的精确还原。
+
+## 本轮画面
+
+1200×820，同前几轮六个账号、三列两行的比较画布。卡片内保留账号、身份、正常连接标识、各周期、额度与重置时间。首张卡的荧光外框、铭牌与数值芯用来展示主题高亮状态，原始对象并无持久选中逻辑。
+
+字体角色：品牌、账号名称和额度使用 Bahnschrift 粗体/斜体；中文说明和正文使用 Segoe UI / 微软雅黑。额度读数完整显示，包括余额 ¥99.62。页面没有新增宣传口号或重复说明。
+
+顶栏：品牌保留，刷新、视图与设置改为有实体外圈的圆形按键。底栏：保留即将刷新的真实账号队列。装饰：静态点阵、深色大圆环和荧光斜纹，均由 CSS 制作，不依赖图片或网络字体。
+
+## 自定义主题需要的内容
+
+承接第二轮的 manifest + 可选样式 + 可选素材：本方向可以没有图片资源，关键是支持组合皮肤插槽。
+
+- `account.header`：亮底铭牌及独立深色前景；不能沿用暗面板的全局文字色。
+- `account.body`：暗色设备表面、扫描纹理、双层外边框与底部硬阴影。
+- `account.highlight`：外圈、铭牌、读数核心的联动高亮；正式应用需决定它对应悬停还是键盘焦点，不能假装有业务选中状态。
+- `quota.core` / `quota.track` / `quota.rings`：核心底色、唱片凹槽、轨道与既有层级色表。显示进度的计算和周期含义不变。
+- `control` / `tag`：胶囊/圆形轮廓、边框、反色和焦点轮廓；命中区域不随装饰缩小。
+- `background`：点阵、斜纹和大圆环强度，不参与布局，不拦截点击。
+- `typography`：品牌、标题、数字、正文分角色指定，缺字体时系统回退。
+- 浮窗需单独减弱装饰；正式落地时覆盖抽屉、弹层、图表、告警与不可用状态。
+
+选定后动效提案：铭牌悬停/焦点反色 120ms，主题表面切换 180ms，抽屉进出 180ms；不常驻扫描或闪烁，减少动态效果时直接换状态。本轮尚未实现这些动效。
+
+## 验证与交付
+
+- `street-signal.html`：独立单文件静态主题首屏。
+- `style-explorer.html`：单张主题查看页，可放大至实际尺寸。
+- `shots/page.png`：1200×820 的实际浏览器截图。
+- 主 Agent 已查看首屏，无金额、周期、重置时间遮挡或截断；截图工具未报告控制台错误、横向溢出、图片加载失败或可读性告警。
+- 工具提示「卡片里套卡片」保留：这里的内层是同一设备上的身份铭牌，负责亮暗分区与高亮状态，不是重复的信息容器。外壳与铭牌的深度差是本方向的主要造型。
+- 未独立评审，未实现交互、响应式、保存和主题切换；未运行生产构建和业务测试。此次没有业务源码更改。
+- 当前高密度副标题、时间和底栏仍采用较小字级。正式实现需继续验收窄窗、长名称、告警、不可用、抽屉、键盘焦点及桌面浮窗。
+</pre></details><details><summary>完整主题参数样例（提案）</summary><pre>{
+  &quot;schemaVersion&quot;: 2,
+  &quot;id&quot;: &quot;custom-letterpress&quot;,
+  &quot;name&quot;: &quot;我的纸本&quot;,
+  &quot;version&quot;: &quot;1.0.0&quot;,
+  &quot;author&quot;: &quot;Your name&quot;,
+  &quot;description&quot;: &quot;完整视觉主题格式的设计提案；尚未接入正式应用。&quot;,
+  &quot;extends&quot;: &quot;builtin.letterpress&quot;,
+  &quot;mode&quot;: &quot;light&quot;,
+  &quot;colors&quot;: {
+    &quot;window&quot;: &quot;#E8E2D6&quot;,
+    &quot;surface&quot;: &quot;#FAF6EC&quot;,
+    &quot;text&quot;: &quot;#302B26&quot;,
+    &quot;accent&quot;: &quot;#9B3F36&quot;
+  },
+  &quot;typography&quot;: {
+    &quot;body&quot;: [&quot;Segoe UI&quot;, &quot;Microsoft YaHei&quot;, &quot;sans-serif&quot;],
+    &quot;heading&quot;: [&quot;Georgia&quot;, &quot;SimSun&quot;, &quot;serif&quot;],
+    &quot;numeric&quot;: [&quot;Georgia&quot;, &quot;serif&quot;]
+  },
+  &quot;shape&quot;: {
+    &quot;cardRadius&quot;: 0,
+    &quot;controlRadius&quot;: 2,
+    &quot;tagRadius&quot;: 2,
+    &quot;borderWidth&quot;: 1
+  },
+  &quot;material&quot;: {
+    &quot;preset&quot;: &quot;paper&quot;,
+    &quot;textureOpacity&quot;: 0.05,
+    &quot;surfaceOpacity&quot;: 1,
+    &quot;blur&quot;: 0,
+    &quot;shadowPreset&quot;: &quot;offset-paper&quot;
+  },
+  &quot;charts&quot;: {
+    &quot;rings&quot;: [&quot;#538B87&quot;, &quot;#8C839B&quot;, &quot;#B2634D&quot;, &quot;#7C8957&quot;],
+    &quot;ringWidth&quot;: 6,
+    &quot;outerDecoration&quot;: &quot;fine-rule&quot;
+  },
+  &quot;widget&quot;: {
+    &quot;material&quot;: &quot;solid&quot;,
+    &quot;background&quot;: &quot;#F3ECDF&quot;,
+    &quot;text&quot;: &quot;#302B26&quot;
+  },
+  &quot;assets&quot;: {},
+  &quot;capabilities&quot;: [&quot;paper-texture&quot;, &quot;offset-shadow&quot;]
+}
+</pre></details><details><summary>高级主题样式插槽样例（提案）</summary><pre>/* 公开主题接口提案，当前项目尚未提供这些 hooks。
+   放入完整包并在 manifest 中声明 stylesheet: &quot;theme.css&quot; 后才加载。
+   此文件不覆盖布局、业务对象与交互命中范围。 */
+[data-qd-theme=&quot;custom-letterpress&quot;] [data-theme-part=&quot;surface-account&quot;] {
+  border-radius: 0;
+  border: 1px solid var(--qd-border);
+  background: var(--qd-surface);
+  box-shadow: 3px 4px 0 rgb(80 60 30 / 12%);
+}
+[data-qd-theme=&quot;custom-letterpress&quot;] [data-theme-part=&quot;account-heading&quot;] {
+  font-family: var(--qd-font-heading);
+  font-weight: 600;
+}
+[data-qd-theme=&quot;custom-letterpress&quot;] [data-theme-part=&quot;quota-core&quot;] {
+  border: 1px solid var(--qd-border-strong);
+  box-shadow: inset 0 0 0 3px var(--qd-surface);
+}
+</pre></details><details><summary>第一轮颜色主题样例（历史提案）</summary><pre>{
+  &quot;schemaVersion&quot;: 1,
+  &quot;id&quot;: &quot;my-ocean&quot;,
+  &quot;name&quot;: &quot;我的深海&quot;,
+  &quot;mode&quot;: &quot;dark&quot;,
+  &quot;extends&quot;: &quot;builtin.ocean&quot;,
+  &quot;author&quot;: &quot;Your name&quot;,
+  &quot;description&quot;: &quot;基于深海，只覆盖需要调整的界面颜色。&quot;,
+  &quot;version&quot;: &quot;1.0.0&quot;,
+  &quot;colors&quot;: {
+    &quot;window&quot;: &quot;#0E1627&quot;,
+    &quot;surface&quot;: &quot;#172238&quot;,
+    &quot;text&quot;: &quot;#E8EEF9&quot;,
+    &quot;accent&quot;: &quot;#B9D4FF&quot;,
+    &quot;onAccent&quot;: &quot;#14233A&quot;
+  }
+}
+</pre></details><details><summary>第一轮颜色主题 Schema（历史提案）</summary><pre>{
+  &quot;$schema&quot;: &quot;https://json-schema.org/draft/2020-12/schema&quot;,
+  &quot;title&quot;: &quot;Quota Desk theme proposal v1&quot;,
+  &quot;description&quot;: &quot;设计阶段的主题格式提案，尚未接入应用。只允许数据与颜色，不允许 CSS、脚本或远程资源。&quot;,
+  &quot;type&quot;: &quot;object&quot;,
+  &quot;additionalProperties&quot;: false,
+  &quot;required&quot;: [&quot;schemaVersion&quot;, &quot;id&quot;, &quot;name&quot;, &quot;mode&quot;, &quot;extends&quot;],
+  &quot;properties&quot;: {
+    &quot;schemaVersion&quot;: {&quot;const&quot;: 1},
+    &quot;id&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;pattern&quot;: &quot;^[a-z][a-z0-9-]{2,63}$&quot;},
+    &quot;name&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;minLength&quot;: 1, &quot;maxLength&quot;: 40},
+    &quot;mode&quot;: {&quot;enum&quot;: [&quot;light&quot;, &quot;dark&quot;]},
+    &quot;extends&quot;: {&quot;enum&quot;: [&quot;builtin.pine&quot;, &quot;builtin.porcelain&quot;, &quot;builtin.ocean&quot;, &quot;builtin.sand&quot;]},
+    &quot;author&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;maxLength&quot;: 80},
+    &quot;description&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;maxLength&quot;: 200},
+    &quot;version&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;pattern&quot;: &quot;^[0-9]+\\.[0-9]+\\.[0-9]+$&quot;},
+    &quot;colors&quot;: {
+      &quot;type&quot;: &quot;object&quot;,
+      &quot;additionalProperties&quot;: false,
+      &quot;properties&quot;: {
+        &quot;window&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;windowGradient&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;surface&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;surfaceRaised&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;surfaceHover&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;text&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;textSecondary&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;textMuted&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;textFaint&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;border&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;borderStrong&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;control&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;controlHover&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;accent&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;onAccent&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;focus&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;track&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;titlebar&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;drawer&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;}
+      }
+    },
+    &quot;status&quot;: {
+      &quot;type&quot;: &quot;object&quot;,
+      &quot;additionalProperties&quot;: false,
+      &quot;properties&quot;: {
+        &quot;success&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;successText&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;successBackground&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;warning&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;warningText&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;warningBackground&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;}
+      }
+    },
+    &quot;charts&quot;: {
+      &quot;type&quot;: &quot;object&quot;,
+      &quot;additionalProperties&quot;: false,
+      &quot;properties&quot;: {
+        &quot;rings&quot;: {&quot;type&quot;: &quot;array&quot;, &quot;items&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;}, &quot;minItems&quot;: 4, &quot;maxItems&quot;: 4},
+        &quot;model&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;}
+      }
+    },
+    &quot;widget&quot;: {
+      &quot;type&quot;: &quot;object&quot;,
+      &quot;additionalProperties&quot;: false,
+      &quot;properties&quot;: {
+        &quot;background&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;row&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;text&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;chip&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;chipLabel&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;chipValue&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;},
+        &quot;chipSub&quot;: {&quot;$ref&quot;: &quot;#/$defs/color&quot;}
+      }
+    }
+  },
+  &quot;$defs&quot;: {&quot;color&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;pattern&quot;: &quot;^#[0-9a-fA-F]{6}$&quot;}}
+}
+</pre></details><details><summary>第一轮 pine 完整颜色变量</summary><pre>{
+  &quot;bg&quot;: &quot;#141d1f&quot;,
+  &quot;bg-grad&quot;: &quot;#1b2629&quot;,
+  &quot;surface&quot;: &quot;#1a2527&quot;,
+  &quot;surface-2&quot;: &quot;#202c2e&quot;,
+  &quot;surface-3&quot;: &quot;#263334&quot;,
+  &quot;surface-trans&quot;: &quot;rgba(26, 37, 39, .72)&quot;,
+  &quot;control&quot;: &quot;#24312f&quot;,
+  &quot;control-2&quot;: &quot;#2b3a39&quot;,
+  &quot;knob&quot;: &quot;#f2f7f4&quot;,
+  &quot;ink&quot;: &quot;#e8efeb&quot;,
+  &quot;ink-soft&quot;: &quot;#b6c6c1&quot;,
+  &quot;muted&quot;: &quot;#8ba19b&quot;,
+  &quot;faint&quot;: &quot;#879b95&quot;,
+  &quot;line&quot;: &quot;#2c393b&quot;,
+  &quot;line-strong&quot;: &quot;#3d4c4e&quot;,
+  &quot;line-inner&quot;: &quot;#243030&quot;,
+  &quot;hover-border&quot;: &quot;#4d5f60&quot;,
+  &quot;primary-bg&quot;: &quot;#dfeae5&quot;,
+  &quot;primary-text&quot;: &quot;#17221f&quot;,
+  &quot;primary-bg-hover&quot;: &quot;#cfe2db&quot;,
+  &quot;green&quot;: &quot;#3fb384&quot;,
+  &quot;green-deep&quot;: &quot;#8bd8ac&quot;,
+  &quot;green-bg&quot;: &quot;#1f3930&quot;,
+  &quot;green-bg-2&quot;: &quot;#274537&quot;,
+  &quot;green-line&quot;: &quot;#2c5241&quot;,
+  &quot;coral&quot;: &quot;#ef8a70&quot;,
+  &quot;coral-deep&quot;: &quot;#eb9d8b&quot;,
+  &quot;coral-bg&quot;: &quot;#452a22&quot;,
+  &quot;coral-bg-2&quot;: &quot;#59372c&quot;,
+  &quot;warn-border&quot;: &quot;#5c3a2f&quot;,
+  &quot;chip-bg&quot;: &quot;#2a3739&quot;,
+  &quot;chip-text&quot;: &quot;#9db1ab&quot;,
+  &quot;toggle&quot;: &quot;#3a494b&quot;,
+  &quot;backdrop&quot;: &quot;rgba(4, 10, 10, .55)&quot;,
+  &quot;backdrop-soft&quot;: &quot;rgba(4, 10, 10, .45)&quot;,
+  &quot;titlebar-bg&quot;: &quot;rgba(26, 37, 39, .9)&quot;,
+  &quot;drawer-bg&quot;: &quot;rgba(23, 31, 33, .97)&quot;,
+  &quot;shadow&quot;: &quot;0 18px 60px rgba(0, 0, 0, .45)&quot;,
+  &quot;shadow-strong&quot;: &quot;0 24px 80px rgba(0, 0, 0, .55)&quot;,
+  &quot;focus-border&quot;: &quot;#58c494&quot;,
+  &quot;focus-ring&quot;: &quot;rgba(88, 196, 148, .14)&quot;,
+  &quot;meter-track&quot;: &quot;#2b383a&quot;,
+  &quot;meter-off-fill&quot;: &quot;#6b7d78&quot;,
+  &quot;ring-track&quot;: &quot;#2e3c3e&quot;,
+  &quot;score&quot;: &quot;#6fc79b&quot;,
+  &quot;scrollbar&quot;: &quot;#3d4b4d&quot;,
+  &quot;widget-bg&quot;: &quot;#202c2e&quot;,
+  &quot;widget-row&quot;: &quot;#273638&quot;,
+  &quot;widget-row-border&quot;: &quot;rgba(255, 255, 255, .08)&quot;,
+  &quot;widget-text&quot;: &quot;#edf5f0&quot;,
+  &quot;widget-chip&quot;: &quot;#334647&quot;,
+  &quot;widget-chip-label&quot;: &quot;#9db0ab&quot;,
+  &quot;widget-chip-value&quot;: &quot;#dcf5e2&quot;,
+  &quot;widget-chip-sub&quot;: &quot;#95a6a2&quot;,
+  &quot;widget-tag-text&quot;: &quot;#a9c7b9&quot;,
+  &quot;widget-tag-bg&quot;: &quot;#3b5050&quot;,
+  &quot;widget-live&quot;: &quot;#7bd1a0&quot;,
+  &quot;widget-live-label&quot;: &quot;#9eafa9&quot;,
+  &quot;mint&quot;: &quot;#d8f2df&quot;,
+  &quot;violet&quot;: &quot;#836fe0&quot;,
+  &quot;cyan&quot;: &quot;#48b9c4&quot;,
+  &quot;sky&quot;: &quot;#4b9ddf&quot;,
+  &quot;amber&quot;: &quot;#e0b45c&quot;,
+  &quot;onboard-tile&quot;: &quot;#1c1c1e&quot;,
+  &quot;onboard-dash&quot;: &quot;#444&quot;,
+  &quot;onboard-dash-hover&quot;: &quot;#6d7a7c&quot;
+}
+</pre></details><details><summary>第一轮 porcelain 完整颜色变量</summary><pre>{
+  &quot;bg&quot;: &quot;#eef1f5&quot;,
+  &quot;bg-grad&quot;: &quot;#f8fafd&quot;,
+  &quot;surface&quot;: &quot;#ffffff&quot;,
+  &quot;surface-2&quot;: &quot;#f4f6f9&quot;,
+  &quot;surface-3&quot;: &quot;#e9edf3&quot;,
+  &quot;surface-trans&quot;: &quot;#ffffff&quot;,
+  &quot;control&quot;: &quot;#ffffff&quot;,
+  &quot;control-2&quot;: &quot;#edf1f6&quot;,
+  &quot;knob&quot;: &quot;#ffffff&quot;,
+  &quot;ink&quot;: &quot;#202c3c&quot;,
+  &quot;ink-soft&quot;: &quot;#4c5c70&quot;,
+  &quot;muted&quot;: &quot;#596a7f&quot;,
+  &quot;faint&quot;: &quot;#617186&quot;,
+  &quot;line&quot;: &quot;#d8dfe9&quot;,
+  &quot;line-strong&quot;: &quot;#bcc8d7&quot;,
+  &quot;line-inner&quot;: &quot;#e8edf3&quot;,
+  &quot;hover-border&quot;: &quot;#92a5bd&quot;,
+  &quot;primary-bg&quot;: &quot;#284f80&quot;,
+  &quot;primary-text&quot;: &quot;#ffffff&quot;,
+  &quot;primary-bg-hover&quot;: &quot;#1f416c&quot;,
+  &quot;green&quot;: &quot;#277a59&quot;,
+  &quot;green-deep&quot;: &quot;#2e7756&quot;,
+  &quot;green-bg&quot;: &quot;#e1f2e4&quot;,
+  &quot;green-bg-2&quot;: &quot;#d9efdf&quot;,
+  &quot;green-line&quot;: &quot;#bfe0c8&quot;,
+  &quot;coral&quot;: &quot;#e5775e&quot;,
+  &quot;coral-deep&quot;: &quot;#bd665b&quot;,
+  &quot;coral-bg&quot;: &quot;#f9e3dc&quot;,
+  &quot;coral-bg-2&quot;: &quot;#f8e2dc&quot;,
+  &quot;warn-border&quot;: &quot;#efd2cb&quot;,
+  &quot;chip-bg&quot;: &quot;#e9eef5&quot;,
+  &quot;chip-text&quot;: &quot;#50627a&quot;,
+  &quot;toggle&quot;: &quot;#dfe5df&quot;,
+  &quot;backdrop&quot;: &quot;rgba(31, 41, 41, .28)&quot;,
+  &quot;backdrop-soft&quot;: &quot;rgba(31, 41, 41, .12)&quot;,
+  &quot;titlebar-bg&quot;: &quot;#f8fafd&quot;,
+  &quot;drawer-bg&quot;: &quot;#ffffff&quot;,
+  &quot;shadow&quot;: &quot;0 8px 28px #233b5410&quot;,
+  &quot;shadow-strong&quot;: &quot;0 20px 60px #233b5424&quot;,
+  &quot;focus-border&quot;: &quot;#386ca9&quot;,
+  &quot;focus-ring&quot;: &quot;#386ca930&quot;,
+  &quot;meter-track&quot;: &quot;#e0e7ee&quot;,
+  &quot;meter-off-fill&quot;: &quot;#adb4b0&quot;,
+  &quot;ring-track&quot;: &quot;#e0e7ee&quot;,
+  &quot;score&quot;: &quot;#79bd92&quot;,
+  &quot;scrollbar&quot;: &quot;#c5cfde&quot;,
+  &quot;widget-bg&quot;: &quot;#edf1f6&quot;,
+  &quot;widget-row&quot;: &quot;#ffffff&quot;,
+  &quot;widget-row-border&quot;: &quot;rgba(30, 40, 45, .08)&quot;,
+  &quot;widget-text&quot;: &quot;#202c3c&quot;,
+  &quot;widget-chip&quot;: &quot;#e7edf5&quot;,
+  &quot;widget-chip-label&quot;: &quot;#54667c&quot;,
+  &quot;widget-chip-value&quot;: &quot;#1e5c3d&quot;,
+  &quot;widget-chip-sub&quot;: &quot;#596a7f&quot;,
+  &quot;widget-tag-text&quot;: &quot;#446553&quot;,
+  &quot;widget-tag-bg&quot;: &quot;#d8e9de&quot;,
+  &quot;widget-live&quot;: &quot;#2e8b66&quot;,
+  &quot;widget-live-label&quot;: &quot;#596a7f&quot;,
+  &quot;mint&quot;: &quot;#d8f2df&quot;,
+  &quot;violet&quot;: &quot;#836fe0&quot;,
+  &quot;cyan&quot;: &quot;#48b9c4&quot;,
+  &quot;sky&quot;: &quot;#4b9ddf&quot;,
+  &quot;amber&quot;: &quot;#a87c24&quot;,
+  &quot;onboard-tile&quot;: &quot;#f0f2ef&quot;,
+  &quot;onboard-dash&quot;: &quot;#c9d2ca&quot;,
+  &quot;onboard-dash-hover&quot;: &quot;#9ba69f&quot;
+}
+</pre></details><details><summary>第一轮 ocean 完整颜色变量</summary><pre>{
+  &quot;bg&quot;: &quot;#0e1627&quot;,
+  &quot;bg-grad&quot;: &quot;#16253c&quot;,
+  &quot;surface&quot;: &quot;#172238&quot;,
+  &quot;surface-2&quot;: &quot;#1c2a43&quot;,
+  &quot;surface-3&quot;: &quot;#253652&quot;,
+  &quot;surface-trans&quot;: &quot;#172238&quot;,
+  &quot;control&quot;: &quot;#23334e&quot;,
+  &quot;control-2&quot;: &quot;#2c4160&quot;,
+  &quot;knob&quot;: &quot;#f2f7f4&quot;,
+  &quot;ink&quot;: &quot;#e8eef9&quot;,
+  &quot;ink-soft&quot;: &quot;#b9c8df&quot;,
+  &quot;muted&quot;: &quot;#9aaecb&quot;,
+  &quot;faint&quot;: &quot;#91a5c4&quot;,
+  &quot;line&quot;: &quot;#2b3b55&quot;,
+  &quot;line-strong&quot;: &quot;#435879&quot;,
+  &quot;line-inner&quot;: &quot;#24344d&quot;,
+  &quot;hover-border&quot;: &quot;#667fa4&quot;,
+  &quot;primary-bg&quot;: &quot;#b9d4ff&quot;,
+  &quot;primary-text&quot;: &quot;#14233a&quot;,
+  &quot;primary-bg-hover&quot;: &quot;#d2e3ff&quot;,
+  &quot;green&quot;: &quot;#3fb384&quot;,
+  &quot;green-deep&quot;: &quot;#8bd8ac&quot;,
+  &quot;green-bg&quot;: &quot;#1f3930&quot;,
+  &quot;green-bg-2&quot;: &quot;#274537&quot;,
+  &quot;green-line&quot;: &quot;#2c5241&quot;,
+  &quot;coral&quot;: &quot;#ef8a70&quot;,
+  &quot;coral-deep&quot;: &quot;#eb9d8b&quot;,
+  &quot;coral-bg&quot;: &quot;#452a22&quot;,
+  &quot;coral-bg-2&quot;: &quot;#59372c&quot;,
+  &quot;warn-border&quot;: &quot;#5c3a2f&quot;,
+  &quot;chip-bg&quot;: &quot;#293b59&quot;,
+  &quot;chip-text&quot;: &quot;#b8c7dd&quot;,
+  &quot;toggle&quot;: &quot;#405575&quot;,
+  &quot;backdrop&quot;: &quot;#03091888&quot;,
+  &quot;backdrop-soft&quot;: &quot;rgba(4, 10, 10, .45)&quot;,
+  &quot;titlebar-bg&quot;: &quot;#142036&quot;,
+  &quot;drawer-bg&quot;: &quot;#142036&quot;,
+  &quot;shadow&quot;: &quot;0 18px 50px #02071655&quot;,
+  &quot;shadow-strong&quot;: &quot;0 24px 80px rgba(0, 0, 0, .55)&quot;,
+  &quot;focus-border&quot;: &quot;#9dc4ff&quot;,
+  &quot;focus-ring&quot;: &quot;#9dc4ff30&quot;,
+  &quot;meter-track&quot;: &quot;#30425b&quot;,
+  &quot;meter-off-fill&quot;: &quot;#6b7d78&quot;,
+  &quot;ring-track&quot;: &quot;#30425b&quot;,
+  &quot;score&quot;: &quot;#6fc79b&quot;,
+  &quot;scrollbar&quot;: &quot;#435879&quot;,
+  &quot;widget-bg&quot;: &quot;#172238&quot;,
+  &quot;widget-row&quot;: &quot;#1e2d46&quot;,
+  &quot;widget-row-border&quot;: &quot;rgba(255, 255, 255, .08)&quot;,
+  &quot;widget-text&quot;: &quot;#e8eef9&quot;,
+  &quot;widget-chip&quot;: &quot;#304362&quot;,
+  &quot;widget-chip-label&quot;: &quot;#b5c7e2&quot;,
+  &quot;widget-chip-value&quot;: &quot;#dcf5e2&quot;,
+  &quot;widget-chip-sub&quot;: &quot;#9cafd0&quot;,
+  &quot;widget-tag-text&quot;: &quot;#b7cfef&quot;,
+  &quot;widget-tag-bg&quot;: &quot;#304765&quot;,
+  &quot;widget-live&quot;: &quot;#7bd1a0&quot;,
+  &quot;widget-live-label&quot;: &quot;#aabedb&quot;,
+  &quot;mint&quot;: &quot;#d8f2df&quot;,
+  &quot;violet&quot;: &quot;#836fe0&quot;,
+  &quot;cyan&quot;: &quot;#48b9c4&quot;,
+  &quot;sky&quot;: &quot;#4b9ddf&quot;,
+  &quot;amber&quot;: &quot;#e0b45c&quot;,
+  &quot;onboard-tile&quot;: &quot;#1c1c1e&quot;,
+  &quot;onboard-dash&quot;: &quot;#444&quot;,
+  &quot;onboard-dash-hover&quot;: &quot;#6d7a7c&quot;
+}
+</pre></details><details><summary>第一轮 sand 完整颜色变量</summary><pre>{
+  &quot;bg&quot;: &quot;#eee8dd&quot;,
+  &quot;bg-grad&quot;: &quot;#f8f4ec&quot;,
+  &quot;surface&quot;: &quot;#fbf8f1&quot;,
+  &quot;surface-2&quot;: &quot;#f3ede2&quot;,
+  &quot;surface-3&quot;: &quot;#eae1d2&quot;,
+  &quot;surface-trans&quot;: &quot;#fbf8f1&quot;,
+  &quot;control&quot;: &quot;#fffcf6&quot;,
+  &quot;control-2&quot;: &quot;#f0e7da&quot;,
+  &quot;knob&quot;: &quot;#ffffff&quot;,
+  &quot;ink&quot;: &quot;#382f28&quot;,
+  &quot;ink-soft&quot;: &quot;#65584a&quot;,
+  &quot;muted&quot;: &quot;#726453&quot;,
+  &quot;faint&quot;: &quot;#796956&quot;,
+  &quot;line&quot;: &quot;#d9cebd&quot;,
+  &quot;line-strong&quot;: &quot;#c6b59e&quot;,
+  &quot;line-inner&quot;: &quot;#e7dfd2&quot;,
+  &quot;hover-border&quot;: &quot;#a48d70&quot;,
+  &quot;primary-bg&quot;: &quot;#70553c&quot;,
+  &quot;primary-text&quot;: &quot;#fffaf3&quot;,
+  &quot;primary-bg-hover&quot;: &quot;#5c432e&quot;,
+  &quot;green&quot;: &quot;#28734f&quot;,
+  &quot;green-deep&quot;: &quot;#2d704d&quot;,
+  &quot;green-bg&quot;: &quot;#e4eadb&quot;,
+  &quot;green-bg-2&quot;: &quot;#dce7d2&quot;,
+  &quot;green-line&quot;: &quot;#bdcdb2&quot;,
+  &quot;coral&quot;: &quot;#e5775e&quot;,
+  &quot;coral-deep&quot;: &quot;#a6503b&quot;,
+  &quot;coral-bg&quot;: &quot;#f6e4d7&quot;,
+  &quot;coral-bg-2&quot;: &quot;#f2dccc&quot;,
+  &quot;warn-border&quot;: &quot;#dbb7a0&quot;,
+  &quot;chip-bg&quot;: &quot;#eae0d1&quot;,
+  &quot;chip-text&quot;: &quot;#6b5842&quot;,
+  &quot;toggle&quot;: &quot;#d6c8b5&quot;,
+  &quot;backdrop&quot;: &quot;rgba(31, 41, 41, .28)&quot;,
+  &quot;backdrop-soft&quot;: &quot;rgba(31, 41, 41, .12)&quot;,
+  &quot;titlebar-bg&quot;: &quot;#f4eee4&quot;,
+  &quot;drawer-bg&quot;: &quot;#fbf8f1&quot;,
+  &quot;shadow&quot;: &quot;0 8px 28px #503b2410&quot;,
+  &quot;shadow-strong&quot;: &quot;0 20px 60px #503b2424&quot;,
+  &quot;focus-border&quot;: &quot;#8b6541&quot;,
+  &quot;focus-ring&quot;: &quot;#8b654130&quot;,
+  &quot;meter-track&quot;: &quot;#e1d8c9&quot;,
+  &quot;meter-off-fill&quot;: &quot;#adb4b0&quot;,
+  &quot;ring-track&quot;: &quot;#e1d8c9&quot;,
+  &quot;score&quot;: &quot;#79bd92&quot;,
+  &quot;scrollbar&quot;: &quot;#c7b89f&quot;,
+  &quot;widget-bg&quot;: &quot;#eee6d9&quot;,
+  &quot;widget-row&quot;: &quot;#fbf8f1&quot;,
+  &quot;widget-row-border&quot;: &quot;rgba(30, 40, 45, .08)&quot;,
+  &quot;widget-text&quot;: &quot;#382f28&quot;,
+  &quot;widget-chip&quot;: &quot;#e6dccb&quot;,
+  &quot;widget-chip-label&quot;: &quot;#6c5c48&quot;,
+  &quot;widget-chip-value&quot;: &quot;#1e5c3d&quot;,
+  &quot;widget-chip-sub&quot;: &quot;#726453&quot;,
+  &quot;widget-tag-text&quot;: &quot;#526448&quot;,
+  &quot;widget-tag-bg&quot;: &quot;#e0e6d6&quot;,
+  &quot;widget-live&quot;: &quot;#2e8b66&quot;,
+  &quot;widget-live-label&quot;: &quot;#726453&quot;,
+  &quot;mint&quot;: &quot;#d8f2df&quot;,
+  &quot;violet&quot;: &quot;#836fe0&quot;,
+  &quot;cyan&quot;: &quot;#48b9c4&quot;,
+  &quot;sky&quot;: &quot;#4b9ddf&quot;,
+  &quot;amber&quot;: &quot;#a87c24&quot;,
+  &quot;onboard-tile&quot;: &quot;#f0f2ef&quot;,
+  &quot;onboard-dash&quot;: &quot;#c9d2ca&quot;,
+  &quot;onboard-dash-hover&quot;: &quot;#9ba69f&quot;
+}
+</pre></details></main></body></html>

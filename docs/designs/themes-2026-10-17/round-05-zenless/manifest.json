@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "project": "Quota Desk · 街区信号",
+  "brief": "受绝区零的复古电子设备与街头菜单视觉启发。使用 Quota Desk 自身 Logo 与相同匿名账号数据；首张卡展示高亮外观。",
+  "round": "05 · 绝区零风格方向",
+  "nativeViewport": "1200x820",
+  "candidates": [
+    {
+      "id": "street-signal",
+      "name": "街区信号",
+      "concept": "让额度监控像一台来自街区录像店的终端：黑灰设备壳、荧光黄铭牌与唱片式仪表。",
+      "typography": "Bahnschrift 压缩粗体及斜体数字 / Segoe UI / 微软雅黑，中文优先保证可读。",
+      "palette": [
+        "#171916",
+        "#2b2d2a",
+        "#d7f84a",
+        "#dfe3d7"
+      ],
+      "traits": [
+        "厚设备边框与圆角铭牌",
+        "荧光黄选中态",
+        "唱片仪表和电视菜单式控件"
+      ],
+      "source": "street-signal.html"
+    }
+  ]
+}

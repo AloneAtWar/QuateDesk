@@ -1,0 +1,44 @@
+[
+  {
+    "file": "stitch.png",
+    "width": 2000,
+    "height": 517,
+    "columns": 3,
+    "items": [
+      {
+        "naturalWidth": 1200,
+        "naturalHeight": 820,
+        "width": 640,
+        "height": 437,
+        "labelHeight": 32,
+        "x": 24,
+        "y": 24,
+        "label": "工程蓝图",
+        "labelY": 469
+      },
+      {
+        "naturalWidth": 1200,
+        "naturalHeight": 820,
+        "width": 640,
+        "height": 437,
+        "labelHeight": 32,
+        "x": 680,
+        "y": 24,
+        "label": "纸本编辑",
+        "labelY": 469
+      },
+      {
+        "naturalWidth": 1200,
+        "naturalHeight": 820,
+        "width": 640,
+        "height": 437,
+        "labelHeight": 32,
+        "x": 1336,
+        "y": 24,
+        "label": "极光玻璃",
+        "labelY": 469
+      }
+    ],
+    "issues": []
+  }
+]

@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "project": "Quota Desk · 内置主题",
+  "brief": "相同账号、相同布局，比较四套主题的底色、层级与阅读感。圆环和厂商标识保持原色。主题选择与自定义编辑稿单独交付。",
+  "round": "主题配色 01",
+  "nativeViewport": "1080x760",
+  "candidates": [
+    {
+      "id": "pine",
+      "name": "松墨",
+      "concept": "保留熟悉的松墨底色，让额度和倒计时始终先被看见。",
+      "typography": "沿用项目 Manrope / Noto Sans SC；字体不可用时使用系统无衬线字体",
+      "palette": [
+        "#141d1f",
+        "#1a2527",
+        "#e8efeb",
+        "#dfeae5"
+      ],
+      "traits": [
+        "深色主题",
+        "原有深色的延续 · 低调青绿",
+        "现有布局与圆环原色"
+      ],
+      "source": "pine.html"
+    },
+    {
+      "id": "porcelain",
+      "name": "瓷白",
+      "concept": "像桌面上的一张干净报表，白天阅读时层次清楚。",
+      "typography": "沿用项目 Manrope / Noto Sans SC；字体不可用时使用系统无衬线字体",
+      "palette": [
+        "#eef1f5",
+        "#ffffff",
+        "#202c3c",
+        "#284f80"
+      ],
+      "traits": [
+        "浅色主题",
+        "中性冷白 · 清晰利落",
+        "现有布局与圆环原色"
+      ],
+      "source": "porcelain.html"
+    },
+    {
+      "id": "ocean",
+      "name": "深海",
+      "concept": "降低大面积绿色的存在感，用海军蓝托住原有多色圆环。",
+      "typography": "沿用项目 Manrope / Noto Sans SC；字体不可用时使用系统无衬线字体",
+      "palette": [
+        "#0e1627",
+        "#172238",
+        "#e8eef9",
+        "#b9d4ff"
+      ],
+      "traits": [
+        "深色主题",
+        "海军蓝底 · 冷静专注",
+        "现有布局与圆环原色"
+      ],
+      "source": "ocean.html"
+    },
+    {
+      "id": "sand",
+      "name": "暖砂",
+      "concept": "用低饱和暖纸色减轻白底的刺眼感，不给监控界面增加装饰。",
+      "typography": "沿用项目 Manrope / Noto Sans SC；字体不可用时使用系统无衬线字体",
+      "palette": [
+        "#eee8dd",
+        "#fbf8f1",
+        "#382f28",
+        "#70553c"
+      ],
+      "traits": [
+        "浅色主题",
+        "暖纸底色 · 柔和耐看",
+        "现有布局与圆环原色"
+      ],
+      "source": "sand.html"
+    }
+  ]
+}

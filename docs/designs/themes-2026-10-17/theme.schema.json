@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Quota Desk theme proposal v1",
+  "description": "设计阶段的主题格式提案，尚未接入应用。只允许数据与颜色，不允许 CSS、脚本或远程资源。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "name", "mode", "extends"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{2,63}$"},
+    "name": {"type": "string", "minLength": 1, "maxLength": 40},
+    "mode": {"enum": ["light", "dark"]},
+    "extends": {"enum": ["builtin.pine", "builtin.porcelain", "builtin.ocean", "builtin.sand"]},
+    "author": {"type": "string", "maxLength": 80},
+    "description": {"type": "string", "maxLength": 200},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "colors": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "window": {"$ref": "#/$defs/color"},
+        "windowGradient": {"$ref": "#/$defs/color"},
+        "surface": {"$ref": "#/$defs/color"},
+        "surfaceRaised": {"$ref": "#/$defs/color"},
+        "surfaceHover": {"$ref": "#/$defs/color"},
+        "text": {"$ref": "#/$defs/color"},
+        "textSecondary": {"$ref": "#/$defs/color"},
+        "textMuted": {"$ref": "#/$defs/color"},
+        "textFaint": {"$ref": "#/$defs/color"},
+        "border": {"$ref": "#/$defs/color"},
+        "borderStrong": {"$ref": "#/$defs/color"},
+        "control": {"$ref": "#/$defs/color"},
+        "controlHover": {"$ref": "#/$defs/color"},
+        "accent": {"$ref": "#/$defs/color"},
+        "onAccent": {"$ref": "#/$defs/color"},
+        "focus": {"$ref": "#/$defs/color"},
+        "track": {"$ref": "#/$defs/color"},
+        "titlebar": {"$ref": "#/$defs/color"},
+        "drawer": {"$ref": "#/$defs/color"}
+      }
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "success": {"$ref": "#/$defs/color"},
+        "successText": {"$ref": "#/$defs/color"},
+        "successBackground": {"$ref": "#/$defs/color"},
+        "warning": {"$ref": "#/$defs/color"},
+        "warningText": {"$ref": "#/$defs/color"},
+        "warningBackground": {"$ref": "#/$defs/color"}
+      }
+    },
+    "charts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rings": {"type": "array", "items": {"$ref": "#/$defs/color"}, "minItems": 4, "maxItems": 4},
+        "model": {"$ref": "#/$defs/color"}
+      }
+    },
+    "widget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "background": {"$ref": "#/$defs/color"},
+        "row": {"$ref": "#/$defs/color"},
+        "text": {"$ref": "#/$defs/color"},
+        "chip": {"$ref": "#/$defs/color"},
+        "chipLabel": {"$ref": "#/$defs/color"},
+        "chipValue": {"$ref": "#/$defs/color"},
+        "chipSub": {"$ref": "#/$defs/color"}
+      }
+    }
+  },
+  "$defs": {"color": {"type": "string", "pattern": "^#[0-9a-fA-F]{6}$"}}
+}

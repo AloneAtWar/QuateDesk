@@ -1,0 +1,21 @@
+[
+  {
+    "file": "page.png",
+    "state": null,
+    "size": "1200x820",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "nestedCards",
+        "label": "卡片里套卡片",
+        "count": 2,
+        "examples": [
+          "div.overview-head「Z.ai 1 主力 Z.ai · account」（外层 div.overview-card.active）",
+          "div.overview-head「Kimi 订阅 2 Kimi 订阅 · acco」（外层 div.overview-card.active）"
+        ]
+      }
+    ]
+  }
+]

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "my-ocean",
+  "name": "我的深海",
+  "mode": "dark",
+  "extends": "builtin.ocean",
+  "author": "Your name",
+  "description": "基于深海，只覆盖需要调整的界面颜色。",
+  "version": "1.0.0",
+  "colors": {
+    "window": "#0E1627",
+    "surface": "#172238",
+    "text": "#E8EEF9",
+    "accent": "#B9D4FF",
+    "onAccent": "#14233A"
+  }
+}
