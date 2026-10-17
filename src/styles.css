@@ -136,15 +136,16 @@ button { cursor: pointer; }
 .quota-ring { position: absolute; inset: calc(var(--ring-index, 0) * 8px); border-radius: 50%; background: conic-gradient(var(--ring-color, var(--score)) var(--progress), var(--ring-track) 0); transform: rotate(-90deg); }
 .quota-ring span { position: absolute; inset: 6px; border-radius: 50%; background: var(--surface); pointer-events: none; }
 .quota-ring.is-active { filter: drop-shadow(0 0 4px rgba(70, 150, 116, .4)); }
-.ring-0 { --ring-index: 0; }
-.ring-1 { --ring-index: 1; }
-.ring-2 { --ring-index: 2; }
-.ring-3 { --ring-index: 3; }
+.ring-0 { --ring-index: 0; --ring-color: #55b8c1; }
+.ring-1 { --ring-index: 1; --ring-color: #8370df; }
+.ring-2 { --ring-index: 2; --ring-color: #e47b62; }
+.ring-3 { --ring-index: 3; --ring-color: #68aa7c; }
 .ring-core { position: absolute; inset: 25px; display: grid; place-items: center; align-content: center; gap: 3px; border-radius: 50%; color: var(--green-deep); background: var(--surface-2); box-shadow: 0 0 0 1px var(--line); text-align: center; }
 .ring-core strong { max-width: 56px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; line-height: 1; }
 .ring-core small { color: var(--ink-soft); font-size: 9px; }
 .overview-meter span { display: inline-flex; align-items: center; gap: 5px; }
 .ring-dot { width: 7px; height: 7px; display: inline-block; border-radius: 50%; background: #55b8c1; }
+.ring-dot-1 { background: #8370df; }.ring-dot-2 { background: #e47b62; }.ring-dot-3 { background: #68aa7c; }
 html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget-window-shell) #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; }
 .widget-window-shell { width: 100%; height: 100%; min-width: 0; min-height: 0; box-sizing: border-box; overflow: hidden; }
 .widget-window-shell .widget-row { min-width: 0; max-width: 100%; overflow: hidden; }
