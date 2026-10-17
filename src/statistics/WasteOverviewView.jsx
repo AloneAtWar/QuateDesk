@@ -20,7 +20,7 @@ function WasteChart({ buckets, selectedId, onSelect, hasData, plotHeight = null,
         <div className="global-waste-gridlines" aria-hidden="true">{[0, 1, 2, 3, 4, 5].map((tick) => <i key={tick} />)}</div>
         {buckets.map((bucket) => <button type="button" key={bucket.id} className={`global-waste-bar-button${selectedId === bucket.id ? ' selected' : ''}${bucket.total == null ? ' unknown' : ''}`} aria-pressed={selectedId === bucket.id} aria-label={`${bucket.dateLabel}，${bucket.total == null ? '无可靠记录' : `浪费 ${formatWasteAmount(bucket.total)} 份，${bucket.count} 个有效周期`}，查看账号贡献`} title={`${bucket.dateLabel}\n${bucket.total == null ? '无可靠记录' : `${formatWasteAmount(bucket.total)} 份 · ${bucket.count} 个有效周期`}`} onClick={() => onSelect(bucket.id)}>
           <span className="global-waste-bar-area"><span className="global-waste-bar" style={{ height: bucket.total == null ? '0%' : `${bucket.total / maximum * 100}%` }}><b>{formatWasteAmount(bucket.total)}</b></span></span>
-          <span className="global-waste-bar-label"><strong>{bucket.label}</strong><small>{buckets.length <= 4 ? bucket.dateLabel : formatWasteDate(bucket.start)}</small></span>
+          <span className="global-waste-bar-label"><strong><span>{formatWasteDate(bucket.start)}</span><span>–{formatWasteDate(bucket.endExclusive - 1)}</span></strong></span>
         </button>)}
         {!hasData && <span className="global-waste-chart-empty">此范围暂无可靠周期记录</span>}
       </div>
@@ -37,7 +37,7 @@ export default function WasteOverviewView({ accounts, providers, Logo, api = win
   const [data, setData] = useState({ archives: {}, loading: true, error: '', loadedAt: null });
   const requestId = useRef(0);
   const contributionsRef = useRef(null);
-  // 贡献表是页面唯一的弹性区域(flex:1,最小 112px):两个手柄的动态上限
+  // 贡献表是页面唯一的弹性区域:两个手柄的动态上限
   // 都从它的余量里扣,拖到上限时贡献表刚好到最小高度,任何元素都不会被挤出。
   // 页面已溢出时(窗口缩小后)溢出量计为负余量,窗口变化收敛才能把超高组件压回去
   const slack = useCallback(() => {
@@ -45,7 +45,8 @@ export default function WasteOverviewView({ accounts, providers, Logo, api = win
     if (!el) return 0;
     const page = el.parentElement;
     const overflow = page ? Math.max(0, page.scrollHeight - page.clientHeight) : 0;
-    return el.getBoundingClientRect().height - 112 - overflow;
+    const minimum = Number.parseFloat(getComputedStyle(el).minHeight) || 164;
+    return el.getBoundingClientRect().height - minimum - overflow;
   }, []);
   // 趋势图可拖拽调高(默认沿用样式表,宽窗断点下更高),贡献表随 flex 自适应收缩
   const chartMeasure = useCallback((el) => el?.querySelector('.global-waste-bar-area')?.getBoundingClientRect().height || 0, []);
@@ -56,7 +57,7 @@ export default function WasteOverviewView({ accounts, providers, Logo, api = win
   });
   // 汇总卡条也可拖拽调高,与趋势图共用贡献表余量
   const summaryResize = useResizableHeight('qd-resize:waste-summary', {
-    min: 60, max: 150, grow: 'down',
+    min: 56, max: 150, grow: 'down',
     limit: (el) => (el?.getBoundingClientRect().height || 0) + slack(),
   });
   const mounted = useRef(false);
@@ -104,7 +105,7 @@ export default function WasteOverviewView({ accounts, providers, Logo, api = win
     {data.error ? <div className="local-cli-state-card global-waste-state" role="alert"><AlertCircle size={27} /><div><b>无法读取完整的历史浪费</b><small>{data.error}</small></div><button type="button" className="outline-button" onClick={refresh}><RefreshCw size={12} />重新读取</button></div>
       : data.loading ? <div className="local-cli-state-card global-waste-state" role="status"><RefreshCw size={27} className="spinning" /><div><b>正在读取历史周期</b><small>汇总所有账号的已结束周期…</small></div></div> : <>
         <div className="global-waste-summary" ref={summaryResize.targetRef} style={summaryResize.height !== null ? { height: `${summaryResize.height}px`, minHeight: `${summaryResize.height}px` } : undefined}>
-          <div className="global-waste-total"><span className="global-waste-icon"><Trash2 size={18} /></span><div><small>累计浪费</small><div><b>{formatWasteAmount(report.total)}</b><span>份周期额度</span></div><em>各周期总额度记为 1 份</em></div></div>
+          <div className="global-waste-total"><span className="global-waste-icon"><Trash2 size={18} /></span><div><small>累计浪费</small><div><b>{formatWasteAmount(report.total)}</b><span title="各账号的周期总额度记为1份，累计不代表金额或Token">份周期额度</span></div></div></div>
           <div className="global-waste-metric"><small>平均浪费</small><b>{formatWastePercent(report.average)}</b></div>
           <div className="global-waste-metric"><small>有效周期</small><b>{report.count}<span> 个</span></b></div>
         </div>

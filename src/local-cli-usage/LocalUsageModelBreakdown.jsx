@@ -71,7 +71,7 @@ export default function LocalUsageModelBreakdown({ report, loading, error, range
                     {!hideAgentLabel && <small>{agentsLine}{!canMergeModels ? '' : row.agents.length > 1 ? ` · ${row.agents.length} 个渠道` : ''}</small>}
                   </div>
                   <div className="col-bar">
-                    <span className="local-cli-total-bar" style={{ width: `${maxTotal > 0 ? Math.max(2, Math.round((row.totalTokens / maxTotal) * 100)) : 0}%` }} />
+                    <span className="local-cli-total-bar" style={{ width: `${row.totalTokens > 0 && maxTotal > 0 ? Math.max(2, Math.round((row.totalTokens / maxTotal) * 100)) : 0}%` }} />
                   </div>
                   <div className="col-total">{formatLocalTokensCompact(row.totalTokens)}</div>
                   <div className="col-cache">{ratio === null ? '—' : formatLocalPercent(ratio)}</div>

@@ -15,7 +15,11 @@ export const formatLocalTokensCompact = (value) => {
 // 完整数字:1,234,567,用于 tooltip 与当日明细
 export const formatLocalTokensExact = (value) => (hasFiniteNumber(value) ? new Intl.NumberFormat('zh-CN').format(Number(value)) : '—');
 
-export const formatLocalPercent = (value) => (hasFiniteNumber(value) ? `${(Number(value) * 100).toFixed(1)}%` : '—');
+export const formatLocalPercent = (value) => {
+  if (!hasFiniteNumber(value)) return '—';
+  const percent = Number(value) * 100;
+  return percent > 0 && percent < 0.1 ? '<0.1%' : `${percent.toFixed(1)}%`;
+};
 
 const pad2 = (value) => String(value).padStart(2, '0');
 

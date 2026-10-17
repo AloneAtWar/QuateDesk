@@ -7,6 +7,7 @@ import {
   Pencil, Pin, QrCode, Sparkles, SquareTerminal, SunMoon, Tag, Trash2, TrendingUp, Trophy, UploadCloud, X, Zap, Bug,
 } from 'lucide-react';
 import { builtinLocalAnalysisDefaults, initialAccounts, providerCatalog, windowCatalog } from './data';
+import { quotaColor, QUOTA_COLORS as CHART_COLORS } from './quota-colors';
 import { adapterDefinitions } from './adapters';
 import { newApiTemplateScript } from './newapi-template';
 import { computeUsageStreaks, formatProviderUsageCost, formatProviderUsageSummaryTokens } from './provider-usage-format';
@@ -412,8 +413,8 @@ function ConcentricRings({ account }) {
   const unavailable = meters.find((meter) => meter.available === false);
   const active = unavailable || meters.find((meter) => meter.key === hoveredKey) || smallest;
   return <div className="concentric-rings" aria-label={`${meters.length} 个额度窗口`}>
-    {meters.map((meter, index) => <div className={`quota-ring ring-${index} ${active?.key === meter.key ? 'is-active' : ''}`} key={meter.key} style={{ '--progress': `${Math.max(0, Math.min(100, Number(meter.remaining || 0))) * 3.6}deg` }} onMouseEnter={() => setHoveredKey(meter.key)} onMouseLeave={() => setHoveredKey(null)}><span /></div>)}
-    <div className={`ring-core ${unavailable ? 'unavailable' : ''}`}><strong>{unavailable ? '不可用' : active ? formatAmount(active) : '—'}</strong><small>{active ? windowCatalog[active.key]?.label || active.key : '暂无窗口'}</small>{!unavailable && active?.resetAt && <em title={formatResetAbsolute(active.resetAt)}>{formatReset(active.resetAt)}</em>}</div>
+    {meters.map((meter, index) => <div className={`quota-ring ring-${index} ${active?.key === meter.key ? 'is-active' : ''}`} key={meter.key} style={{ '--ring-color': quotaColor(meter.key), '--progress': `${Math.max(0, Math.min(100, Number(meter.remaining || 0))) * 3.6}deg` }} onMouseEnter={() => setHoveredKey(meter.key)} onMouseLeave={() => setHoveredKey(null)}><span /></div>)}
+    <div className={`ring-core ${unavailable ? 'unavailable' : ''}`}><strong>{unavailable ? '不可用' : active ? formatAmount(active) : '—'}</strong><small>{active ? windowCatalog[active.key]?.label || active.key : '暂无窗口'}</small></div>
   </div>;
 }
 
@@ -571,9 +572,7 @@ function WindowsView({ accounts, providers, reminderRules, embedded = false, onO
 }
 
 // 额度历史折线图：横轴时间、纵轴剩余额度（百分比窗口取 remaining，余额窗口取 amount），每个窗口维度一条线
-const CHART_COLORS = { five_hour: 'var(--cyan)', daily: 'var(--sky)', weekly: 'var(--violet)', monthly: 'var(--coral)', yearly: 'var(--amber)', balance: 'var(--green)', mimo_plan: 'var(--coral)', gemini_pro: 'var(--sky)', gemini_flash: 'var(--cyan)', gemini_flash_lite: 'var(--green-deep)' };
-const CHART_FALLBACK_COLORS = ['var(--cyan)', 'var(--violet)', 'var(--coral)', 'var(--green)', 'var(--sky)'];
-const chartColor = (key, index) => CHART_COLORS[key] || CHART_FALLBACK_COLORS[index % CHART_FALLBACK_COLORS.length];
+const chartColor = quotaColor;
 const chartValue = (sample) => sample.unit === '%' ? sample.remaining : Number(sample.amount ?? sample.remaining);
 const formatChartValue = (sample, value) => sample.unit === '%' ? `${Math.round(value)}%` : `${sample.unit === 'CNY' ? '¥' : sample.unit}${Number(value).toFixed(2)}`;
 const formatChartNumber = (value) => Number.isInteger(value) ? String(value) : Number(value).toFixed(2);
@@ -1672,9 +1671,8 @@ function OverviewCard({ account, provider, feedback, onOpenHistory, onRelogin, o
     <div className="overview-body">
       <ConcentricRings account={account} />
       <div className="overview-meters">{[...desc].reverse().map((meter) => {
-        const detail = `${formatReset(meter.resetAt)}${formatQuotaDetail(meter) ? ` · ${formatQuotaDetail(meter)}` : ''}`;
-        const detailTitle = `${formatResetAbsolute(meter.resetAt)}${formatQuotaDetail(meter) ? ` · ${formatQuotaDetail(meter)}` : ''}`;
-        return <div className="overview-meter" key={meter.key}><span><i className={`ring-dot ring-dot-${desc.indexOf(meter)}`} />{windowCatalog[meter.key]?.label || meter.key}</span><b>{formatAmount(meter)}</b><small title={detailTitle}>{detail}</small></div>;
+        const detail = formatQuotaDetail(meter);
+        return <div className="overview-meter" key={meter.key}><span><i className="ring-dot" style={{ background: quotaColor(meter.key) }} />{windowCatalog[meter.key]?.label || meter.key}</span><b>{formatAmount(meter)}</b><small className="overview-reset" title={formatResetAbsolute(meter.resetAt)}>{formatReset(meter.resetAt)}</small>{detail && <small className="overview-quota-detail">{detail}</small>}</div>;
       })}</div>
     </div>
   </div>;
