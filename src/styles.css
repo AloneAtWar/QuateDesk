@@ -372,9 +372,14 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .main-view-menu-dismiss { position: fixed; inset: 32px 0 0; z-index: 48; border: 0; background: transparent; }
 .main-view-anchor { position: relative; flex: 0 0 auto; }
 .main-view-anchor.open { z-index: 49; }
-.main-view-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 49; width: 124px; padding: 4px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); box-shadow: 0 8px 24px rgba(20, 40, 30, .14); }
-.main-view-menu button { width: 100%; display: flex; align-items: center; justify-content: space-between; padding: 7px 9px; border: 0; border-radius: 4px; background: transparent; color: var(--ink-soft); font-size: 11px; }
-.main-view-menu button:hover, .main-view-menu button.active { color: var(--green-deep); background: var(--green-bg); }
+/* 全局导航与账号视图共用菜单密度，仅用宽度区分层级。 */
+.main-view-menu, .history-switch-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 49; max-width: calc(100vw - 24px); padding: 4px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); box-shadow: 0 8px 24px rgba(20, 40, 30, .14); }
+.main-view-menu { width: clamp(124px, calc(90px + 4.2vw), 170px); }
+.history-switch-menu { width: clamp(108px, calc(78px + 3.6vw), 148px); }
+.main-view-menu button, .history-switch-menu button { width: 100%; min-height: clamp(30px, calc(24px + .75vw), 38px); display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: clamp(7px, .5vw, 9px) clamp(9px, .7vw, 12px); border: 0; border-radius: 4px; background: transparent; color: var(--ink-soft); font-size: clamp(11px, calc(8.8px + .275vw), 14px); line-height: 1.4; text-align: left; }
+.main-view-menu button > span, .history-switch-menu button > span { display: flex; align-items: center; justify-content: center; flex: 0 0 12px; }
+.main-view-menu button:hover, .main-view-menu button.active, .history-switch-menu button:hover, .history-switch-menu button.active { color: var(--green-deep); background: var(--green-bg); }
+.main-view-menu button:focus-visible, .history-switch-menu button:focus-visible { outline: 2px solid var(--focus-border); outline-offset: -2px; }
 .toast { position: fixed; bottom: calc(56px + env(safe-area-inset-bottom, 0px)); left: 50%; z-index: 60; display: flex; align-items: center; gap: 8px; width: max-content; max-width: min(480px, calc(100vw - 32px)); padding: 10px 14px; border-radius: 10px; font-size: 12px; line-height: 1.5; transform: translateX(-50%); animation: toast-in .2s ease-out, toast-out .18s 2.82s ease-in forwards; box-shadow: 0 6px 24px rgba(20, 35, 28, .16); pointer-events: none; }
 .toast.ok { color: var(--green-deep); background: var(--green-bg); border: 1px solid var(--green-line); }
 .toast.fail { color: var(--coral-deep); background: var(--coral-bg); border: 1px solid var(--warn-border); }
@@ -854,11 +859,8 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .history-switch-dismiss { position: fixed; inset: 0; z-index: 48; }
 .history-switch-anchor { position: relative; flex: 0 0 auto; }
 .history-switch-anchor.open { z-index: 49; }
-.history-switch-toggle { display: flex; align-items: center; gap: 4px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink-soft); background: var(--control); font-size: 10px; }
+.history-switch-toggle { min-height: 26px; display: flex; align-items: center; gap: 6px; padding: 4px 11px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink-soft); background: var(--control); font-size: 11px; line-height: 1.4; }
 .history-switch-toggle:hover { color: var(--ink); border-color: var(--hover-border); }
-.history-switch-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 49; min-width: 90px; padding: 2px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 8px 24px rgba(20, 40, 30, .14); }
-.history-switch-menu button { width: 100%; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1px 4px; padding: 3px 5px; border: 0; border-radius: 4px; background: transparent; color: var(--ink-soft); font-size: 9px; text-align: left; }
-.history-switch-menu button:hover, .history-switch-menu button.active { color: var(--green-deep); background: var(--green-bg); }
 .history-switch-menu button.disabled, .history-switch-menu button.disabled:hover { color: var(--faint); background: transparent; cursor: not-allowed; }
 .provider-usage-view { height: 271px; min-width: 0; display: flex; flex-direction: column; padding: 7px 12px 5px; }
 /* 顶部统计卡片：彩色圆底图标在左，标签 + 数值在右 */
@@ -1571,7 +1573,8 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
   .history-head { padding: 15px 20px 12px; }
   .history-head .account-title-line strong { font-size: 15px; }
   .history-head .account-copy > span { font-size: 11.5px; }
-  .history-view .seg-control button, .local-cli-page .seg-control button, .history-view .history-switch-toggle { padding: 5px 14px; font-size: 12px; }
+  .history-view .seg-control button, .local-cli-page .seg-control button { padding: 5px 14px; font-size: 12px; }
+  .history-view .history-switch-toggle { min-height: 32px; padding: 6px 16px; font-size: 13px; }
   .provider-stat { gap: 10px; padding: 9px 13px; border-radius: 12px; }
   .provider-stat .stat-copy > span { font-size: 10px; }
   .provider-stat strong { font-size: 16px; }
@@ -1643,10 +1646,6 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 
 /* ── 宽屏下拉菜单跟随整体界面等比放大（视图切换 / 历史视图 / 本机用量范围 / 渠道） ── */
 @media (min-width: 1500px) {
-  .main-view-menu { width: 150px; padding: 5px; }
-  .main-view-menu button { padding: 8px 11px; font-size: 13px; }
-  .history-switch-menu { min-width: 108px; }
-  .history-switch-menu button { padding: 4px 6px; font-size: 11px; }
   .local-cli-range-menu { padding: 5px; }
   .local-cli-range-option { padding: 6px 9px; font-size: 12px; }
   .local-cli-channel-search input { font-size: 12px; }
@@ -1657,16 +1656,28 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 }
 
 @media (min-width: 1900px) {
-  .main-view-menu { width: 170px; }
-  .main-view-menu button { padding: 9px 12px; font-size: 14px; }
-  .history-switch-menu { min-width: 122px; }
-  .history-switch-menu button { padding: 5px 7px; font-size: 12px; }
   .local-cli-range-option { padding: 7px 10px; font-size: 13px; }
   .local-cli-channel-search input { font-size: 13px; }
   .local-cli-channel-options { max-height: 290px; }
   .local-cli-channel-option { padding: 7px 10px; font-size: 13px; }
   .local-cli-channel-option > small { font-size: 10.5px; }
   .local-cli-channel-empty { font-size: 13px; }
+}
+
+/* 菜单随窗口宽度平滑缩放；触屏单独保证点击高度，不以窗口大小判断输入方式。 */
+@media (any-pointer: coarse) {
+  .main-view-menu, .history-switch-menu { padding: 5px; }
+  .main-view-menu { width: 160px; }
+  .history-switch-menu { width: 140px; }
+  .main-view-menu button, .history-switch-menu button { min-height: 44px; padding: 10px 11px; font-size: 14px; }
+}
+
+/* 远程页的窄屏布局也提供触屏尺寸，兼容未正确报告 pointer 能力的 WebView。 */
+@media (max-width: 620px) {
+  .remote-app .main-view-menu, .remote-app .history-switch-menu { padding: 5px; }
+  .remote-app .main-view-menu { width: 160px; }
+  .remote-app .history-switch-menu { width: 140px; }
+  .remote-app .main-view-menu button, .remote-app .history-switch-menu button { min-height: 44px; padding: 10px 11px; font-size: 14px; }
 }
 
 /* ── 宽屏热力图：外框保持 flex:1 吃满纵向余量(基础规则),格子行高由 JS 按框高撑满,
