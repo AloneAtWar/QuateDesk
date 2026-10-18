@@ -1417,16 +1417,16 @@ async function pollState(accountIds = null) {
   pollInProgress = true;
   sendState(current);
   const ids = accountIds ? new Set(accountIds) : null;
-  const polled = [];
-  for (const account of current.accounts || []) {
+  // 各账号独立并发查询；等待全部完成后统一合并，单个账号失败不影响其他账号。
+  const polled = await Promise.all((current.accounts || []).filter((account) => {
     // 定时巡检跳过停用账号（数据冻结、不产生新历史点与提醒）；点名轮询不受限，
     // 「测试连接」与启用后的立即补拉都靠它验证停用中的账号
-    if (account.disabled && !ids) continue;
-    if (ids && !ids.has(account.id)) continue;
+    if (account.disabled && !ids) return false;
+    return !ids || ids.has(account.id);
+  }).map(async (account) => {
     const provider = (current.providers || []).find((item) => item.id === account.providerId);
     if (!provider) {
-      polled.push({ ...account, status: 'warning', lastError: '找不到厂商配置', lastChecked: new Date().toISOString() });
-      continue;
+      return { ...account, status: 'warning', lastError: '找不到厂商配置', lastChecked: new Date().toISOString() };
     }
     try {
       const windows = await queryAccountWithSilentRenewal(account, provider);
@@ -1434,16 +1434,16 @@ async function pollState(accountIds = null) {
       // 查询成功后刷新身份信息（续期后的最新凭据重新解析一次）
       const identityPatch = cliIdentityPatch(account, provider.requestConfig?.adapterMode, store.getSecrets(account.id));
       const updated = { ...account, ...(identityPatch || {}), windows, status: 'active', authStatus: null, lastError: null, lastChecked: checkedAt, lastTestAt: checkedAt };
-      polled.push(updated);
       store.appendHistory(account.id, windows, historyRetentionDays());
       // 周期浪费归档：从该账号历史中提取已结束的周期（周/月等厂商预设窗口），永久保存
       store.archiveCycles(account.id, resolveWasteWindows(provider.requestConfig));
       notifyWaste(current, updated, provider);
+      return updated;
     } catch (error) {
       const checkedAt = new Date().toISOString();
-      polled.push({ ...account, status: 'warning', authStatus: authStatusForPollError(error), lastError: error.message, lastChecked: checkedAt, lastTestAt: checkedAt });
+      return { ...account, status: 'warning', authStatus: authStatusForPollError(error), lastError: error.message, lastChecked: checkedAt, lastTestAt: checkedAt };
     }
-  }
+  }));
   const latest = migrateState(store.loadState()) || current;
   const next = cleanState({
     ...latest,
