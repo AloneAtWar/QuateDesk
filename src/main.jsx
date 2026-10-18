@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import {
@@ -20,6 +20,7 @@ import { EmptyWorkspace } from './empty-workspace';
 import { useBoardPullRefresh } from './use-board-pull-refresh';
 import { BoardPullRefreshIndicator } from './board-pull-refresh-indicator';
 import { accountRefreshFeedback, TransientToast, useTransientToast } from './transient-toast';
+import { buildRefreshQueues, getUpcomingRefreshItems } from './upcoming-refresh';
 import './styles.css';
 
 const formatReset = (resetAt) => {
@@ -1726,9 +1727,7 @@ function StatusView({ accounts, providers, runtime, onTestAccount, testingAccoun
   </div>;
 }
 
-// 看板底部的「即将刷新」栏：启用账号的每个带重置时间的额度窗口各占一条，从近到远单行排列；
-// 「即将刷新」标题固定在左，仅右侧条目区单行滑动：触屏走浏览器原生横向滚动，鼠标按住拖动
-// 或悬停滚动滚轮平移（滚动条隐藏）；未滑到边时两端渐隐提示还有更多条目
+// 底栏始终保留单队列，上方可展开三个周期队列；按钮独立置于面板上沿正中。
 const REFRESH_DRAG_MOVE_PX = 4;
 // 条目的剩余百分比配色：剩得越多、刷新时浪费越多，颜色越重（<20% 绿 / <40% 青 / <70% 橙 / ≥70% 红）；
 // 窗口已用尽，或同账号更长周期的窗口已耗尽（短周期刷新了也跑不动）时置灰
@@ -1745,13 +1744,7 @@ const refreshChipTone = (account, meter) => {
   if (remaining < 70) return 'warn';
   return 'waste';
 };
-function UpcomingRefreshBar({ accounts, providers, onOpenHistory }) {
-  const upcoming = useMemo(() => accounts
-    .filter((account) => !account.disabled)
-    .flatMap((account) => (account.windows || [])
-      .filter((meter) => meter.resetAt && !Number.isNaN(new Date(meter.resetAt).getTime()))
-      .map((meter) => ({ account, meter, at: new Date(meter.resetAt).getTime() })))
-    .sort((a, b) => a.at - b.at), [accounts]);
+function UpcomingRefreshTrack({ items, providers, onOpenHistory, labelId, showCycle = false }) {
   const trackRef = useRef(null);
   const [edges, setEdges] = useState({ left: false, right: false });
   const [dragging, setDragging] = useState(false);
@@ -1782,8 +1775,7 @@ function UpcomingRefreshBar({ accounts, providers, onOpenHistory }) {
       track.removeEventListener('wheel', onWheel);
       if (observer) observer.disconnect();
     };
-  }, [upcoming.length]);
-  if (!upcoming.length) return null;
+  }, [items]);
   // 仅鼠标启用拖拽：触屏交给原生横向滚动（touch-action 不受限，竖向手势仍滚动整页）
   const onPointerDown = (event) => {
     if (event.pointerType !== 'mouse' || event.button !== 0) return;
@@ -1806,8 +1798,8 @@ function UpcomingRefreshBar({ accounts, providers, onOpenHistory }) {
     }
     track.scrollLeft = drag.startScroll - dx;
   };
-  const endDrag = () => {
-    if (dragRef.current?.moved) suppressClickRef.current = true;
+  const endDrag = (event) => {
+    suppressClickRef.current = event.type !== 'pointercancel' && Boolean(dragRef.current?.moved);
     dragRef.current = null;
     setDragging(false);
   };
@@ -1817,30 +1809,56 @@ function UpcomingRefreshBar({ accounts, providers, onOpenHistory }) {
     event.preventDefault();
     event.stopPropagation();
   };
-  return <footer className="refresh-bar">
-    <span className="refresh-bar-title"><Clock3 size={12} />即将刷新</span>
-    <div className={`refresh-track-wrap${edges.left ? ' more-left' : ''}${edges.right ? ' more-right' : ''}`}>
+  return <div className={`refresh-track-wrap${edges.left ? ' more-left' : ''}${edges.right ? ' more-right' : ''}`}>
       <div
         ref={trackRef}
         className={`refresh-track${dragging ? ' dragging' : ''}`}
+        role="region"
+        aria-labelledby={labelId}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
         onClickCapture={onClickCapture}
       >
-        {upcoming.map(({ account, meter }) => {
+        {items.length === 0 && <span className="refresh-queue-empty">—</span>}
+        {items.map(({ account, meter }) => {
           const provider = providers.find((item) => item.id === account.providerId);
           const label = windowCatalog[meter.key]?.label || meter.key;
           const tone = refreshChipTone(account, meter);
           const percent = meter.unit === '%' && Number.isFinite(Number(meter.remaining)) ? `${Math.round(meter.remaining)}%` : '';
-          return <button type="button" className="refresh-chip" key={`${account.id}-${meter.key}`} title={`${account.name} · ${label}${percent ? ` · 剩余 ${percent}` : ''} · ${formatResetAbsolute(meter.resetAt)}`} onClick={() => onOpenHistory?.(account)}>
-            <Logo provider={provider} size="xs" interactive={false} /><span>{account.name}</span><em>{label}</em>{percent && <b className={tone}>{percent}</b>}<small>{formatResetCompact(meter.resetAt)}</small>
+          return <button type="button" className="refresh-chip" key={`${account.id}-${meter.key}`} title={`${account.name} · ${label}${percent ? ` · 剩余 ${percent}` : ''} · ${formatResetAbsolute(meter.resetAt)}`} aria-label={`${account.name} · ${label}${percent ? ` · 剩余 ${percent}` : ''} · ${formatReset(meter.resetAt)}`} onClick={() => onOpenHistory?.(account)}>
+            <Logo provider={provider} size="xs" interactive={false} /><span>{account.name}</span>{showCycle && <em>{label}</em>}{percent && <b className={tone}>{percent}</b>}<small>{formatResetCompact(meter.resetAt)}</small>
           </button>;
         })}
       </div>
+  </div>;
+}
+
+function UpcomingRefreshBar({ accounts, providers, onOpenHistory }) {
+  const [expanded, setExpanded] = useState(false);
+  const panelId = useId();
+  const upcoming = useMemo(() => getUpcomingRefreshItems(accounts), [accounts]);
+  const queues = useMemo(() => buildRefreshQueues(accounts), [accounts]);
+  return <section className="upcoming-refresh" aria-label="即将刷新">
+    {queues.length > 0 && <button type="button" className="refresh-queues-toggle" aria-label={expanded ? '收起刷新队列' : '展开刷新队列'} aria-expanded={expanded} aria-controls={panelId} onClick={() => setExpanded((value) => !value)}>
+      <ChevronDown size={14} aria-hidden="true" />
+    </button>}
+    <div className="refresh-queues-surface">
+      <div id={panelId} className={`refresh-queues-panel${expanded ? ' expanded' : ''}`} inert={!expanded} aria-hidden={!expanded}>
+        <div className="refresh-queues-content">
+          {queues.map(({ key, items }) => <div className="refresh-queue" role="group" aria-labelledby={`${panelId}-${key}`} data-cycle={key} key={key}>
+            <span className="refresh-queue-label" id={`${panelId}-${key}`}>{windowCatalog[key].label.replace(/\s+/g, '')}</span>
+            <UpcomingRefreshTrack items={items} providers={providers} onOpenHistory={onOpenHistory} labelId={`${panelId}-${key}`} />
+          </div>)}
+        </div>
+      </div>
+      <footer className="refresh-bar">
+        <span className="refresh-bar-title" id={`${panelId}-title`}><Clock3 size={12} />即将刷新</span>
+        <UpcomingRefreshTrack items={upcoming} providers={providers} onOpenHistory={onOpenHistory} labelId={`${panelId}-title`} showCycle />
+      </footer>
     </div>
-  </footer>;
+  </section>;
 }
 
 function Toggle({ checked, onChange, label, description }) {
@@ -2016,7 +2034,7 @@ function SharedSettingsPanel({ variant = 'desktop', desktopSection = 'all', sett
     {(desktopSection === 'all' || desktopSection === 'display') && <>
     <section className="drawer-section"><div className="drawer-section-title"><SunMoon size={16} /><span>外观显示</span></div>
       <div className="setting-select"><span><b>界面主题</b><small>主窗口与桌面浮窗同步应用</small></span><select value={values.theme === 'light' ? 'light' : 'dark'} onChange={(event) => update((old) => ({ ...old, theme: event.target.value }))}><option value="dark">暗色</option><option value="light">亮色</option></select></div>
-      <Toggle checked={values.showUpcomingRefresh !== false} onChange={(value) => update((old) => ({ ...old, showUpcomingRefresh: value }))} label="显示即将刷新" description="在看板底部按重置时间从近到远列出即将刷新的账号，电脑端与手机远程查看页均生效" />
+      <Toggle checked={values.showUpcomingRefresh !== false} onChange={(value) => update((old) => ({ ...old, showUpcomingRefresh: value }))} label="显示即将刷新" description="在看板底部展开 5小时、7天、1个月刷新队列，各周期按重置时间排序，电脑端与手机远程查看页均生效" />
     </section>
     </>}
   </>;

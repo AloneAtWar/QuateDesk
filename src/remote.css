@@ -93,8 +93,9 @@ body.remote-usage-bounded .remote-app { height: 100dvh; }
 .remote-loading, .remote-empty { min-height: 250px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--muted); text-align: center; }
 .remote-empty strong { color: var(--ink); font-size: 16px; }
 .remote-empty span { font-size: 12px; }
-/* 远程页「即将刷新」栏：像桌面端一样钉在视口底部跟随内容滚动，标题固定、条目区横向滑动（样式见 styles.css 的 .refresh-track）；高度按内容自适应并避开手势条 */
-.remote-app > .refresh-bar { position: sticky; bottom: 0; z-index: 10; height: auto; min-height: 30px; padding-top: 5px; padding-bottom: calc(5px + env(safe-area-inset-bottom)); }
+/* 三队列和底栏一起钉在视口底部，每行独立横向滚动。 */
+.remote-app > .upcoming-refresh { position: sticky; bottom: 0; z-index: 10; }
+.remote-app .refresh-bar { height: auto; min-height: 30px; padding-top: 5px; padding-bottom: calc(5px + env(safe-area-inset-bottom)); }
 
 .remote-pair-page { min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; color: var(--ink); background: radial-gradient(circle at 50% 20%, rgba(103, 197, 163, .14), transparent 50%), var(--bg); }
 .remote-pair-card { width: min(420px, 100%); padding: 30px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow); }
@@ -156,7 +157,11 @@ body.remote-usage-bounded .remote-app { height: 100dvh; }
   .remote-main .card-status-icon { width: 17px; height: 17px; }
   .remote-main .view-intro.overview-title { margin-right: -8px; margin-left: -8px; padding-right: 8px; padding-left: 8px; }
   /* 手机上把「即将刷新」栏加高到易点尺寸，chip 也放大一点便于触摸 */
-  .remote-app > .refresh-bar { min-height: 42px; padding-top: 7px; padding-bottom: calc(7px + env(safe-area-inset-bottom)); }
+  .remote-app .refresh-bar { min-height: 42px; padding-top: 7px; padding-bottom: calc(7px + env(safe-area-inset-bottom)); }
+  .remote-app .refresh-queues-toggle { width: 48px; height: 20px; }
+  .remote-app .refresh-queues-toggle::before { inset: -7px 0; }
+  .remote-app .refresh-queue { min-height: 52px; }
+  .remote-app .refresh-chip { min-height: 44px; }
   .remote-app .refresh-chip { max-width: 150px; padding: 5px 11px; }
   .remote-app .refresh-bar-title { font-size: 9px; }
   .remote-main > .view-stack { gap: 12px; }
