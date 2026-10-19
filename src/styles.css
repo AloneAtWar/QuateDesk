@@ -159,6 +159,9 @@ button { cursor: pointer; }
 .ring-2 { --ring-index: 2; --ring-color: #e47b62; }
 .ring-3 { --ring-index: 3; --ring-color: #68aa7c; }
 .ring-core { position: absolute; inset: 25px; display: grid; place-items: center; align-content: center; gap: 3px; border-radius: 50%; color: var(--green-deep); background: var(--surface-2); box-shadow: 0 0 0 1px var(--line); text-align: center; }
+/* 多窗口账号：中心读数可点按逐个切换（触屏替代悬停），单窗口保持纯展示 */
+.concentric-rings .ring-core[role="button"] { cursor: pointer; }
+.concentric-rings .ring-core[role="button"]:focus-visible { outline: 2px solid var(--focus-border); }
 .ring-core strong { max-width: 56px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; line-height: 1; }
 .ring-core small { color: var(--ink-soft); font-size: 9px; }
 .overview-meter span { display: inline-flex; align-items: center; gap: 5px; }
@@ -378,6 +381,9 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .history-switch-menu { width: clamp(108px, calc(78px + 3.6vw), 148px); }
 .main-view-menu button, .history-switch-menu button { width: 100%; min-height: clamp(30px, calc(24px + .75vw), 38px); display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: clamp(7px, .5vw, 9px) clamp(9px, .7vw, 12px); border: 0; border-radius: 4px; background: transparent; color: var(--ink-soft); font-size: clamp(11px, calc(8.8px + .275vw), 14px); line-height: 1.4; text-align: left; }
 .main-view-menu button > span, .history-switch-menu button > span { display: flex; align-items: center; justify-content: center; flex: 0 0 12px; }
+/* 历史视图菜单项：标签 + 不可用原因小字纵向排列（触屏没有悬停 title，原因直接可见） */
+.history-switch-menu button > .history-switch-item { display: grid; gap: 2px; flex: 1 1 auto; min-width: 0; }
+.history-switch-item small { color: var(--faint); font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; text-align: left; }
 .main-view-menu button:hover, .main-view-menu button.active, .history-switch-menu button:hover, .history-switch-menu button.active { color: var(--green-deep); background: var(--green-bg); }
 .main-view-menu button:focus-visible, .history-switch-menu button:focus-visible { outline: 2px solid var(--focus-border); outline-offset: -2px; }
 .toast { position: fixed; bottom: calc(56px + env(safe-area-inset-bottom, 0px)); left: 50%; z-index: 60; display: flex; align-items: center; gap: 8px; width: max-content; max-width: min(480px, calc(100vw - 32px)); padding: 10px 14px; border-radius: 10px; font-size: 12px; line-height: 1.5; transform: translateX(-50%); animation: toast-in .2s ease-out, toast-out .18s 2.82s ease-in forwards; box-shadow: 0 6px 24px rgba(20, 35, 28, .16); pointer-events: none; }
@@ -526,6 +532,8 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .timeline-tick { position: absolute; top: 24px; width: 1px; height: 10px; background: var(--line-strong); }
 .timeline-tick span { position: absolute; top: -13px; left: -15px; width: 32px; text-align: center; color: var(--faint); font-size: 8px; }
 .timeline-point { position: absolute; top: 25px; margin-left: -4px; }
+/* 触屏命中区：8px 圆点太小，垫一层透明热区盖住圆点上下（悬停同样受益） */
+.timeline-point::before { content: ''; position: absolute; left: 50%; top: -7px; width: 22px; height: 22px; transform: translateX(-50%); }
 .timeline-point i { display: block; width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 0 2px var(--surface); }
 .timeline-point i.sky { background: #4099d9; }
 .timeline-point i.violet { background: #7668d1; }
@@ -728,8 +736,8 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .range-control { display: flex; flex: 0 0 auto; gap: 0; }
 .range-control button { border: 0; padding: 1px 5px; border-radius: 4px; color: var(--ink-soft); background: transparent; font-size: 9px; }
 .range-control button.active { color: var(--ink); background: var(--surface-3); }
-.range-control button:hover:not(.active):not(:disabled) { color: var(--ink-soft); }
-.range-control button:disabled { opacity: .32; cursor: default; }
+.range-control button:hover:not(.active):not(:disabled):not([aria-disabled="true"]) { color: var(--ink-soft); }
+.range-control button:disabled, .range-control button[aria-disabled="true"] { opacity: .32; cursor: default; }
 .back-button { flex: 0 0 auto; width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-soft); background: var(--control); }
 .back-button:hover { color: var(--ink); border-color: var(--hover-border); }
 /* 趋势/浪费两个视图主体锁成同一固定高度，切换时整个卡片与头部切换按钮都不动；多余空间由图例行（趋势）或滚动区（浪费）吸收 */
@@ -806,7 +814,7 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .waste-plot { position: relative; flex: 1 1 auto; min-height: 0; margin-top: 10px; min-width: 100%; display: flex; align-items: flex-end; gap: 1px; padding: 0 10px; border-bottom: 1px solid var(--line-inner); }
 .waste-gridline { position: absolute; left: 10px; right: 10px; height: 1px; background: var(--line-inner); pointer-events: none; }
 /* 弹性面板没有显式高度，100% 高的列会塌缩到柱子的最小高度；拉伸列后，柱高按绘图区计算。 */
-.waste-col { flex: 1 0 8px; min-width: 8px; align-self: stretch; display: flex; align-items: flex-end; }
+.waste-col { flex: 1 0 8px; min-width: 8px; align-self: stretch; display: flex; align-items: flex-end; cursor: pointer; }
 .waste-plot.mo .waste-col { flex: 1 0 26px; min-width: 26px; }
 .waste-bar { width: 100%; max-width: 18px; margin: 0 auto; border-radius: 3px 3px 0 0; min-height: 2px; }
 .waste-plot.mo .waste-bar { max-width: 24px; }

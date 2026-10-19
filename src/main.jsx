@@ -413,22 +413,48 @@ function ConcentricRings({ account }) {
   const meters = [...(account.windows || [])].sort((a, b) => (durationOrder[b.key] || 9) - (durationOrder[a.key] || 9)).slice(0, 4);
   const smallest = meters.reduce((current, meter) => !current || (durationOrder[meter.key] || 9) < (durationOrder[current.key] || 9) ? meter : current, null);
   const [hoveredKey, setHoveredKey] = useState(null);
+  // 触屏没有悬停：点中心读数逐个切换窗口。环本体不挂点击——环盘占卡片大半，
+  // 拦截点击会让手机上点卡片打不开趋势页
+  const [tappedKey, setTappedKey] = useState(null);
   const unavailable = meters.find((meter) => meter.available === false);
-  const active = unavailable || meters.find((meter) => meter.key === hoveredKey) || smallest;
+  const active = unavailable || meters.find((meter) => meter.key === hoveredKey) || meters.find((meter) => meter.key === tappedKey) || smallest;
+  const cycleWindow = (event) => {
+    event.stopPropagation();
+    if (meters.length < 2) return;
+    const index = active ? meters.findIndex((meter) => meter.key === active.key) : -1;
+    const next = meters[(index + 1) % meters.length];
+    if (!next) return;
+    // 轮回一圈回到默认展示（最短周期窗口）时清除手选，恢复自动展示
+    setTappedKey(next.key === smallest?.key ? null : next.key);
+  };
   return <div className="concentric-rings" aria-label={`${meters.length} 个额度窗口`}>
     {meters.map((meter, index) => <div className={`quota-ring ring-${index} ${active?.key === meter.key ? 'is-active' : ''}`} key={meter.key} style={{ '--progress': `${Math.max(0, Math.min(100, Number(meter.remaining || 0))) * 3.6}deg` }} onMouseEnter={() => setHoveredKey(meter.key)} onMouseLeave={() => setHoveredKey(null)}><span /></div>)}
-    <div className={`ring-core ${unavailable ? 'unavailable' : ''}`}><strong>{unavailable ? '不可用' : active ? formatAmount(active) : '—'}</strong><small>{active ? windowCatalog[active.key]?.label || active.key : '暂无窗口'}</small></div>
+    <div className={`ring-core ${unavailable ? 'unavailable' : ''}`} role={meters.length > 1 ? 'button' : undefined} tabIndex={meters.length > 1 ? 0 : undefined} aria-label={meters.length > 1 ? '查看各窗口剩余额度' : undefined} onClick={meters.length > 1 ? cycleWindow : undefined} onKeyDown={meters.length > 1 ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); cycleWindow(event); } } : undefined}><strong>{unavailable ? '不可用' : active ? formatAmount(active) : '—'}</strong><small>{active ? windowCatalog[active.key]?.label || active.key : '暂无窗口'}</small></div>
   </div>;
 }
 
 function ResetTimeline({ accounts, providers }) {
   const scrollRef = useRef(null);
   const dragRef = useRef(null);
-  const [active, setActive] = useState(null);
+  const downRef = useRef(null);
+  const pointersRef = useRef(new Set());
+  const [hovered, setHovered] = useState(null);
+  // 触屏没有悬停：点圆点钉住详情，再点一次或点空白处取消；悬停优先于点击展示
+  const [tappedKey, setTappedKey] = useState(null);
   const points = useMemo(() => accounts.flatMap((account) => (account.windows || [])
     .filter((meter) => meter.key !== 'balance' && meter.resetAt)
     .map((meter) => ({ account, meter, at: new Date(meter.resetAt).getTime() }))
     .filter((point) => !Number.isNaN(point.at))), [accounts]);
+  const sortedPoints = useMemo(() => [...points].sort((a, b) => a.at - b.at), [points]);
+  // 钉住详情期间点到时间轴以外（卡片、页签等）取消钉住
+  useEffect(() => {
+    if (tappedKey == null) return undefined;
+    const onPointerDown = (event) => {
+      if (!event.target.closest?.('.reset-timeline')) setTappedKey(null);
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onPointerDown, true);
+  }, [tappedKey]);
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return undefined;
@@ -470,26 +496,61 @@ function ResetTimeline({ accounts, providers }) {
     dayTicks.push({ at: t, label: (d.getMonth() + 1) + '/' + d.getDate() });
   }
   let lastLabelX = -50;
+  const pointKey = (point) => `${point.account.id}:${point.meter.key}:${point.at}`;
+  const pointDetail = (point) => {
+    const provider = providers.find((item) => item.id === point.account.providerId);
+    const d = new Date(point.at);
+    return {
+      name: point.account.name,
+      providerName: provider?.name || '',
+      label: windowCatalog[point.meter.key]?.label || point.meter.key,
+      amount: formatAmount(point.meter),
+      absolute: (d.getMonth() + 1) + '/' + d.getDate() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()),
+      relative: formatReset(point.meter.resetAt),
+    };
+  };
+  const tappedPoint = tappedKey == null ? null : sortedPoints.find((point) => pointKey(point) === tappedKey) || null;
+  const active = hovered || (tappedPoint ? pointDetail(tappedPoint) : null);
+  // 拖动平移；未移动就抬起视为点击：命中圆点钉住详情，点空白取消
   const startDrag = (event) => {
+    pointersRef.current.add(event.pointerId);
+    downRef.current = { x: event.clientX, moved: pointersRef.current.size > 1 };
     dragRef.current = { x: event.clientX, left: scrollRef.current ? scrollRef.current.scrollLeft : 0 };
     if (event.currentTarget.setPointerCapture) event.currentTarget.setPointerCapture(event.pointerId);
   };
   const moveDrag = (event) => {
+    const down = downRef.current;
+    if (down && Math.abs(event.clientX - down.x) > 5) down.moved = true;
     if (dragRef.current && scrollRef.current) scrollRef.current.scrollLeft = dragRef.current.left - (event.clientX - dragRef.current.x);
   };
-  const endDrag = () => { dragRef.current = null; };
+  const endDrag = (event) => {
+    pointersRef.current.delete(event.pointerId);
+    const down = downRef.current;
+    dragRef.current = null;
+    downRef.current = null;
+    if (!down || down.moved || pointersRef.current.size > 0) return;
+    const hit = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('.timeline-point');
+    const point = hit ? sortedPoints[Number(hit.dataset.index)] : null;
+    const key = point ? pointKey(point) : null;
+    setTappedKey(key && key !== tappedKey ? key : null);
+  };
+  const cancelDrag = (event) => {
+    if (event.pointerId != null) pointersRef.current.delete(event.pointerId);
+    dragRef.current = null;
+    downRef.current = null;
+  };
   return <section className="surface-section timeline-section">
     {heading}
     <div className="timeline-detail">{active
       ? <><b>{active.name}</b><em>{active.providerName} · {active.label}</em><strong>{active.amount}</strong><small>{active.absolute} · {active.relative}</small></>
-      : <span className="timeline-detail-hint">悬停圆点查看账号详情</span>}</div>
-    <div className="reset-timeline" ref={scrollRef} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerLeave={endDrag} onPointerCancel={endDrag}>
+      : <span className="timeline-detail-hint">点击或悬停圆点查看账号详情</span>}</div>
+    <div className="reset-timeline" ref={scrollRef} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerLeave={cancelDrag} onPointerCancel={cancelDrag}>
       <div className="timeline-track" style={{ width }}>
         <div className="timeline-axis" />
         <div className="timeline-now"><span>现在</span></div>
         {nearTicks.map((tick) => Math.round(toX(tick.at)) < 34 ? null : <div className="timeline-tick near" key={tick.at} style={{ left: Math.round(toX(tick.at)) }}><span>{tick.label}</span></div>)}
         {dayTicks.map((tick) => <div className="timeline-tick" key={tick.at} style={{ left: Math.round(toX(tick.at)) }}><span>{tick.label}</span></div>)}
-        {[...points].sort((a, b) => a.at - b.at).map((point) => {
+        {sortedPoints.map((point, index) => {
           const provider = providers.find((item) => item.id === point.account.providerId);
           const x = Math.max(10, Math.round(toX(point.at)));
           const showLabel = x - lastLabelX >= 72;
@@ -498,15 +559,7 @@ function ResetTimeline({ accounts, providers }) {
           const d = new Date(point.at);
           const near = point.at - now <= NEAR_HOURS * 3600e3;
           const timeLabel = near ? pad(d.getHours()) + ':' + pad(d.getMinutes()) : (d.getMonth() + 1) + '/' + d.getDate() + ' ' + pad(d.getHours()) + '时';
-          const detail = {
-            name: point.account.name,
-            providerName: provider?.name || '',
-            label,
-            amount: formatAmount(point.meter),
-            absolute: (d.getMonth() + 1) + '/' + d.getDate() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()),
-            relative: formatReset(point.meter.resetAt),
-          };
-          return <div key={point.account.id + '-' + point.meter.key} className="timeline-point" style={{ left: x }} onMouseEnter={() => setActive(detail)} onMouseLeave={() => setActive(null)}>
+          return <div key={point.account.id + '-' + point.meter.key} className="timeline-point" data-index={index} style={{ left: x }} onMouseEnter={() => setHovered(pointDetail(point))} onMouseLeave={() => setHovered(null)}>
             <i className={provider?.tone || 'slate'} />{showLabel && <span><b>{point.account.name}</b><em>{label + ' · ' + timeLabel}</em></span>}
           </div>;
         })}
@@ -637,7 +690,7 @@ const matchRangeKey = (next, fullStart, fullEnd) => {
   return null;
 };
 
-function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange }) {
+function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange, onToast }) {
   const [hover, setHover] = useState(null);
   // 断线区间（无数据时段）的悬停提示：{ from, to } 为区间前后两个数据点的时间
   const [hoverGap, setHoverGap] = useState(null);
@@ -935,7 +988,11 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
   // 详情条优先级：悬停点 > 断线提示 > 选中点（悬停离开后回落到选中的常驻信息）
   const detailPoint = hoverPoint || (!hoverGap ? selectedPoint : null);
   const pickRange = (preset) => {
-    if (!rangeAvailable(preset.ms, fullStart, fullEnd)) return;
+    if (!rangeAvailable(preset.ms, fullStart, fullEnd)) {
+      // 保留可点击状态而不是 disabled：触屏上点按也有反馈，而不是毫无响应
+      onToast?.({ id: Date.now(), ok: false, message: `「${preset.label}」暂不可用：历史记录不足` });
+      return;
+    }
     setView(presetView(preset.ms, fullStart, fullEnd));
     onRangeKeyChange?.(preset.id);
   };
@@ -960,7 +1017,7 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
       <div className="range-control" role="group" aria-label="趋势时间范围" onPointerDown={(event) => event.stopPropagation()}>
         {RANGE_PRESETS.map((preset) => {
           const available = rangeAvailable(preset.ms, fullStart, fullEnd);
-          return <button type="button" key={preset.id} className={rangeKey === preset.id ? 'active' : ''} disabled={!available} title={available ? preset.label : `历史不足 ${preset.label}`} onClick={() => pickRange(preset)}>{preset.label}</button>;
+          return <button type="button" key={preset.id} className={rangeKey === preset.id ? 'active' : ''} aria-disabled={!available || undefined} title={available ? preset.label : `历史不足 ${preset.label}`} onClick={() => pickRange(preset)}>{preset.label}</button>;
         })}
       </div>
     </div>
@@ -1017,9 +1074,13 @@ function WasteView({ account, wasteWindows }) {
   const [cycles, setCycles] = useState(null);
   const [curWindow, setCurWindow] = useState(wasteWindows[0]);
   const [hover, setHover] = useState(null);
+  // 触屏没有悬停：点击柱子选中、再点一次或点空白处取消；悬停优先于选中展示
+  const [selectedKey, setSelectedKey] = useState(null);
   const [dragging, setDragging] = useState(false);
   const scrollRef = useRef(null);
   const dragRef = useRef(null);
+  const downRef = useRef(null);
+  const pointersRef = useRef(new Set());
   useEffect(() => {
     let active = true;
     // 网页演示模式没有周期档案接口，直接降级为空状态
@@ -1054,6 +1115,8 @@ function WasteView({ account, wasteWindows }) {
     return new Date(cycle.from).getTime() <= new Date(derived).getTime() ? cycle.from : derived;
   };
   // 单行详情条内容：按周期形态（进行中 / 提前重置 / 失真 / 可靠）组织
+  const cycleKey = (cycle, index) => cycle.now ? 'now' : `${cycle.end}-${index}`;
+  const selectedCycle = selectedKey == null ? null : shown.find((cycle, index) => cycleKey(cycle, index) === selectedKey) || null;
   const renderDetail = (cycle) => {
     const range = `${formatWasteDay(displayFrom(cycle))} → ${formatWasteDay(cycle.end)}`;
     if (cycle.now) return <>
@@ -1067,10 +1130,48 @@ function WasteView({ account, wasteWindows }) {
     if (!cycle.reliable) return <><span className="when">{range} 周期</span><span>浪费 <b>≤{Math.round(cycle.remaining)}%</b></span>{amount}{observed}<span className="warn">可能失真：距重置约 {formatWasteGap(cycle.gapMs)}</span></>;
     return <><span className="when">{range} 周期</span><span>浪费 <b>{Math.round(cycle.remaining)}%</b></span>{amount}{observed}</>;
   };
-  // 周期过多柱宽触底时横向拖动平移
-  const startDrag = (event) => { const el = scrollRef.current; if (!el) return; dragRef.current = { x: event.clientX, left: el.scrollLeft }; el.setPointerCapture?.(event.pointerId); setDragging(true); };
-  const moveDrag = (event) => { const drag = dragRef.current; if (!drag || !scrollRef.current) return; scrollRef.current.scrollLeft = drag.left - (event.clientX - drag.x); };
-  const endDrag = () => { dragRef.current = null; setDragging(false); };
+  // 周期过多柱宽触底时横向拖动平移；未移动就抬起视为点击（命中柱子选中/切换，点空白取消）
+  const startDrag = (event) => {
+    pointersRef.current.add(event.pointerId);
+    downRef.current = { x: event.clientX, moved: pointersRef.current.size > 1 };
+    const el = scrollRef.current;
+    if (!el) return;
+    dragRef.current = { x: event.clientX, left: el.scrollLeft };
+    el.setPointerCapture?.(event.pointerId);
+    setDragging(true);
+  };
+  const moveDrag = (event) => {
+    const down = downRef.current;
+    if (down && Math.abs(event.clientX - down.x) > 5) down.moved = true;
+    const drag = dragRef.current;
+    if (!drag || !scrollRef.current) return;
+    scrollRef.current.scrollLeft = drag.left - (event.clientX - drag.x);
+  };
+  const endDrag = (event) => {
+    pointersRef.current.delete(event.pointerId);
+    const down = downRef.current;
+    dragRef.current = null;
+    downRef.current = null;
+    setDragging(false);
+    if (!down || down.moved || pointersRef.current.size > 0) return;
+    const key = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('.waste-col')?.dataset.key;
+    setSelectedKey(key && key !== selectedKey ? key : null);
+  };
+  const cancelDrag = (event) => {
+    if (event.pointerId != null) pointersRef.current.delete(event.pointerId);
+    dragRef.current = null;
+    downRef.current = null;
+    setDragging(false);
+  };
+  // 选中期间点到图表区域以外（页签、图例等）也取消选中
+  useEffect(() => {
+    if (selectedKey == null) return undefined;
+    const onPointerDown = (event) => {
+      if (!event.target.closest?.('.waste-scroll')) setSelectedKey(null);
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onPointerDown, true);
+  }, [selectedKey]);
   const softColor = `color-mix(in srgb, ${CHART_COLORS[curWindow] || 'var(--violet)'} 30%, transparent)`;
   // 柱子少时每根都标完整区间；多了只标结束日期并按需抽稀，避免文字挤在一起
   const compactLabels = shown.length <= 6;
@@ -1078,22 +1179,23 @@ function WasteView({ account, wasteWindows }) {
   return <div className="waste-view">
     <div className="waste-row">
       {wasteWindows.length >= 2
-        ? <div className="seg-control">{wasteWindows.map((key) => <button type="button" key={key} className={curWindow === key ? 'active' : ''} onClick={() => setCurWindow(key)}>{windowCatalog[key]?.label || key} 额度</button>)}</div>
+        ? <div className="seg-control">{wasteWindows.map((key) => <button type="button" key={key} className={curWindow === key ? 'active' : ''} onClick={() => { setCurWindow(key); setSelectedKey(null); }}>{windowCatalog[key]?.label || key} 额度</button>)}</div>
         : <span className="waste-label">{windowCatalog[curWindow]?.label || curWindow} 额度 · 浪费统计</span>}
       <span className="waste-stats">{windowCycles.length ? <>
         <span>{windowCycles.length} 个周期</span><span>平均浪费 <b>{avg != null ? `${avg.toFixed(0)}%` : '—'}</b>（{good.length} 可靠）</span>{good.length ? <span>累计 <b>{Math.round(total * 100) / 100}</b> 倍额度</span> : <span>累计 —</span>}
       </> : <><span>0 个周期</span><span>平均浪费 —</span><span>累计 —</span></>}</span>
     </div>
-    <div className="chart-detail waste-detail">{hover ? renderDetail(hover) : <span className="chart-detail-hint">{empty ? '悬停查看当前周期详情' : '悬停查看周期详情 · 周期过多时可左右拖动'}</span>}</div>
-    <div className={`waste-scroll${dragging ? ' dragging' : ''}`} ref={scrollRef} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag} onPointerLeave={endDrag}>
+    <div className="chart-detail waste-detail">{hover ? renderDetail(hover) : selectedCycle ? renderDetail(selectedCycle) : <span className="chart-detail-hint">{empty ? '点击柱子查看当前周期详情' : '点击或悬停柱子查看周期详情 · 周期过多时可左右拖动'}</span>}</div>
+    <div className={`waste-scroll${dragging ? ' dragging' : ''}`} ref={scrollRef} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={cancelDrag} onPointerLeave={cancelDrag}>
       <div className={`waste-plot ${curWindow === 'monthly' ? 'mo' : 'wk'}`}>
         {!empty && [25, 50, 75].map((value) => <div key={value} className="waste-gridline" style={{ bottom: `${value}%` }} />)}
         {!empty && avg != null && <div className="waste-avg" style={{ bottom: `${Math.min(100, avg)}%` }}><em>平均 {avg.toFixed(0)}%</em></div>}
         {empty && !nowCycle && <div className="waste-empty-hint"><span>还没有已完成的周期</span><span>第一个周期重置后自动生成统计</span></div>}
         {shown.map((cycle, index) => {
-          const classes = ['waste-col', cycle.now ? 'now' : cycle.kind === 'early' ? 'early' : !cycle.reliable ? 'bad' : '', hover === cycle ? 'hot' : ''].filter(Boolean).join(' ');
+          const key = cycleKey(cycle, index);
+          const classes = ['waste-col', cycle.now ? 'now' : cycle.kind === 'early' ? 'early' : !cycle.reliable ? 'bad' : '', hover === cycle || selectedKey === key ? 'hot' : ''].filter(Boolean).join(' ');
           const tip = `${formatWasteDay(displayFrom(cycle))} → ${formatWasteDay(cycle.end)}${cycle.now ? '（进行中）' : ` · 浪费 ${Math.round(cycle.remaining)}%`}`;
-          return <div key={cycle.now ? 'now' : `${cycle.end}-${index}`} className={classes} title={tip} onMouseEnter={() => setHover(cycle)} onMouseLeave={() => setHover(null)}>
+          return <div key={key} className={classes} data-key={key} title={tip} onMouseEnter={() => setHover(cycle)} onMouseLeave={() => setHover(null)}>
             <div className="waste-bar" style={{ height: `${Math.max(2, Math.min(100, cycle.remaining))}%` }} />
           </div>;
         })}
@@ -1445,8 +1547,8 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
 }
 
 // 历史视图切换下拉：趋势/用量/本机/浪费四个入口常驻；不可用的入口保留在列表里但不可选，
-// 悬停 title 与项内小字都说明原因（触屏没有悬停，小字保证原因可见）
-function HistoryViewSwitch({ tabs, view, onChange, domId, panelId }) {
+// 项内小字直接说明原因；触屏没有悬停，点按置灰项时再弹 toast 提示一次
+function HistoryViewSwitch({ tabs, view, onChange, domId, panelId, onToast }) {
   const [open, setOpen] = useState(false);
   const close = () => setOpen(false);
   const onKeyDown = (event) => { if (event.key === 'Escape') { event.stopPropagation(); close(); } };
@@ -1460,8 +1562,17 @@ function HistoryViewSwitch({ tabs, view, onChange, domId, panelId }) {
           const disabled = Boolean(tab.reason);
           return <button type="button" role="tab" key={tab.key} id={`${domId}-tab-${tab.key}`} aria-controls={panelId} aria-selected={view === tab.key} aria-disabled={disabled || undefined}
             className={`${view === tab.key ? 'active' : ''}${disabled ? ' disabled' : ''}`} title={disabled ? `暂不可用：${tab.reason}` : tab.label}
-            onClick={() => { if (disabled) return; onChange(tab.key); close(); }}>
-            {tab.label}{!disabled && <span>{view === tab.key && <Check size={12} />}</span>}
+            onClick={() => {
+              if (disabled) {
+                // 菜单保持打开，方便直接换一个可用的视图
+                onToast?.({ id: Date.now(), ok: false, message: `「${tab.label}」暂不可用：${tab.reason}` });
+                return;
+              }
+              onChange(tab.key);
+              close();
+            }}>
+            <span className="history-switch-item">{tab.label}{disabled && <small>{tab.reason}</small>}</span>
+            {!disabled && <span>{view === tab.key && <Check size={12} />}</span>}
           </button>;
         })}
       </div>}
@@ -1469,7 +1580,7 @@ function HistoryViewSwitch({ tabs, view, onChange, domId, panelId }) {
   </>;
 }
 
-function HistoryView({ account, provider, onBack, onProviderUsageState, settings, setSettings, readOnly = false, wasteWindowsOverride }) {
+function HistoryView({ account, provider, onBack, onProviderUsageState, settings, setSettings, readOnly = false, wasteWindowsOverride, onToast }) {
   const [points, setPoints] = useState(null);
   const [hiddenKeys, setHiddenKeys] = useState([]);
   const [view, setView] = useState('trend');
@@ -1559,14 +1670,15 @@ function HistoryView({ account, provider, onBack, onProviderUsageState, settings
   return <div className="view-stack history-view">
     <section className="surface-section">
       <div className="history-head">
+        {onBack && <button type="button" className="back-button" onClick={onBack} title="返回看板" aria-label="返回看板"><ChevronLeft size={15} /></button>}
         <AccountIdentity account={account} provider={provider} />
         {account.disabled && <span className="history-disabled-tag"><CircleStop size={12} /> 已停用 · {formatDisabledDate(account.disabledAt)}</span>}
-        <HistoryViewSwitch tabs={historyTabs} view={view} onChange={setView} domId={historyDomId} panelId={historyPanelId} />
+        <HistoryViewSwitch tabs={historyTabs} view={view} onChange={setView} domId={historyDomId} panelId={historyPanelId} onToast={onToast} />
       </div>
       <div className={`history-tabpanel${showLocalUsage ? ' local-usage-tabpanel' : ''}`} role="tabpanel" id={historyPanelId} aria-labelledby={`${historyDomId}-tab-${view}`}>{showProviderUsage ? <ProviderUsageView account={account} provider={provider} onState={onProviderUsageState} readOnly={readOnly} /> : showLocalUsage ? <LocalCliUsageView settings={settings} setSettings={setSettings} modelRules={localAnalysis.modelRules} scopeName={provider?.name || '当前厂商'} embedded /> : showWaste ? <WasteView account={account} wasteWindows={wasteWindows} /> : <div className="trend-view">
         {points === null ? <div className="settings-empty chart-empty">正在读取历史记录…</div>
           : points.length === 0 ? <div className="settings-empty chart-empty">暂无历史数据，每次成功刷新额度后都会记录一条</div>
-            : <UsageChart points={points} hiddenKeys={hiddenKeys} rangeKey={rangeKey} onRangeKeyChange={setRangeKey} />}
+            : <UsageChart points={points} hiddenKeys={hiddenKeys} rangeKey={rangeKey} onRangeKeyChange={setRangeKey} onToast={onToast} />}
         {legendKeys.length > 0 && <div className="chart-legend">{legendKeys.map((key, index) => {
           const sample = latestSamples[key];
           const hidden = hiddenKeys.includes(key);
@@ -2777,7 +2889,8 @@ const buildQrDataUrl = (content) => {
   } catch { return ''; }
 };
 
-// 标题旁的问号帮助：说明文字默认隐藏，悬停 / 键盘聚焦才展开。
+// 标题旁的问号帮助：说明文字默认隐藏，悬停 / 键盘聚焦 / 点按图标展开。
+// 触屏没有悬停、点按也未必触发 focus，点按改为切换气泡，点其他位置关闭。
 // 气泡用 portal 渲染到 body 顶层并 fixed 定位：不进弹窗的布局流（否则会撑出横向滚动条），
 // 也不受弹窗 overflow 裁剪，永远浮在最高层。
 function TitleHelp({ children }) {
@@ -2796,8 +2909,16 @@ function TitleHelp({ children }) {
     }
   };
   const hide = () => setAnchor(null);
+  useEffect(() => {
+    if (!anchor) return undefined;
+    const onPointerDown = (event) => {
+      if (!iconRef.current?.contains(event.target)) setAnchor(null);
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onPointerDown, true);
+  }, [anchor]);
   return <>
-    <span ref={iconRef} className="title-help" tabIndex={0} role="note" aria-label="说明" onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide}><HelpCircle size={14} /></span>
+    <span ref={iconRef} className="title-help" tabIndex={0} role="note" aria-label="说明" onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide} onClick={() => (anchor ? hide() : show())}><HelpCircle size={14} /></span>
     {anchor && createPortal(<span className="title-help-pop" style={anchor}>{children}</span>, document.body)}
   </>;
 }
@@ -4188,7 +4309,7 @@ function App() {
         const result = await bridge.applyCcswitchImport(keys);
         if (result?.state) { setAccounts(result.state.accounts || []); setProviders(result.state.providers || []); setLastSync(result.state.lastSync || new Date().toISOString()); if (result.state.runtime) setRuntime(result.state.runtime); }
         setToast({ id: Date.now(), ok: result?.imported > 0, message: result?.imported > 0 ? `已从 cc-switch 导入 ${result.imported} 个账号` : '没有导入新账号（凭据都已存在）' });
-      }} onDeleteAccount={deleteAccount} onFinish={finishOnboarding} /> : accounts.length === 0 ? <EmptyWorkspace onAddAccount={() => setModal('account')} onOpenSettings={() => setSettingsOpen(true)} onImport={window.quotaDesk?.scanCcswitchImport ? () => setModal('import-ccswitch') : undefined} /> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} onProviderUsageState={applyProviderUsageState} settings={settings} setSettings={setSettings} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} onReorderAccounts={reorderAccounts} sortWeights={{ fiveHourRemaining: settings.periodSort5hRemaining, otherRemaining: settings.periodSortLongRemaining }} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const kind = reloginChannel(provider)?.kind || 'kimi'; setModal({ type: `${kind}-relogin`, account }); }} />}</div>
+      }} onDeleteAccount={deleteAccount} onFinish={finishOnboarding} /> : accounts.length === 0 ? <EmptyWorkspace onAddAccount={() => setModal('account')} onOpenSettings={() => setSettingsOpen(true)} onImport={window.quotaDesk?.scanCcswitchImport ? () => setModal('import-ccswitch') : undefined} /> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} onProviderUsageState={applyProviderUsageState} settings={settings} setSettings={setSettings} onToast={setToast} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} onReorderAccounts={reorderAccounts} sortWeights={{ fiveHourRemaining: settings.periodSort5hRemaining, otherRemaining: settings.periodSortLongRemaining }} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const kind = reloginChannel(provider)?.kind || 'kimi'; setModal({ type: `${kind}-relogin`, account }); }} />}</div>
     </main>
     {settings.showUpcomingRefresh !== false && !inUsageView && !onboardOpen && !historyAccount && accounts.length > 0 && <UpcomingRefreshBar accounts={accounts} providers={providers} onOpenHistory={(account) => setHistoryAccountId(account.id)} />}
     {settingsOpen && <SettingsDrawer accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)} openModal={setModal} onDeleteAccount={deleteAccount} onToggleAccountDisabled={toggleAccountDisabled} onTestAccount={testAccount} testingAccountId={testingAccountId} onEditProvider={editProvider} autoLaunch={autoLaunch} onToggleAutoLaunch={toggleAutoLaunch} appVersion={appVersion} update={update} onOpenUpdate={() => setUpdateOpen(true)} onCheckUpdate={onCheckUpdate} onClearHistory={clearHistory} runtime={runtime} onExportData={exportData} onImportData={importData} dataBusy={dataBusy} onReopenOnboarding={() => { setSettingsOpen(false); setHistoryAccountId(null); setOnboardOpen(true); }} onOpenDevTools={bridge?.toggleDevTools ? () => bridge.toggleDevTools() : null} />}
