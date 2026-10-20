@@ -7,6 +7,8 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   color-scheme: dark;
+  /* 触屏点按不显示系统灰色高亮：点击效果与悬停一致，反馈由界面自己表达 */
+  -webkit-tap-highlight-color: transparent;
   --bg: #141d1f; --bg-grad: #1b2629; --refresh-bar-height: 30px;
   --surface: #1a2527; --surface-2: #202c2e; --surface-3: #263334; --surface-trans: rgba(26, 37, 39, .72);
   --control: #24312f; --control-2: #2b3a39; --knob: #f2f7f4;
@@ -381,9 +383,6 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .history-switch-menu { width: clamp(108px, calc(78px + 3.6vw), 148px); }
 .main-view-menu button, .history-switch-menu button { width: 100%; min-height: clamp(30px, calc(24px + .75vw), 38px); display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: clamp(7px, .5vw, 9px) clamp(9px, .7vw, 12px); border: 0; border-radius: 4px; background: transparent; color: var(--ink-soft); font-size: clamp(11px, calc(8.8px + .275vw), 14px); line-height: 1.4; text-align: left; }
 .main-view-menu button > span, .history-switch-menu button > span { display: flex; align-items: center; justify-content: center; flex: 0 0 12px; }
-/* 历史视图菜单项：标签 + 不可用原因小字纵向排列（触屏没有悬停 title，原因直接可见） */
-.history-switch-menu button > .history-switch-item { display: grid; gap: 2px; flex: 1 1 auto; min-width: 0; }
-.history-switch-item small { color: var(--faint); font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; text-align: left; }
 .main-view-menu button:hover, .main-view-menu button.active, .history-switch-menu button:hover, .history-switch-menu button.active { color: var(--green-deep); background: var(--green-bg); }
 .main-view-menu button:focus-visible, .history-switch-menu button:focus-visible { outline: 2px solid var(--focus-border); outline-offset: -2px; }
 .toast { position: fixed; bottom: calc(56px + env(safe-area-inset-bottom, 0px)); left: 50%; z-index: 60; display: flex; align-items: center; gap: 8px; width: max-content; max-width: min(480px, calc(100vw - 32px)); padding: 10px 14px; border-radius: 10px; font-size: 12px; line-height: 1.5; transform: translateX(-50%); animation: toast-in .2s ease-out, toast-out .18s 2.82s ease-in forwards; box-shadow: 0 6px 24px rgba(20, 35, 28, .16); pointer-events: none; }

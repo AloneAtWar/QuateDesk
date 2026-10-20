@@ -1547,7 +1547,7 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
 }
 
 // 历史视图切换下拉：趋势/用量/本机/浪费四个入口常驻；不可用的入口保留在列表里但不可选，
-// 项内小字直接说明原因；触屏没有悬停，点按置灰项时再弹 toast 提示一次
+// 悬停 title 说明原因；触屏没有悬停，点按置灰项时弹 toast 提示（菜单尺寸保持不变）
 function HistoryViewSwitch({ tabs, view, onChange, domId, panelId, onToast }) {
   const [open, setOpen] = useState(false);
   const close = () => setOpen(false);
@@ -1571,8 +1571,7 @@ function HistoryViewSwitch({ tabs, view, onChange, domId, panelId, onToast }) {
               onChange(tab.key);
               close();
             }}>
-            <span className="history-switch-item">{tab.label}{disabled && <small>{tab.reason}</small>}</span>
-            {!disabled && <span>{view === tab.key && <Check size={12} />}</span>}
+            {tab.label}{!disabled && <span>{view === tab.key && <Check size={12} />}</span>}
           </button>;
         })}
       </div>}
