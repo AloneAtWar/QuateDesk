@@ -5,7 +5,9 @@
 // 多账号也能各自续期（协议实现对照 codex-rs login/auth、claude code 与 gemini-cli 源码）：
 // - Codex:  POST auth.openai.com/oauth/token（JSON：client_id + grant_type=refresh_token）
 // - Claude: POST console.anthropic.com/v1/oauth/token（JSON：client_id + grant_type=refresh_token）
-// - Gemini: POST oauth2.googleapis.com/token（表单：client_id + client_secret + refresh_token）
+// - Gemini: POST oauth2.googleapis.com/token（表单：client_id + client_secret + refresh_token）。
+//           live 凭据三级回落（旧扁平文件 → FileKeychain 加密文件 → Windows 凭据管理器），
+//           见下方 readGeminiLiveAuth
 // - Kimi:   POST auth.kimi.com/api/account.gateway.v1.AuthService/RefreshToken（connect-rpc JSON）。
 //           Kimi 网页会话与 kimi CLI 的 coding OAuth 是两套体系（HS512 vs ES256），月额度只在
 //           网页会员服务里，因此订阅凭据通过扫码登录获得，没有本机 live 文件可回落。
@@ -83,11 +85,13 @@ const writeJsonAtomic = (filePath, value) => {
   fs.renameSync(tempPath, filePath);
 };
 
-// 各 CLI 的 live 凭据文件路径；Codex 遵循 CODEX_HOME 环境变量（与 codex CLI 一致）
+// 各 CLI 的 live 凭据文件路径；Codex 遵循 CODEX_HOME 环境变量（与 codex CLI 一致），
+// Gemini 遵循 GEMINI_CLI_HOME（与 gemini-cli 一致）
+const geminiHome = () => process.env.GEMINI_CLI_HOME || path.join(os.homedir(), '.gemini');
 const liveAuthPath = (kind) => {
   if (kind === 'codex') return path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'auth.json');
   if (kind === 'claude') return path.join(os.homedir(), '.claude', '.credentials.json');
-  if (kind === 'gemini') return path.join(os.homedir(), '.gemini', 'oauth_creds.json');
+  if (kind === 'gemini') return path.join(geminiHome(), 'oauth_creds.json');
   if (kind === 'grok') return path.join(process.env.GROK_HOME || path.join(os.homedir(), '.grok'), 'auth.json');
   if (kind === 'copilot') return path.join(os.homedir(), '.config', 'github-copilot', 'hosts.json');
   return null;
@@ -164,8 +168,141 @@ const readGrokBotLiveAuth = () => {
   }
 };
 
+// ── Gemini live 登录的多级回落 ──────────────────────────────────────────────
+// 新版 gemini-cli 不再写扁平的 oauth_creds.json：凭据优先存系统密钥库（keytar，
+// Windows 上为凭据管理器的普通凭据），keytar 不可用时回落 AES-256-GCM 加密文件
+// ~/.gemini/gemini-credentials.json（FileKeychain）。首次运行会把旧 oauth_creds.json
+// 迁移进新存储并删除文件。对照 gemini-cli 的 oauth-credential-storage.ts /
+// fileKeychain.ts / keychainService.ts 与 node-keytar 的 keytar_win.cc：
+// - 凭据管理器条目：TargetName = "gemini-cli-oauth/main-account"，blob 为 UTF-8 JSON
+//   { serverName, token: { accessToken, refreshToken, tokenType, scope, expiresAt }, updatedAt }
+// - FileKeychain：scrypt("gemini-cli-oauth", `${hostname}-${username}-gemini-cli`, 32)
+//   派生 AES key，文件内容 "iv:authTag:密文"（hex），明文为
+//   { "gemini-cli-oauth": { "main-account": "<同上 JSON 字符串>" } }
+// 归一化为 google-auth-library 的扁平格式后，下游检测 / 续期 / 额度查询零改动。
+// 这些来源只读不写回：Google 的 refresh_token 不轮换，续期结果只需更新账号快照
+// （与 Grok Bot 的 sand-secrets.json 同策略）。
+const GEMINI_KEYCHAIN_SERVICE = 'gemini-cli-oauth';
+const GEMINI_MAIN_ACCOUNT = 'main-account';
+const GEMINI_SECURE_TTL_MS = 60_000;
+
+const geminiAuthFromKeytarShape = (payload) => {
+  const token = payload && typeof payload === 'object' && payload.token && typeof payload.token === 'object'
+    ? payload.token : null;
+  if (!token || (!token.accessToken && !token.refreshToken)) return null;
+  const auth = {};
+  if (token.accessToken) auth.access_token = token.accessToken;
+  if (token.refreshToken) auth.refresh_token = token.refreshToken;
+  if (Number.isFinite(Number(token.expiresAt))) auth.expiry_date = Number(token.expiresAt);
+  if (token.scope) auth.scope = token.scope;
+  if (token.tokenType) auth.token_type = token.tokenType;
+  return auth;
+};
+
+// FileKeychain 的加密文件（hex 三段式 AES-256-GCM）
+const readGeminiFileKeychain = () => {
+  let encrypted;
+  try { encrypted = fs.readFileSync(path.join(geminiHome(), 'gemini-credentials.json'), 'utf8').trim(); }
+  catch { return null; }
+  const [ivHex, tagHex, cipherHex] = encrypted.split(':');
+  if (!ivHex || !tagHex || !cipherHex) return null;
+  const iv = Buffer.from(ivHex, 'hex');
+  const tag = Buffer.from(tagHex, 'hex');
+  if ((iv.length !== 12 && iv.length !== 16) || tag.length !== 16) return null;
+  try {
+    const salt = `${os.hostname()}-${os.userInfo().username}-gemini-cli`;
+    const key = crypto.scryptSync(GEMINI_KEYCHAIN_SERVICE, salt, 32);
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
+    decipher.setAuthTag(tag);
+    const plain = Buffer.concat([decipher.update(Buffer.from(cipherHex, 'hex')), decipher.final()]).toString('utf8');
+    const raw = JSON.parse(plain)?.[GEMINI_KEYCHAIN_SERVICE]?.[GEMINI_MAIN_ACCOUNT];
+    if (typeof raw !== 'string') return null;
+    return geminiAuthFromKeytarShape(JSON.parse(raw));
+  } catch { return null; }
+};
+
+// Windows 凭据管理器的普通凭据（keytar 写入形态）。CredRead 需要 P/Invoke，
+// 走 PowerShell 子进程（与 dpapiUnprotect 同一模式）；blob 是 UTF-8 JSON，
+// 手工创建的条目可能是 UTF-16，两种编码都试。
+const WINDOWS_CRED_READ_SCRIPT = [
+  '$target = [Console]::In.ReadToEnd().Trim()',
+  'Add-Type -TypeDefinition @"',
+  'using System;',
+  'using System.Runtime.InteropServices;',
+  'public static class QuotaDeskCredRead {',
+  '  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]',
+  '  static extern bool CredRead(string target, uint type, uint flags, out IntPtr credPtr);',
+  '  [DllImport("advapi32.dll")]',
+  '  static extern void CredFree(IntPtr ptr);',
+  '  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]',
+  '  struct CREDENTIAL {',
+  '    public uint Flags; public uint Type;',
+  '    public string TargetName; public string Comment;',
+  '    public uint LastWrittenLow; public uint LastWrittenHigh;',
+  '    public uint CredentialBlobSize; public IntPtr CredentialBlob;',
+  '    public uint Persist; public uint AttributeCount; public IntPtr Attributes;',
+  '    public string TargetAlias; public string UserName;',
+  '  }',
+  '  public static string Read(string target) {',
+  '    IntPtr ptr;',
+  '    if (!CredRead(target, 1, 0, out ptr)) return "";',
+  '    try {',
+  '      CREDENTIAL cred = (CREDENTIAL)Marshal.PtrToStructure(ptr, typeof(CREDENTIAL));',
+  '      if (cred.CredentialBlob == IntPtr.Zero || cred.CredentialBlobSize == 0) return "";',
+  '      byte[] blob = new byte[cred.CredentialBlobSize];',
+  '      Marshal.Copy(cred.CredentialBlob, blob, 0, blob.Length);',
+  '      return Convert.ToBase64String(blob);',
+  '    } finally { CredFree(ptr); }',
+  '  }',
+  '}',
+  '"@',
+  '[Console]::Out.Write([QuotaDeskCredRead]::Read($target))',
+].join('\n');
+
+const parseCredentialBlobJson = (blob) => {
+  for (const encoding of ['utf8', 'utf16le']) {
+    try {
+      const parsed = JSON.parse(blob.toString(encoding));
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch {}
+  }
+  return null;
+};
+
+const readGeminiWindowsCredential = () => {
+  if (process.platform !== 'win32') return null;
+  let blob;
+  try {
+    const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_CRED_READ_SCRIPT], {
+      input: `${GEMINI_KEYCHAIN_SERVICE}/${GEMINI_MAIN_ACCOUNT}`,
+      timeout: 10_000,
+    });
+    const base64 = String(output).trim();
+    if (!base64) return null;
+    blob = Buffer.from(base64, 'base64');
+  } catch { return null; }
+  return geminiAuthFromKeytarShape(parseCredentialBlobJson(blob));
+};
+
+// 密钥库 / 加密文件的读取带 TTL 缓存：凭据管理器要走 PowerShell 子进程，
+// 额度轮询每次都读会反复起进程；缓存也保证一次检测内的结果一致
+let geminiSecureCache = { at: 0, value: null };
+const readGeminiSecureAuth = () => {
+  if (Date.now() - geminiSecureCache.at < GEMINI_SECURE_TTL_MS) return geminiSecureCache.value;
+  geminiSecureCache = { at: Date.now(), value: readGeminiFileKeychain() || readGeminiWindowsCredential() };
+  return geminiSecureCache.value;
+};
+
+const readGeminiLiveAuth = () => {
+  // 旧版 gemini-cli 的扁平文件仍是首选（存在即说明旧版 CLI 还在管理它，零成本直读）
+  const legacy = readJsonFile(liveAuthPath('gemini'));
+  if (legacy && (legacy.access_token || legacy.refresh_token)) return legacy;
+  return readGeminiSecureAuth();
+};
+
 const readLiveAuth = (kind) => {
   if (kind === 'grokbot') return readGrokBotLiveAuth();
+  if (kind === 'gemini') return readGeminiLiveAuth();
   return readJsonFile(liveAuthPath(kind));
 };
 
@@ -894,6 +1031,7 @@ module.exports = {
   __grok: { selectGrokAuthEntry, selectGrokAuthRecord, grokEntryOf, grokScopeOf, grokEndpointIsAllowed, discoverGrokTokenEndpoint },
   __copilot: { copilotEntryOf },
   __grokbot: { oscryptDecrypt },
+  __gemini: { geminiAuthFromKeytarShape, readGeminiFileKeychain, parseCredentialBlobJson, resetGeminiSecureCache: () => { geminiSecureCache = { at: 0, value: null }; } },
   __constants: {
     CODEX_CLIENT_ID, CODEX_TOKEN_URL, CLAUDE_CLIENT_ID, CLAUDE_TOKEN_URL,
     GEMINI_CLIENT_ID, GEMINI_CLIENT_SECRET, GEMINI_TOKEN_URL, KIMI_AUTH_HOST, KIMI_REFRESH_PATH,

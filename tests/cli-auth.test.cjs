@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const cliAuth = require('../electron/cli-auth.cjs');
 const { queryAccount, authStatusForPollError } = require('../electron/poller.cjs');
 const { builtinConfigs } = require('../electron/builtin-configs.cjs');
@@ -150,6 +151,66 @@ test('Claude 续期写回原键名：claudeAiOauth 进则 claudeAiOauth 出，li
   const legacy = await refreshCliAuth('claude', { 'claude.ai_oauth': { accessToken: 'a1', refreshToken: 'r1' } }, fetcher, 1000);
   assert.equal(legacy['claude.ai_oauth'].accessToken, 'a2');
   assert.equal(legacy.claudeAiOauth, undefined);
+});
+
+// ── Gemini live 登录：新版 gemini-cli 的密钥库 / 加密文件回落 ─────────────────
+// 与 gemini-cli fileKeychain.ts 同算法加密（scrypt + AES-256-GCM，hex 三段式）
+const encryptGeminiFileKeychain = (map) => {
+  const iv = crypto.randomBytes(12);
+  const salt = `${os.hostname()}-${os.userInfo().username}-gemini-cli`;
+  const key = crypto.scryptSync('gemini-cli-oauth', salt, 32);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
+  const encrypted = Buffer.concat([cipher.update(JSON.stringify(map), 'utf8'), cipher.final()]);
+  return `${iv.toString('hex')}:${cipher.getAuthTag().toString('hex')}:${encrypted.toString('hex')}`;
+};
+const geminiKeytarJson = JSON.stringify({
+  serverName: 'main-account',
+  token: { accessToken: 'ya29.live-access', refreshToken: '1//live-refresh', tokenType: 'Bearer', expiresAt: 1893456000000 },
+  updatedAt: 1699999999999,
+});
+
+test('Gemini keytar 形态归一化：token 条目转扁平 google-auth-library 格式，无 token 不识别', () => {
+  assert.deepEqual(
+    cliAuth.__gemini.geminiAuthFromKeytarShape({ token: { accessToken: 'a', refreshToken: 'r', tokenType: 'Bearer', expiresAt: 123 } }),
+    { access_token: 'a', refresh_token: 'r', expiry_date: 123, token_type: 'Bearer' },
+  );
+  assert.equal(cliAuth.__gemini.geminiAuthFromKeytarShape({ token: { tokenType: 'Bearer' } }), null);
+  assert.equal(cliAuth.__gemini.geminiAuthFromKeytarShape({}), null);
+  assert.equal(cliAuth.__gemini.geminiAuthFromKeytarShape('junk'), null);
+});
+
+test('Gemini live 回落：旧扁平文件优先；文件缺失时读 FileKeychain 加密文件（GEMINI_CLI_HOME 生效）', () => {
+  const previousHome = process.env.GEMINI_CLI_HOME;
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gemini-auth-'));
+  cliAuth.__gemini.resetGeminiSecureCache();
+  try {
+    process.env.GEMINI_CLI_HOME = tempHome;
+    // 都没有 → null
+    assert.equal(cliAuth.readLiveAuth('gemini'), null);
+    cliAuth.__gemini.resetGeminiSecureCache();
+    // 只有加密文件（新版 gemini-cli 的 FileKeychain 形态）
+    fs.writeFileSync(path.join(tempHome, 'gemini-credentials.json'), encryptGeminiFileKeychain({ 'gemini-cli-oauth': { 'main-account': geminiKeytarJson } }));
+    const fromKeychain = cliAuth.readLiveAuth('gemini');
+    assert.equal(fromKeychain.access_token, 'ya29.live-access');
+    assert.equal(fromKeychain.refresh_token, '1//live-refresh');
+    assert.equal(fromKeychain.expiry_date, 1893456000000);
+    const identity = cliIdentity('gemini', fromKeychain);
+    // Google 的 access_token 不是 JWT：指纹退到 refresh_token 的 shaTag（refresh 不轮换，稳定）
+    assert.equal(identity.fingerprint, crypto.createHash('sha256').update('1//live-refresh').digest('hex').slice(0, 16));
+    assert.equal(identity.display, `…${identity.fingerprint.slice(-6)}`);
+    // 旧扁平文件出现后优先于加密文件
+    fs.writeFileSync(path.join(tempHome, 'oauth_creds.json'), JSON.stringify({ access_token: 'legacy-access', refresh_token: 'legacy-refresh', expiry_date: 1893456000001 }));
+    assert.equal(cliAuth.readLiveAuth('gemini').access_token, 'legacy-access');
+    // 损坏的加密文件按未登录处理（不会被旧扁平文件分支之外的路径抛错）
+    fs.rmSync(path.join(tempHome, 'oauth_creds.json'));
+    fs.writeFileSync(path.join(tempHome, 'gemini-credentials.json'), 'not:encrypted:at-all');
+    cliAuth.__gemini.resetGeminiSecureCache();
+    assert.equal(cliAuth.readLiveAuth('gemini'), null);
+  } finally {
+    if (previousHome === undefined) delete process.env.GEMINI_CLI_HOME; else process.env.GEMINI_CLI_HOME = previousHome;
+    cliAuth.__gemini.resetGeminiSecureCache();
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  }
 });
 
 test('写回本机 live 文件：同账号才写（原子），cc-switch 已切换到别的 profile 时绝不覆盖', () => {
