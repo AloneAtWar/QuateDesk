@@ -113,7 +113,6 @@ test('Claude / Gemini 续期：各自的端点、client 与请求格式', async 
   assert.equal(claudeNext.claudeOauth.accessToken, 'a2');
   assert.equal(claudeNext.claudeOauth.refreshToken, 'r2');
   assert.ok(claudeNext.claudeOauth.expiresAt > new Date().toISOString());
-
   const geminiNext = await refreshCliAuth('gemini', { access_token: 'g1', refresh_token: 'gr1', expiry_date: Date.now() - 1000 }, recorder(), 1000);
   assert.equal(seen[1].url, __constants.GEMINI_TOKEN_URL);
   const form = new URLSearchParams(seen[1].init.body);
@@ -123,6 +122,34 @@ test('Claude / Gemini 续期：各自的端点、client 与请求格式', async 
   assert.equal(form.get('refresh_token'), 'gr1');
   assert.equal(geminiNext.access_token, 'a2');
   assert.ok(geminiNext.expiry_date > Date.now());
+});
+
+test('Claude 凭据键名兼容：新版 claudeAiOauth / 旧版 "claude.ai_oauth" / 本应用旧快照 claudeOauth 均可识别', () => {
+  const token = fakeJwt({ sub: 'user_am_9x' });
+  for (const key of ['claudeAiOauth', 'claude.ai_oauth', 'claudeOauth']) {
+    const auth = { [key]: { accessToken: token, refreshToken: 'cr-1', expiresAt: Date.now() + 3600_000 } };
+    assert.equal(cliIdentity('claude', auth).fingerprint, 'user_am_9x', key);
+    assert.equal(cliAuth.refreshTokenOf('claude', auth), 'cr-1', key);
+    assert.ok(cliAuth.accessTokenExpiryMs('claude', auth) > Date.now(), key);
+    assert.equal(parseCliSnapshot('claude', { [SNAPSHOT_KEY]: JSON.stringify(auth) })[key].accessToken, token);
+  }
+  // epoch 毫秒数字的 expiresAt 也能解析（新版 Claude Code 的写法）
+  assert.ok(Math.abs(cliAuth.accessTokenExpiryMs('claude', { claudeAiOauth: { accessToken: token, refreshToken: 'cr-1', expiresAt: 1792548716835 } }) - 1792548716835) < 1);
+  // 空 / 无 token 的条目不识别
+  assert.equal(cliIdentity('claude', { claudeAiOauth: { scopes: [] } }), null);
+  assert.equal(cliIdentity('claude', {}), null);
+});
+
+test('Claude 续期写回原键名：claudeAiOauth 进则 claudeAiOauth 出，live 文件形态不被破坏', async () => {
+  const fetcher = async () => ({ ok: true, status: 200, json: async () => ({ access_token: 'a2', refresh_token: 'r2', expires_in: 3600 }) });
+  const next = await refreshCliAuth('claude', { claudeAiOauth: { accessToken: 'a1', refreshToken: 'r1', expiresAt: Date.now() - 1000, subscriptionType: 'pro' } }, fetcher, 1000);
+  assert.equal(next.claudeAiOauth.accessToken, 'a2');
+  assert.equal(next.claudeAiOauth.refreshToken, 'r2');
+  assert.equal(next.claudeAiOauth.subscriptionType, 'pro', 'entry 的未知字段保留');
+  assert.equal(next.claudeOauth, undefined, '不落到旧键名');
+  const legacy = await refreshCliAuth('claude', { 'claude.ai_oauth': { accessToken: 'a1', refreshToken: 'r1' } }, fetcher, 1000);
+  assert.equal(legacy['claude.ai_oauth'].accessToken, 'a2');
+  assert.equal(legacy.claudeAiOauth, undefined);
 });
 
 test('写回本机 live 文件：同账号才写（原子），cc-switch 已切换到别的 profile 时绝不覆盖', () => {

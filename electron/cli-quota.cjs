@@ -5,16 +5,18 @@
 // - Gemini: ~/.gemini/oauth_creds.json → cloudcode-pa.googleapis.com 两步查询（按模型分桶）
 // - Kimi:   扫码登录的网页会话快照 → www.kimi.com GetSubscriptionStats（5小时/7天/月度，含月额度）
 // token 过期时用账号快照里的 refresh_token 自动续期（见 cli-auth.cjs），无需 CLI 在场。
-const { resolveCliAuth, refreshTokenOf, accessTokenExpiryMs, fetchWithCliAuth } = require('./cli-auth.cjs');
+const { resolveCliAuth, refreshTokenOf, accessTokenExpiryMs, fetchWithCliAuth, claudeOauthOf } = require('./cli-auth.cjs');
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const reauthRequiredError = (message) => Object.assign(new Error(message), { authStatus: 'reauth_required' });
 
-// Claude 凭据形态（live 文件或快照同构）：{ claudeOauth: { accessToken, refreshToken, expiresAt } }；
-// 防御式：找第一个带 accessToken 的对象
+// Claude 凭据形态（live 文件或快照同构）：{ claudeAiOauth: { accessToken, refreshToken, expiresAt } }
+// （旧版键名 "claude.ai_oauth" / claudeOauth，见 cli-auth.cjs 的 claudeOauthOf）；
+// 防御式：条目里没有 token 时再扫一遍其它对象值兜底
 const claudeTokenOf = (auth) => {
   if (!auth || typeof auth !== 'object') return null;
-  for (const value of [auth.claudeOauth, ...Object.values(auth)]) {
+  const candidates = [claudeOauthOf(auth), ...Object.values(auth)];
+  for (const value of candidates) {
     if (value && typeof value === 'object') {
       const token = value.accessToken || value.access_token;
       if (token) return { token, expiresAt: value.expiresAt || value.expires_at || null };

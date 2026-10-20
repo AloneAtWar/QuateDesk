@@ -235,10 +235,23 @@ const grokEntryOf = (auth) => {
   return selectGrokAuthEntry(auth);
 };
 
+// Claude OAuth 条目所在键名（live 文件与快照同构，flat key）。新版 Claude Code 写
+// claudeAiOauth，旧版写 "claude.ai_oauth"（与 cc-switch parse_claude_credentials_json
+// 的双键兼容一致）；claudeOauth 是本应用早期读取的键名，保留兼容旧快照。
+const CLAUDE_OAUTH_KEYS = ['claudeAiOauth', 'claude.ai_oauth', 'claudeOauth'];
+const claudeOauthEntryLike = (value) => Boolean(value && typeof value === 'object'
+  && (value.accessToken || value.refreshToken || value.access_token || value.refresh_token));
+const claudeOauthKeyOf = (auth) => (auth && typeof auth === 'object'
+  ? CLAUDE_OAUTH_KEYS.find((key) => claudeOauthEntryLike(auth[key])) || null : null);
+const claudeOauthOf = (auth) => {
+  const key = claudeOauthKeyOf(auth);
+  return key ? auth[key] : null;
+};
+
 const hasTokens = (kind, auth) => {
   if (!auth || typeof auth !== 'object') return false;
   if (kind === 'codex') return Boolean(auth.tokens?.access_token || auth.tokens?.refresh_token);
-  if (kind === 'claude') return Boolean(auth.claudeOauth?.accessToken || auth.claudeOauth?.refreshToken);
+  if (kind === 'claude') { const oauth = claudeOauthOf(auth); return claudeOauthEntryLike(oauth); }
   if (kind === 'kimi') return Boolean(auth.accessToken || auth.refreshToken);
   if (kind === 'grok') return isGrokEntry(grokEntryOf(auth));
   if (kind === 'copilot') return Boolean(copilotEntryOf(auth));
@@ -268,8 +281,9 @@ const cliIdentity = (kind, auth) => {
     fingerprint = String(auth.tokens?.account_id || shaTag(auth.tokens?.refresh_token));
   } else if (kind === 'claude') {
     // Claude 凭据没有账号标识字段：access token 是 JWT 时取 sub 声明（续期轮换也稳定），否则退到 refresh_token 指纹
-    const claims = parseJwtClaims(auth.claudeOauth?.accessToken);
-    fingerprint = String(claims?.sub || claims?.user_id || '') || shaTag(auth.claudeOauth?.refreshToken || auth.claudeOauth?.accessToken);
+    const oauth = claudeOauthOf(auth) || {};
+    const claims = parseJwtClaims(oauth.accessToken || oauth.access_token);
+    fingerprint = String(claims?.sub || claims?.user_id || '') || shaTag(oauth.refreshToken || oauth.refresh_token || oauth.accessToken || oauth.access_token);
   } else if (kind === 'kimi') {
     // Kimi 网页会话没有邮箱等展示字段：userId 是稳定账号标识，展示退到指纹尾号
     fingerprint = String(auth.userId || '') || shaTag(auth.refreshToken);
@@ -336,7 +350,7 @@ const resolveCliAuth = (kind, secretVariables = {}) => {
 
 const refreshTokenOf = (kind, auth) => {
   if (kind === 'codex') return auth?.tokens?.refresh_token || '';
-  if (kind === 'claude') return auth?.claudeOauth?.refreshToken || '';
+  if (kind === 'claude') { const oauth = claudeOauthOf(auth); return oauth?.refreshToken || oauth?.refresh_token || ''; }
   if (kind === 'kimi') return auth?.refreshToken || '';
   if (kind === 'grok') return grokEntryRefreshToken(grokEntryOf(auth));
   return auth?.refresh_token || '';
@@ -349,7 +363,13 @@ const accessTokenExpiryMs = (kind, auth) => {
     return claims?.exp ? Number(claims.exp) * 1000 : null;
   }
   if (kind === 'claude') {
-    const raw = auth?.claudeOauth?.expiresAt || auth?.claudeOauth?.expires_at;
+    // 新版 Claude Code 的 expiresAt 是 epoch 毫秒数字；旧版/其它实现可能是 ISO 字符串或 epoch 秒
+    const oauth = claudeOauthOf(auth);
+    const raw = oauth?.expiresAt ?? oauth?.expires_at;
+    const number = Number(raw);
+    if (raw !== undefined && raw !== null && Number.isFinite(number) && number > 0) {
+      return number < 10_000_000_000 ? number * 1000 : number;
+    }
     const ms = new Date(raw).getTime();
     return Number.isFinite(ms) ? ms : null;
   }
@@ -437,13 +457,16 @@ async function refreshCodexAuth(auth, fetcher, timeoutMs) {
 }
 
 async function refreshClaudeAuth(auth, fetcher, timeoutMs) {
-  const oauth = auth.claudeOauth || {};
-  if (!oauth.refreshToken) throw new CliRefreshError('Claude 登录快照缺少 refreshToken，无法续期', { permanent: true, authStatus: 'reauth_required' });
+  // 续期结果写回原键名（claudeAiOauth / "claude.ai_oauth" / claudeOauth），保证回写
+  // live 文件后 Claude Code 仍能识别；没有已知键时按新版 Claude Code 的写法落 claudeAiOauth
+  const oauthKey = claudeOauthKeyOf(auth) || 'claudeAiOauth';
+  const oauth = auth[oauthKey] || {};
+  if (!oauth.refreshToken && !oauth.refresh_token) throw new CliRefreshError('Claude 登录快照缺少 refreshToken，无法续期', { permanent: true, authStatus: 'reauth_required' });
   let response;
   let payload;
   try {
     response = await postTokenRequest(fetcher, CLAUDE_TOKEN_URL, {
-      json: { grant_type: 'refresh_token', refresh_token: oauth.refreshToken, client_id: CLAUDE_CLIENT_ID },
+      json: { grant_type: 'refresh_token', refresh_token: oauth.refreshToken || oauth.refresh_token, client_id: CLAUDE_CLIENT_ID },
       headers: { 'User-Agent': 'anthropic' },
       timeoutMs,
     });
@@ -458,7 +481,7 @@ async function refreshClaudeAuth(auth, fetcher, timeoutMs) {
   if (payload.refresh_token) nextOauth.refreshToken = payload.refresh_token;
   const expiresAt = payload.expires_at || (payload.expires_in ? new Date(Date.now() + Number(payload.expires_in) * 1000).toISOString() : null);
   if (expiresAt) nextOauth.expiresAt = expiresAt;
-  return { ...auth, claudeOauth: nextOauth };
+  return { ...auth, [oauthKey]: nextOauth };
 }
 
 async function refreshGeminiAuth(auth, fetcher, timeoutMs) {
@@ -857,6 +880,8 @@ module.exports = {
   grokAuthPath,
   readLiveAuth,
   cliIdentity,
+  claudeOauthOf,
+  claudeOauthKeyOf,
   parseCliSnapshot,
   resolveCliAuth,
   refreshTokenOf,
