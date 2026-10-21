@@ -50,7 +50,7 @@ DeepSeek、Z.ai、Codex 和 MiniMax 支持逐日用量视图，包括近一年�
 
 ### 本机 CLI 用量
 
-只读解析本机 CLI 落盘的会话数据，提供近一年热力图、Token 构成（输入 / 输出 / 缓存读写）和模型拆分，不与账号额度或官方统计混算。目前支持 ZCode、Kimi Code、Claude Code、OpenAI Codex、GitHub Copilot CLI、Gemini CLI、Grok CLI、OpenCode、OpenClaw、Hermes Agent 和 DeepSeek Harness；数据根目录可通过环境变量覆盖（如 `CODEX_HOME`、`GROK_HOME`、`DSH_HOME`），解析口径与 [ccusage](https://github.com/ccusage/ccusage) 对齐。本地记录只代表当前机器，不代表账号在其他设备的用量。
+只读解析本机 CLI 落盘的会话数据，提供近一年热力图、Token 构成（输入 / 输出 / 缓存读写）和模型拆分，不与账号额度或官方统计混算。目前支持 ZCode、Kimi Code、Claude Code、OpenAI Codex、GitHub Copilot CLI、Gemini CLI、Grok CLI、OpenCode、OpenClaw、Hermes Agent 和 DeepSeek Harness；数据根目录可通过环境变量覆盖（如 `CODEX_HOME`、`GROK_HOME`、`DSH_HOME`），解析口径与 [ccusage](https://github.com/ccusage/ccusage) 对齐。本机采集只代表当前机器；可在设置中导入其他设备的用量档案并汇总，仍不代表账号在全部渠道的官方用量。
 
 ### 周期浪费
 
@@ -120,6 +120,10 @@ CLI 和 OAuth 渠道可以保存多个独立账号快照。支持刷新令牌的
 Quota Desk 可以读取本机 `~/.cc-switch/cc-switch.db`，列出能够识别的账号供选择。API Key 和可识别的官方 OAuth 登录会重新加密保存；重复凭据不会重复导入。
 
 ### 数据导入与导出
+
+“设置 → 其他 → 用量档案”管理本机 CLI 用量与外部来源，与下面的账号数据备份分别导入、导出。本机档案会显示来源名称、固定来源 ID、数据版本、记录数量、累计 Token 和时间范围；来源名称可修改。已采集的用量保存在独立数据库中，清理 CLI 原始日志通常不会删除这些记录；尚未采集或此前漏采的记录仍需要原始数据才能补扫。
+
+用量档案默认只导出本机扫描所得，也可选择导出全部来源。文件只包含规范化用量记录、来源元数据和项目标签，不包含账号凭据或对话正文。导入前会按来源预览：新来源新增，较新版本替换该来源的完整快照，重复版本、较旧版本和当前本机来源跳过，同版本内容冲突也跳过。全部来源导出会保留每个来源原有的 ID 和版本，转存不会重新归属。导入来源可改显示名称、暂停计入统计或单独删除；历次导入结果保留在导入历史中。启用的导入来源会与本机记录一起用于用量热力图、模型拆分和只读数据接口。普通导入始终跳过本机来源，不作为本机档案恢复入口；清除应用数据后的来源身份恢复需另行迁移。
 
 在“设置 → 数据导入与导出”中可保存和恢复 Quota Desk 数据。备份包含账号、自定义厂商（同一厂商只保存一次）、账号凭据、本地额度历史和周期浪费档案。导入会先显示新增与重复项目数量，再与当前数据合并；已有账号和厂商配置优先保留，重复历史记录不会再添加。
 

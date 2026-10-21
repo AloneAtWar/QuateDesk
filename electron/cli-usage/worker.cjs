@@ -166,6 +166,12 @@ if (!wsl.isWslEnabled()) worker.store.purgeWslRoots();
 
 const handlers = {
   scan: () => worker.scan(),
+  archiveInfo: () => worker.store.archives.info(),
+  archiveExport: (query) => worker.store.archives.exportPackage(query?.scope),
+  archivePreview: (payload) => worker.store.archives.preview(payload),
+  archiveImport: (query) => worker.store.archives.importPackage(query.payload, query.fileName),
+  archiveUpdate: (query) => worker.store.archives.updateSource(query),
+  archiveDelete: (query) => worker.store.archives.deleteSource(query?.sourceId),
   summary: (query) => worker.store.summary(query),
   models: (query) => worker.store.models(query),
   sources: () => worker.sources(),

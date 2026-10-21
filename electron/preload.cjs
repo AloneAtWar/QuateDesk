@@ -22,6 +22,16 @@ contextBridge.exposeInMainWorld('quotaDesk', {
   getLocalCliUsageModels: (options) => ipcRenderer.invoke('cliUsage:get-models', options),
   getLocalCliUsageSources: () => ipcRenderer.invoke('cliUsage:get-sources'),
   scanLocalCliUsage: () => ipcRenderer.invoke('cliUsage:scan'),
+  getUsageArchives: () => ipcRenderer.invoke('archives:info'),
+  exportUsageArchives: (options) => ipcRenderer.invoke('archives:export', options),
+  importUsageArchives: () => ipcRenderer.invoke('archives:import'),
+  updateUsageArchive: (options) => ipcRenderer.invoke('archives:update', options),
+  deleteUsageArchive: (sourceId) => ipcRenderer.invoke('archives:delete', sourceId),
+  onUsageArchivesChanged: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('archives:changed', listener);
+    return () => ipcRenderer.removeListener('archives:changed', listener);
+  },
   clearHistory: () => ipcRenderer.invoke('history:clear'),
   exportData: (options) => ipcRenderer.invoke('data:export', options),
   importData: () => ipcRenderer.invoke('data:import'),

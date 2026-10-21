@@ -2,6 +2,8 @@
 
 `/api/v1/*` is a read-only JSON interface provided by the desktop app for **local or LAN agents/scripts**, used to answer analytical questions like "analyze my current usage", "how did I use it today", "token consumption over a recent period". It shares the same port and token system as the remote viewing web page (the old `/api/*` contract remains unchanged and is dedicated to the remote page / Android App; v1 is a separate contract).
 
+CLI usage reports include local collected records and enabled imported usage archives. Imported sources are managed in desktop Settings → Other → Usage archives; each source contributes one complete snapshot. Session/project identifiers are namespaced by origin, and disabling/deleting an imported source removes its contribution from these reports. Agent detection status and scan times still describe the local scanner.
+
 - All endpoints are **GET only**; the interface never exposes credentials, conversation content, or absolute paths.
 - On the same machine, an agent can obtain a token directly from the loopback address without a pairing code (see below); LAN / other machines need to use a pairing code to pair as a "device".
 
@@ -165,6 +167,6 @@ CLI 会自动从回环地址免配对换取只读令牌(仅进程内使用、不
 - **Sessions**: number of distinct sessions deduplicated per bucket/interval; local usage HMACs session keys.
 - **Two-axis queries** (e.g., "per day × per model"): v1 does not provide them; combine them yourself via `series?model=X` called multiple times or `breakdown?date=` day by day.
 - **provider data boundaries**: DeepSeek/Z.ai/Codex/MiniMax only; the official side is day-by-day and vendor timezones may be inconsistent with the query timezone (see `coverage.issues`); Z.ai model detail only covers the last 60 days; requests with `refresh=1` will be slower.
-- **Local usage is only for this machine**, does not represent account usage on other devices; when `agents[].status` is not `ready`, that channel's data may be incomplete.
+- **Local usage includes this machine and enabled imported archives**, and does not represent complete account-wide usage; when `agents[].status` is not `ready`, that channel's data may be incomplete.
 - **Hour buckets** are fixed-width by local wall-clock; DST transition days are shifted, for display/analysis purposes only.
 - The quota history endpoint returns empty beyond the actual retention days; local usage covers approximately the last year (depending on CLI local files).

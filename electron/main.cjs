@@ -1875,6 +1875,76 @@ function registerIpc() {
     store.removeRemoteDevice(deviceId);
     return remoteViewStatus();
   });
+  const archivesChanged = () => mainWindow?.webContents.send('archives:changed');
+  ipcMain.handle('archives:info', () => cliUsage.getArchiveInfo());
+  ipcMain.handle('archives:update', async (_event, options) => {
+    const info = await cliUsage.updateArchiveSource(options);
+    archivesChanged();
+    return info;
+  });
+  ipcMain.handle('archives:delete', async (_event, sourceId) => {
+    const current = await cliUsage.getArchiveInfo();
+    const source = current.imported.find((item) => item.sourceId === sourceId);
+    if (!source) throw new Error('导入来源不存在，不能删除本机档案');
+    const choice = await dialog.showMessageBox(dataDialogOwner(), {
+      type: 'warning', title: '删除导入档案', message: `删除“${source.label}”的导入档案？`,
+      detail: '该来源将从用量汇总中移除。本机采集记录和导入历史会保留，之后可重新导入该来源。',
+      buttons: ['取消', '删除档案'], defaultId: 0, cancelId: 0, noLink: true,
+    });
+    if (choice.response !== 1) return { canceled: true };
+    const info = await cliUsage.deleteArchiveSource(sourceId);
+    archivesChanged();
+    return { info };
+  });
+  ipcMain.handle('archives:export', async (_event, options = {}) => {
+    const scope = options?.scope || 'local';
+    if (!['local', 'all'].includes(scope)) throw new Error('未知的档案导出范围');
+    const choice = await dialog.showSaveDialog(dataDialogOwner(), {
+      title: scope === 'all' ? '导出全部来源档案' : '导出本机用量档案',
+      defaultPath: path.join(app.getPath('documents'), `Quota-Desk-Usage-${exportFileStamp()}.json`),
+      filters: [{ name: '用量档案', extensions: ['json'] }],
+    });
+    if (choice.canceled || !choice.filePath) return { canceled: true };
+    const payload = await cliUsage.exportArchives(scope);
+    const temporary = `${choice.filePath}.${crypto.randomUUID()}.tmp`;
+    let fd;
+    try {
+      fd = fs.openSync(temporary, 'wx');
+      fs.writeFileSync(fd, JSON.stringify(payload));
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+      fd = undefined;
+      fs.renameSync(temporary, choice.filePath);
+    } catch (error) {
+      if (fd !== undefined) { try { fs.closeSync(fd); } catch {} }
+      try { fs.rmSync(temporary, { force: true }); } catch {}
+      throw new Error(`用量档案导出失败：${error.message}`);
+    }
+    return { sources: payload.archives.length, records: payload.archives.reduce((total, source) => total + source.records.length, 0) };
+  });
+  ipcMain.handle('archives:import', async () => {
+    const choice = await dialog.showOpenDialog(dataDialogOwner(), {
+      title: '导入用量档案', properties: ['openFile'], filters: [{ name: '用量档案', extensions: ['json'] }],
+    });
+    if (choice.canceled || !choice.filePaths?.length) return { canceled: true };
+    const filePath = choice.filePaths[0];
+    if (fs.statSync(filePath).size > 256 * 1024 * 1024) throw new Error('档案文件超过 256 MB，请按来源分别导出');
+    let payload;
+    try { payload = JSON.parse(fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '')); }
+    catch { throw new Error('无法读取用量档案，请选择完整的 JSON 档案文件'); }
+    const preview = await cliUsage.previewArchiveImport(payload);
+    const applicable = preview.filter((source) => ['added', 'updated'].includes(source.status));
+    const summary = `新增 ${preview.filter((s) => s.status === 'added').length} 个来源，更新 ${preview.filter((s) => s.status === 'updated').length} 个来源，跳过 ${preview.length - applicable.length} 个来源`;
+    const confirmed = await dialog.showMessageBox(dataDialogOwner(), {
+      type: 'info', title: '用量档案导入预览', message: summary,
+      detail: `${preview.slice(0, 20).map((source) => `${source.label} · v${source.revision} · ${source.records.toLocaleString()} 条：${source.message}`).join('\n')}${preview.length > 20 ? '\n其余结果可在导入历史中查看。' : ''}\n\n新版会替换对应来源的完整档案，来源名称和计入汇总的选择保留。本机来源始终跳过。`,
+      buttons: applicable.length ? ['取消', '导入档案'] : ['完成'], defaultId: applicable.length ? 1 : 0, cancelId: 0, noLink: true,
+    });
+    if (applicable.length && confirmed.response !== 1) return { canceled: true };
+    const result = await cliUsage.importArchives(payload, path.basename(filePath));
+    archivesChanged();
+    return result;
+  });
   ipcMain.handle('data:export', async (_event, options = {}) => {
     const state = migrateState(store.loadState());
     if (!state) throw new Error('桌面状态尚未初始化');
