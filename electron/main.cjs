@@ -13,7 +13,7 @@ const { scanCcswitch } = require('./ccswitch.cjs');
 const { mergeMainOwnedUsageConnections } = require('./provider-usage-state.cjs');
 const { createCliUsageService } = require('./cli-usage/index.cjs');
 const { buildExportPackage, validateExportPackage, mergeImportPackage } = require('./import-export.cjs');
-const { CLI_KINDS, SNAPSHOT_KEY, readLiveAuth, cliIdentity, resolveCliAuth, authVersionMatches, writeLiveIfCurrent, fetchWithCliAuth, COPILOT_CLIENT_ID, COPILOT_DEVICE_CODE_URL, COPILOT_TOKEN_URL, COPILOT_SCOPE } = require('./cli-auth.cjs');
+const { CLI_KINDS, SNAPSHOT_KEY, readLiveAuth, cliIdentity, resolveCliAuth, authVersionMatches, writeLiveIfCurrent, fetchWithCliAuth, refreshTokenOf, claudeProfileOf, claudeProfileMatches, CLAUDE_PROFILE_KEY, COPILOT_CLIENT_ID, COPILOT_DEVICE_CODE_URL, COPILOT_TOKEN_URL, COPILOT_SCOPE } = require('./cli-auth.cjs');
 const {
   fetchDeepSeekUsage,
   fetchDeepSeekSummary,
@@ -392,6 +392,19 @@ const persistCliAuthUpdate = (accountId, { kind, next, previous, source }) => {
       } else if (!authVersionMatches(kind, current, next)) {
         return;
       }
+    } else if (kind === 'claude' && source === 'live') {
+      // Claude 跟随分支（resolveCliAuth 同账号跟随 live）：本应用续期轮换的新凭据也要
+      // 同步回快照，账号离开本机后快照仍是可用的一版（magpie syncClaudeDir 同策略）。
+      // 仅当快照确属同一账号（oauthAccount 一致）且仍是刷新前那版时才写，防并发互踩。
+      const stored = store.getSecrets(accountId);
+      const raw = stored.variables?.[SNAPSHOT_KEY];
+      let current = null;
+      try { current = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch {}
+      if (current && claudeProfileMatches(claudeProfileOf(current), claudeProfileOf(next))
+        && authVersionMatches(kind, current, previous)
+        && !authVersionMatches(kind, current, next)) {
+        store.saveCredential(accountId, '', { [SNAPSHOT_KEY]: JSON.stringify(next) });
+      }
     }
     writeLiveIfCurrent(kind, previous, next);
     refreshLiveIdentities();
@@ -405,10 +418,34 @@ const persistCliAuthUpdate = (accountId, { kind, next, previous, source }) => {
 const cliIdentityPatch = (account, kind, secrets) => {
   if (!CLI_KINDS.includes(kind)) return null;
   const resolved = resolveCliAuth(kind, secrets.variables);
-  const identity = resolved && cliIdentity(kind, resolved.auth);
+  let identity = resolved && cliIdentity(kind, resolved.auth);
   if (!identity) return null;
+  if (kind === 'claude' && resolved.source === 'live' && account.cliAuthSource === 'snapshot') {
+    // Claude 跟随分支：本机 Claude Code 自己轮换了凭据（未经本应用续期）时，把 live 的
+    // 新凭据同步进快照——否则快照留着已作废的 refresh token，账号一旦离开本机就会报失效。
+    const raw = secrets.variables?.[SNAPSHOT_KEY];
+    let current = null;
+    try { current = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch {}
+    if (current && claudeProfileMatches(claudeProfileOf(current), claudeProfileOf(resolved.auth))
+      && !authVersionMatches('claude', current, resolved.auth)) {
+      store.saveCredential(account.id, '', { [SNAPSHOT_KEY]: JSON.stringify(resolved.auth) });
+    }
+  } else if (kind === 'claude' && resolved.source === 'snapshot' && !claudeProfileOf(resolved.auth)) {
+    // 旧快照升级：无身份 Profile 的 Claude 快照，若 refresh token 与本机 live 完全一致
+    //（同一登录会话的铁证），就地补录 oauthAccount 身份——后续去重 / 「本机激活」比对 /
+    // 跟随逻辑即可用上稳定指纹，无需用户手动重新导入。
+    const live = readLiveAuth('claude');
+    const liveProfile = live && claudeProfileOf(live);
+    const liveRefresh = live && refreshTokenOf('claude', live);
+    if (liveProfile && liveRefresh && liveRefresh === refreshTokenOf('claude', resolved.auth)) {
+      const upgraded = { ...resolved.auth, [CLAUDE_PROFILE_KEY]: liveProfile };
+      store.saveCredential(account.id, '', { [SNAPSHOT_KEY]: JSON.stringify(upgraded) });
+      identity = cliIdentity('claude', upgraded) || identity;
+    }
+  }
   return {
-    cliAuthSource: resolved.source,
+    // 跟随 live 的快照账号仍标记为 snapshot：导入去重 / 升级逻辑按「有无快照」语义判断
+    cliAuthSource: (resolved.source === 'live' && account.cliAuthSource === 'snapshot') ? 'snapshot' : resolved.source,
     cliFingerprint: identity.fingerprint,
     identity: (resolved.source === 'snapshot' && account.identity) ? account.identity : (identity.display || account.identity || ''),
   };

@@ -1,4 +1,5 @@
 const test = require('node:test');
+const { beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -13,6 +14,10 @@ const { SNAPSHOT_KEY, cliIdentity, parseCliSnapshot, resolveCliAuth, refreshCliA
 
 const b64url = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
 const fakeJwt = (claims) => `${b64url({ alg: 'none', typ: 'JWT' })}.${b64url(claims)}.sig`;
+
+// single-flight 的刷新结果会在进程内保留一段时间（同 refresh token 的迟到请求共享，
+// 防轮换判复用）：测试之间互不共享飞行表，每个用例独立发刷新请求
+beforeEach(() => cliAuth.__test.clearRefreshFlights());
 
 const codexSnapshot = (overrides = {}) => ({
   OPENAI_API_KEY: null,
@@ -113,7 +118,12 @@ test('Claude / Gemini 续期：各自的端点、client 与请求格式', async 
   assert.equal(seen[0].init.headers['User-Agent'], 'anthropic');
   assert.equal(claudeNext.claudeOauth.accessToken, 'a2');
   assert.equal(claudeNext.claudeOauth.refreshToken, 'r2');
-  assert.ok(claudeNext.claudeOauth.expiresAt > new Date().toISOString());
+  // expiresAt 归一化为 epoch 毫秒（新版 Claude Code 的形态；秒级 expires_at 也归一）
+  assert.equal(typeof claudeNext.claudeOauth.expiresAt, 'number');
+  assert.ok(claudeNext.claudeOauth.expiresAt > Date.now() + 3000_000);
+  const secondsFetcher = async () => ({ ok: true, status: 200, json: async () => ({ access_token: 'a3', refresh_token: 'r3', expires_at: Math.floor(Date.now() / 1000) + 3600 }) });
+  const fromSeconds = await refreshCliAuth('claude', { claudeAiOauth: { accessToken: 'a1', refreshToken: 'r1' } }, secondsFetcher, 1000);
+  assert.ok(fromSeconds.claudeAiOauth.expiresAt > Date.now() + 3000_000, 'epoch 秒归一为毫秒');
   const geminiNext = await refreshCliAuth('gemini', { access_token: 'g1', refresh_token: 'gr1', expiry_date: Date.now() - 1000 }, recorder(), 1000);
   assert.equal(seen[1].url, __constants.GEMINI_TOKEN_URL);
   const form = new URLSearchParams(seen[1].init.body);
@@ -139,6 +149,90 @@ test('Claude 凭据键名兼容：新版 claudeAiOauth / 旧版 "claude.ai_oauth
   // 空 / 无 token 的条目不识别
   assert.equal(cliIdentity('claude', { claudeAiOauth: { scopes: [] } }), null);
   assert.equal(cliIdentity('claude', {}), null);
+});
+
+// Claude 身份与跟随：oauthAccount（~/.claude.json）是唯一稳定账号标识——凭据 token 是
+// 不透明字符串且 refresh token 每次续期轮换；快照保存 Profile（qdOAuthProfile 元数据），
+// 本机 Claude Code 登录同一账号时 resolve 跟随 live（Claude Code 随时会轮换凭据）。
+// async 感知的临时 home 包装：await 回调结束后才还原环境、删除目录（否则异步用例体
+// 会读到还原后的真实 home）
+const withClaudeHome = async (run) => {
+  const previousProfile = process.env.USERPROFILE;
+  const previousHome = process.env.HOME;
+  const previousConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-claude-'));
+  try {
+    fs.mkdirSync(path.join(tempHome, '.claude'), { recursive: true });
+    process.env.USERPROFILE = tempHome;
+    process.env.HOME = tempHome;
+    delete process.env.CLAUDE_CONFIG_DIR;
+    cliAuth.__claude.resetClaudeProfileCache();
+    return await run(tempHome);
+  } finally {
+    if (previousProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = previousProfile;
+    if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+    if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previousConfigDir;
+    cliAuth.__claude.resetClaudeProfileCache();
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  }
+};
+const writeClaudeLive = (home, { refreshToken = 'live-rt', accessToken = 'live-at', uuid = 'uuid-1', email = 'User@Example.com' } = {}) => {
+  fs.writeFileSync(path.join(home, '.claude', '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken, refreshToken, expiresAt: Date.now() + 3600_000 } }));
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { accountUuid: uuid, ...(email ? { emailAddress: email } : {}) } }));
+  cliAuth.__claude.resetClaudeProfileCache();
+};
+
+test('Claude 身份：oauthAccount 的 accountUuid/email 优先，随续期轮换保持稳定', () => {
+  withClaudeHome((home) => {
+    writeClaudeLive(home);
+    const live = cliAuth.readLiveAuth('claude');
+    assert.ok(live, 'live 登录可读');
+    assert.deepEqual(cliIdentity('claude', live), { fingerprint: 'uuid-1', display: 'user@example.com' });
+    // 轮换 refresh token 后指纹不变（旧实现退到 refresh_token 指纹会漂移）
+    const rotated = { ...live, claudeAiOauth: { ...live.claudeAiOauth, refreshToken: 'rotated-rt' } };
+    assert.equal(cliIdentity('claude', rotated).fingerprint, 'uuid-1');
+  });
+});
+
+test('Claude 凭据解析：同账号跟随 live，异账号 / 无 Profile / 凭据被清空时回退快照', () => {
+  withClaudeHome((home) => {
+    writeClaudeLive(home);
+    const snapshot = (uuid = 'uuid-1') => ({ claudeAiOauth: { accessToken: 'snap-at', refreshToken: 'snap-rt', expiresAt: Date.now() + 3600_000 }, qdOAuthProfile: { accountUuid: uuid, emailAddress: 'user@example.com' } });
+    const followed = resolveCliAuth('claude', { [SNAPSHOT_KEY]: JSON.stringify(snapshot()) });
+    assert.equal(followed.source, 'live', 'oauthAccount 一致 → 跟随 live');
+    assert.equal(followed.auth.claudeAiOauth.refreshToken, 'live-rt');
+    assert.ok(followed.auth.qdOAuthProfile, 'live 凭据附着 Profile');
+    assert.equal(resolveCliAuth('claude', { [SNAPSHOT_KEY]: JSON.stringify(snapshot('uuid-2')) }).source, 'snapshot', '本机登录是另一账号 → 用快照');
+    assert.equal(resolveCliAuth('claude', { [SNAPSHOT_KEY]: JSON.stringify({ claudeAiOauth: snapshot().claudeAiOauth }) }).source, 'snapshot', '旧快照无 Profile → 维持快照优先');
+    writeClaudeLive(home, { refreshToken: '', accessToken: '' });
+    assert.equal(resolveCliAuth('claude', { [SNAPSHOT_KEY]: JSON.stringify(snapshot()) }).source, 'snapshot', '本机凭据被 Claude Code 清空 → 视为未登录');
+  });
+});
+
+test('Claude 续期回写 live：剥离 qdOAuthProfile 元数据，保持 Claude Code 原生形态', () => {
+  withClaudeHome((home) => {
+    writeClaudeLive(home, { refreshToken: 'rt-old', accessToken: 'a1' });
+    const refreshed = { claudeAiOauth: { accessToken: 'a2', refreshToken: 'rt-new', expiresAt: Date.now() + 3600_000 }, qdOAuthProfile: { accountUuid: 'uuid-1' } };
+    assert.equal(writeLiveIfCurrent('claude', { claudeAiOauth: { accessToken: 'a1', refreshToken: 'rt-old' } }, refreshed), true);
+    const written = JSON.parse(fs.readFileSync(path.join(home, '.claude', '.credentials.json'), 'utf8'));
+    assert.equal(written.qdOAuthProfile, undefined, '元数据不落 live 文件');
+    assert.equal(written.claudeAiOauth.refreshToken, 'rt-new');
+    // live 已被 Claude Code 轮换（refresh token 不再是刷新前那把）→ CAS 拒绝写入
+    assert.equal(writeLiveIfCurrent('claude', { claudeAiOauth: { accessToken: 'a1', refreshToken: 'rt-old' } }, refreshed), false);
+  });
+});
+
+test('Claude 续期失效分诊：本机凭据未动 → 提示其它设备轮换；本机已变化 → 提示重新导入', async () => {
+  const fetcher = async () => ({ ok: false, status: 400, json: async () => ({ error: 'invalid_grant' }) });
+  await withClaudeHome(async (home) => {
+    writeClaudeLive(home, { refreshToken: 'rt-snap', uuid: 'uuid-1' });
+    const unchanged = await refreshCliAuth('claude', { claudeAiOauth: { accessToken: 'a1', refreshToken: 'rt-snap' } }, fetcher, 1000).catch((error) => error);
+    assert.ok(unchanged instanceof CliRefreshError && unchanged.permanent === true);
+    assert.match(unchanged.message, /其它设备/);
+    writeClaudeLive(home, { refreshToken: 'rt-moved' });
+    const moved = await refreshCliAuth('claude', { claudeAiOauth: { accessToken: 'a1', refreshToken: 'rt-snap' } }, fetcher, 1000).catch((error) => error);
+    assert.match(moved.message, /本机 Claude Code 的登录已变化/);
+  });
 });
 
 test('Claude 续期写回原键名：claudeAiOauth 进则 claudeAiOauth 出，live 文件形态不被破坏', async () => {

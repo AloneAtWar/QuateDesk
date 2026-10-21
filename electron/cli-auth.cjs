@@ -5,6 +5,9 @@
 // 多账号也能各自续期（协议实现对照 codex-rs login/auth、claude code 与 gemini-cli 源码）：
 // - Codex:  POST auth.openai.com/oauth/token（JSON：client_id + grant_type=refresh_token）
 // - Claude: POST console.anthropic.com/v1/oauth/token（JSON：client_id + grant_type=refresh_token）
+//           refresh token 每次续期轮换、官方登录不支持多设备同时保活：本机 Claude Code
+//           登录同一账号时跟随 live 凭据（resolveCliAuth），账号身份取 ~/.claude.json 的
+//           oauthAccount（accountUuid，随快照保存为 qdOAuthProfile 元数据）
 // - Gemini: POST oauth2.googleapis.com/token（表单：client_id + client_secret + refresh_token）。
 //           live 凭据三级回落（旧扁平文件 → FileKeychain 加密文件 → Windows 凭据管理器），
 //           见下方 readGeminiLiveAuth
@@ -85,12 +88,57 @@ const writeJsonAtomic = (filePath, value) => {
   fs.renameSync(tempPath, filePath);
 };
 
+// Claude Code 的账号身份（Profile）：凭据 token 本身是不透明字符串、refresh token 每次
+// 续期还会轮换，无法承载稳定身份；Claude Code 登录时会把 oauthAccount（accountUuid /
+// emailAddress / organizationUuid 等）写进 ~/.claude.json（或 CLAUDE_CONFIG_DIR 下），
+// 与 .credentials.json 一并更新——这是本机唯一稳定的账号标识（magpie 同样以此判定账号
+// 归属）。导入快照时把 Profile 一并存进 bundle（qdOAuthProfile 键，仅快照元数据，
+// 回写 live 文件前剥离），使身份与去重 / 「本机激活」比对在续期轮换后依然稳定。
+const CLAUDE_PROFILE_KEY = 'qdOAuthProfile';
+const claudeHome = () => process.env.CLAUDE_CONFIG_DIR || os.homedir();
+let claudeProfileCache = { at: 0, value: undefined };
+const readClaudeProfile = () => {
+  // ~/.claude.json 可能很大且每次 resolve 都会读：短 TTL 缓存（登录切换在分钟级以上）
+  if (Date.now() - claudeProfileCache.at < 5_000) return claudeProfileCache.value;
+  let value = null;
+  const account = readJsonFile(claudeProfilePath())?.oauthAccount;
+  if (account && typeof account === 'object') {
+    const accountUuid = String(account.accountUuid || '').trim();
+    if (accountUuid) {
+      value = { accountUuid };
+      const email = String(account.emailAddress || '').trim();
+      if (email) value.emailAddress = email.toLowerCase();
+      const organizationUuid = String(account.organizationUuid || '').trim();
+      if (organizationUuid) value.organizationUuid = organizationUuid;
+    }
+  }
+  claudeProfileCache = { at: Date.now(), value };
+  return value;
+};
+const claudeProfileOf = (auth) => (auth && typeof auth === 'object'
+  && auth[CLAUDE_PROFILE_KEY] && typeof auth[CLAUDE_PROFILE_KEY] === 'object'
+  && auth[CLAUDE_PROFILE_KEY].accountUuid ? auth[CLAUDE_PROFILE_KEY] : null);
+// 同一账号判定：accountUuid 相同；双方都带组织时组织也须相同（同邮箱可挂个人 + 多组织席位）
+const claudeProfileMatches = (left, right) => Boolean(left && right
+  && left.accountUuid === right.accountUuid
+  && (!left.organizationUuid || !right.organizationUuid || left.organizationUuid === right.organizationUuid));
+// 回写 live 文件前剥离快照元数据（qdOAuthProfile），保持 Claude Code 原生文件形态
+const stripClaudeProfileMeta = (auth) => {
+  if (!auth || typeof auth !== 'object' || !(CLAUDE_PROFILE_KEY in auth)) return auth;
+  const { [CLAUDE_PROFILE_KEY]: _meta, ...rest } = auth;
+  return rest;
+};
+
 // 各 CLI 的 live 凭据文件路径；Codex 遵循 CODEX_HOME 环境变量（与 codex CLI 一致），
-// Gemini 遵循 GEMINI_CLI_HOME（与 gemini-cli 一致）
+// Gemini 遵循 GEMINI_CLI_HOME（与 gemini-cli 一致），Claude 遵循 CLAUDE_CONFIG_DIR
+const claudeProfilePath = () => path.join(claudeHome(), '.claude.json');
+const claudeCredentialsPath = () => (process.env.CLAUDE_CONFIG_DIR
+  ? path.join(process.env.CLAUDE_CONFIG_DIR, '.credentials.json')
+  : path.join(os.homedir(), '.claude', '.credentials.json'));
 const geminiHome = () => process.env.GEMINI_CLI_HOME || path.join(os.homedir(), '.gemini');
 const liveAuthPath = (kind) => {
   if (kind === 'codex') return path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'auth.json');
-  if (kind === 'claude') return path.join(os.homedir(), '.claude', '.credentials.json');
+  if (kind === 'claude') return claudeCredentialsPath();
   if (kind === 'gemini') return path.join(geminiHome(), 'oauth_creds.json');
   if (kind === 'grok') return path.join(process.env.GROK_HOME || path.join(os.homedir(), '.grok'), 'auth.json');
   if (kind === 'copilot') return path.join(os.homedir(), '.config', 'github-copilot', 'hosts.json');
@@ -300,9 +348,19 @@ const readGeminiLiveAuth = () => {
   return readGeminiSecureAuth();
 };
 
+// Claude 的 live 登录 = 凭据文件 + 同步附着的账号 Profile（同一登录的身份来源）。
+// Claude Code 被拒绝续期时会把凭据清空（magpie 记录的 2.1.x 行为），空 token 视为未登录。
+const readClaudeLiveAuth = () => {
+  const credentials = readJsonFile(liveAuthPath('claude'));
+  if (!credentials) return null;
+  const profile = readClaudeProfile();
+  return profile ? { ...credentials, [CLAUDE_PROFILE_KEY]: profile } : credentials;
+};
+
 const readLiveAuth = (kind) => {
   if (kind === 'grokbot') return readGrokBotLiveAuth();
   if (kind === 'gemini') return readGeminiLiveAuth();
+  if (kind === 'claude') return readClaudeLiveAuth();
   return readJsonFile(liveAuthPath(kind));
 };
 
@@ -417,10 +475,18 @@ const cliIdentity = (kind, auth) => {
     email = String(claims?.email || '').toLowerCase();
     fingerprint = String(auth.tokens?.account_id || shaTag(auth.tokens?.refresh_token));
   } else if (kind === 'claude') {
-    // Claude 凭据没有账号标识字段：access token 是 JWT 时取 sub 声明（续期轮换也稳定），否则退到 refresh_token 指纹
-    const oauth = claudeOauthOf(auth) || {};
-    const claims = parseJwtClaims(oauth.accessToken || oauth.access_token);
-    fingerprint = String(claims?.sub || claims?.user_id || '') || shaTag(oauth.refreshToken || oauth.refresh_token || oauth.accessToken || oauth.access_token);
+    // 身份优先取 oauthAccount 的 accountUuid（登录不变则稳定，续期轮换不影响）；
+    // 没有 Profile 的旧快照退回 JWT sub（历史上部分 access token 是 JWT），最后退到
+    // refresh_token 指纹——它随每次续期轮换，仅作无法识别时的兜底
+    const profile = claudeProfileOf(auth);
+    if (profile) {
+      email = profile.emailAddress || '';
+      fingerprint = profile.accountUuid;
+    } else {
+      const oauth = claudeOauthOf(auth) || {};
+      const claims = parseJwtClaims(oauth.accessToken || oauth.access_token);
+      fingerprint = String(claims?.sub || claims?.user_id || '') || shaTag(oauth.refreshToken || oauth.refresh_token || oauth.accessToken || oauth.access_token);
+    }
   } else if (kind === 'kimi') {
     // Kimi 网页会话没有邮箱等展示字段：userId 是稳定账号标识，展示退到指纹尾号
     fingerprint = String(auth.userId || '') || shaTag(auth.refreshToken);
@@ -466,9 +532,19 @@ const parseCliSnapshot = (kind, secretVariables = {}) => {
   return hasTokens(kind, auth) ? auth : null;
 };
 
-// 凭据解析优先级：账号自己的登录快照 → 本机 CLI 的 live 登录文件
+// 凭据解析优先级：账号自己的登录快照 → 本机 CLI 的 live 登录文件。
+// Claude 例外：本机 Claude Code 登录着同一账号（accountUuid 一致）时跟随 live——
+// Claude Code 会随时轮换 refresh token，快照里那份会随即失效，live 才是事实源；
+// 快照退为该账号离开本机后的回落（magpie 的 syncClaudeDir 同策略）。
 const resolveCliAuth = (kind, secretVariables = {}) => {
   const snapshot = parseCliSnapshot(kind, secretVariables);
+  if (kind === 'claude' && snapshot) {
+    const live = readClaudeLiveAuth();
+    if (live && hasTokens('claude', live)
+      && claudeProfileMatches(claudeProfileOf(snapshot), claudeProfileOf(live))) {
+      return { source: 'live', auth: live };
+    }
+  }
   if (snapshot) return { source: 'snapshot', auth: snapshot };
   const live = readLiveAuth(kind);
   if (kind === 'grok') {
@@ -493,6 +569,16 @@ const refreshTokenOf = (kind, auth) => {
   return auth?.refresh_token || '';
 };
 
+// 过期时间的归一化：接受 epoch 秒 / epoch 毫秒 / ISO 字符串（快照与各端点返回的形态
+// 不一），统一为 epoch 毫秒；无法解析返回 null
+const normalizeExpiryMs = (value) => {
+  if (value === undefined || value === null || value === '') return null;
+  const number = Number(value);
+  if (Number.isFinite(number) && number > 0) return number < 1e10 ? number * 1000 : number;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
+};
+
 // access token 是否临近过期（Codex 的 access_token 是 JWT，读 exp 声明；解析不出交给 401 兜底）
 const accessTokenExpiryMs = (kind, auth) => {
   if (kind === 'codex') {
@@ -502,13 +588,7 @@ const accessTokenExpiryMs = (kind, auth) => {
   if (kind === 'claude') {
     // 新版 Claude Code 的 expiresAt 是 epoch 毫秒数字；旧版/其它实现可能是 ISO 字符串或 epoch 秒
     const oauth = claudeOauthOf(auth);
-    const raw = oauth?.expiresAt ?? oauth?.expires_at;
-    const number = Number(raw);
-    if (raw !== undefined && raw !== null && Number.isFinite(number) && number > 0) {
-      return number < 10_000_000_000 ? number * 1000 : number;
-    }
-    const ms = new Date(raw).getTime();
-    return Number.isFinite(ms) ? ms : null;
+    return normalizeExpiryMs(oauth?.expiresAt ?? oauth?.expires_at);
   }
   if (kind === 'kimi') {
     // 网页会话的 access_token 是 HS512 JWT（exp = iat + 900s），读 exp 声明
@@ -611,13 +691,28 @@ async function refreshClaudeAuth(auth, fetcher, timeoutMs) {
   } catch (error) { throw asRefreshError('Claude', error); }
   if (!response.ok) {
     const permanent = response.status === 401 || response.status === 400 || /invalid_grant|refresh_token/i.test(String(payload?.error || ''));
-    throw new CliRefreshError(`Claude 登录续期被拒绝（HTTP ${response.status}），请在 Claude Code 重新登录该账号后重新导入`, { permanent, authStatus: permanent ? 'reauth_required' : null });
+    // 失效路径分诊：本机登录的 refresh token 没动过 → 凭据是在其它设备/客户端被轮换或
+    // 吊销（Claude 官方登录不支持多设备同时保活）；本机登录已变化 → 提示重新导入。
+    // （同账号的「本机已变化」通常已被 resolveCliAuth 的跟随分支吸收，走不到这里。）
+    let hint = '请在 Claude Code 重新登录该账号后重新导入';
+    if (permanent) {
+      const liveRefresh = refreshTokenOf('claude', readClaudeLiveAuth());
+      const attempted = oauth.refreshToken || oauth.refresh_token;
+      hint = liveRefresh && liveRefresh !== attempted
+        ? '本机 Claude Code 的登录已变化，若仍是同一账号请重新导入本机登录'
+        : '该账号的续期凭据已在其它设备/客户端被轮换或吊销（Claude 官方登录不支持多设备同时保活），请重新登录后导入';
+    }
+    throw new CliRefreshError(`Claude 登录续期被拒绝（HTTP ${response.status}），${hint}`, { permanent, authStatus: permanent ? 'reauth_required' : null });
   }
   const nextOauth = { ...oauth };
   if (payload.access_token) nextOauth.accessToken = payload.access_token;
   if (payload.refresh_token) nextOauth.refreshToken = payload.refresh_token;
-  const expiresAt = payload.expires_at || (payload.expires_in ? new Date(Date.now() + Number(payload.expires_in) * 1000).toISOString() : null);
-  if (expiresAt) nextOauth.expiresAt = expiresAt;
+  // expiresAt 统一写 epoch 毫秒（新版 Claude Code 的形态；读取端三态兼容，但写回 live
+  // 文件时保持与 Claude Code 一致，避免它把秒级/ISO 值误读成 1970 而触发多余的重登）
+  const expiryMs = normalizeExpiryMs(payload.expires_at)
+    ?? (Number.isFinite(Number(payload.expires_in)) && Number(payload.expires_in) > 0
+      ? Date.now() + Number(payload.expires_in) * 1000 : null);
+  if (expiryMs) nextOauth.expiresAt = expiryMs;
   return { ...auth, [oauthKey]: nextOauth };
 }
 
@@ -926,12 +1021,15 @@ const writeLiveIfCurrent = (kind, previousAuth, nextAuth) => {
   const previousRefresh = refreshTokenOf(kind, previousAuth);
   const live = readJsonFile(livePath);
   if (!live || !previousRefresh || refreshTokenOf(kind, live) !== previousRefresh) return false;
-  try { writeJsonAtomic(livePath, nextAuth); return true; }
+  // Claude 的 nextAuth 带快照元数据（qdOAuthProfile）：live 文件保持 Claude Code 原生形态
+  const clean = kind === 'claude' ? stripClaudeProfileMeta(nextAuth) : nextAuth;
+  try { writeJsonAtomic(livePath, clean); return true; }
   catch { return false; }
 };
 
-// 同一个账号可能同时触发手动刷新、定时轮询和窗口刷新。Kimi / xAI 都会轮换
-// refresh_token，因此相同旧 token 的并发请求必须共享一次刷新结果。业务请求的
+// 同一个账号可能同时触发手动刷新、定时轮询和窗口刷新。Claude / Codex / Kimi / xAI 的
+// refresh token 都会轮换（Anthropic 与 OpenAI 均有旧 token 复用检测，并发复用会被判
+// invalid_grant），因此相同旧 token 的并发请求必须共享一次刷新结果。业务请求的
 // 401 可能错峰返回，成功结果需保留到一次请求超时窗口结束，避免迟到请求复用旧 token。
 const refreshInFlight = new Map();
 const refreshFlightKey = (kind, refreshToken) => `${kind}:${crypto.createHash('sha256').update(refreshToken).digest('hex')}`;
@@ -945,7 +1043,6 @@ const retainRefreshEntry = (key, entry, timeoutMs) => {
   timer.unref?.();
 };
 const refreshForRequest = async (kind, auth, fetcher, timeoutMs) => {
-  if (kind !== 'kimi' && kind !== 'grok') return refreshCliAuth(kind, auth, fetcher, timeoutMs);
   const refresh = refreshTokenOf(kind, auth);
   if (!refresh) return refreshCliAuth(kind, auth, fetcher, timeoutMs);
   const key = refreshFlightKey(kind, refresh);
@@ -1016,6 +1113,10 @@ module.exports = {
   liveAuthPath,
   grokAuthPath,
   readLiveAuth,
+  readClaudeProfile,
+  claudeProfileOf,
+  claudeProfileMatches,
+  CLAUDE_PROFILE_KEY,
   cliIdentity,
   claudeOauthOf,
   claudeOauthKeyOf,
@@ -1029,6 +1130,8 @@ module.exports = {
   writeLiveIfCurrent,
   fetchWithCliAuth,
   __grok: { selectGrokAuthEntry, selectGrokAuthRecord, grokEntryOf, grokScopeOf, grokEndpointIsAllowed, discoverGrokTokenEndpoint },
+  __test: { clearRefreshFlights: () => refreshInFlight.clear() },
+  __claude: { resetClaudeProfileCache: () => { claudeProfileCache = { at: 0, value: undefined }; }, stripClaudeProfileMeta },
   __copilot: { copilotEntryOf },
   __grokbot: { oscryptDecrypt },
   __gemini: { geminiAuthFromKeytarShape, readGeminiFileKeychain, parseCredentialBlobJson, resetGeminiSecureCache: () => { geminiSecureCache = { at: 0, value: null }; } },
