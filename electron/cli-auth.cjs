@@ -622,12 +622,13 @@ const shouldRefreshFirst = (kind, auth) => {
 
 // refresh 失败分为永久（invalid_grant/refresh_token 失效，需要重新登录）与瞬时（网络）两类
 class CliRefreshError extends Error {
-  constructor(message, { permanent = false, transient = false, authStatus = null } = {}) {
+  constructor(message, { permanent = false, transient = false, authStatus = null, retryAfterMs = null } = {}) {
     super(message);
     this.name = 'CliRefreshError';
     this.permanent = permanent;
     this.transient = transient;
     if (authStatus) this.authStatus = authStatus;
+    if (retryAfterMs) this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -658,6 +659,10 @@ async function refreshCodexAuth(auth, fetcher, timeoutMs) {
   if (!response.ok) {
     const code = payload?.error?.code || payload?.error || payload?.code;
     const permanent = response.status === 401 || response.status === 400 || /invalid_grant|refresh_token/i.test(String(code));
+    if (!permanent && response.status === 429) {
+      // 限流退避：与 Claude 同策略，冷却期内不再撞 token 端点（见 refreshCooldown）
+      throw new CliRefreshError('Codex 登录续期暂时失败（HTTP 429），OpenAI 限流中，稍后自动重试，无需重新登录', { transient: true, retryAfterMs: retryAfterMsOf(response) ?? REFRESH_COOLDOWN_DEFAULT_MS });
+    }
     throw new CliRefreshError(`Codex 登录续期被拒绝（HTTP ${response.status}${code ? ` · ${code}` : ''}），请在 Codex CLI 重新登录该账号后重新导入`, { permanent, authStatus: permanent ? 'reauth_required' : null });
   }
   const tokens = { ...auth.tokens };
@@ -690,12 +695,23 @@ async function refreshClaudeAuth(auth, fetcher, timeoutMs) {
     payload = await response.json();
   } catch (error) { throw asRefreshError('Claude', error); }
   if (!response.ok) {
-    const permanent = response.status === 401 || response.status === 400 || /invalid_grant|refresh_token/i.test(String(payload?.error || ''));
+    const codeText = String(payload?.error || '').trim();
+    const permanent = response.status === 401 || response.status === 400 || /invalid_grant|refresh_token/i.test(codeText);
+    if (!permanent) {
+      // 瞬时失败（429/5xx）：限流时进入冷却退避，稍后自动重试，绝不是要求重新登录。
+      // 实测 Anthropic 的 IP 级限流用无效 token 也会 429（请求未到 token 校验），此时
+      // 提示重登只会误导用户。优先尊重 Retry-After，缺失时按默认冷却处理。
+      const retryAfterMs = response.status === 429 ? retryAfterMsOf(response) : null;
+      throw new CliRefreshError(
+        `Claude 登录续期暂时失败（HTTP ${response.status}${codeText ? ` · ${codeText}` : ''}），${response.status === 429 ? 'Anthropic 限流中，稍后自动重试，无需重新登录' : '稍后自动重试'}`,
+        { transient: true, ...(response.status === 429 ? { retryAfterMs: retryAfterMs ?? REFRESH_COOLDOWN_DEFAULT_MS } : {}) },
+      );
+    }
     // 失效路径分诊：本机登录的 refresh token 没动过 → 凭据是在其它设备/客户端被轮换或
     // 吊销（Claude 官方登录不支持多设备同时保活）；本机登录已变化 → 提示重新导入。
     // （同账号的「本机已变化」通常已被 resolveCliAuth 的跟随分支吸收，走不到这里。）
     let hint = '请在 Claude Code 重新登录该账号后重新导入';
-    if (permanent) {
+    {
       const liveRefresh = refreshTokenOf('claude', readClaudeLiveAuth());
       const attempted = oauth.refreshToken || oauth.refresh_token;
       hint = liveRefresh && liveRefresh !== attempted
@@ -1031,6 +1047,47 @@ const writeLiveIfCurrent = (kind, previousAuth, nextAuth) => {
 // refresh token 都会轮换（Anthropic 与 OpenAI 均有旧 token 复用检测，并发复用会被判
 // invalid_grant），因此相同旧 token 的并发请求必须共享一次刷新结果。业务请求的
 // 401 可能错峰返回，成功结果需保留到一次请求超时窗口结束，避免迟到请求复用旧 token。
+// 429 限流退避：token 端点被 IP 级限流时继续硬撞只会不断续期封禁窗口（实测持续 2 小时
+// 不清——每 5 分钟轮询 × 立即重试 2 次，自锁）。同一把 refresh token 被限流后进入冷却期，
+// 期内不再发刷新请求。优先尊重 Retry-After（秒数或 HTTP 日期），缺失时默认 10 分钟，
+// 钳制在 30 秒到 1 小时之间。
+const refreshCooldown = new Map(); // flightKey → untilMs
+const REFRESH_COOLDOWN_DEFAULT_MS = 10 * 60_000;
+const REFRESH_COOLDOWN_MAX_MS = 60 * 60_000;
+const clampCooldownMs = (ms) => {
+  const value = Number(ms);
+  if (!Number.isFinite(value)) return REFRESH_COOLDOWN_DEFAULT_MS;
+  return Math.min(REFRESH_COOLDOWN_MAX_MS, Math.max(30_000, value));
+};
+const retryAfterMsOf = (response) => {
+  let raw = null;
+  try { raw = response?.headers?.get?.('retry-after'); } catch { raw = null; }
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  if (/^\d+$/.test(text)) return Number(text) * 1000;
+  const dateMs = Date.parse(text);
+  return Number.isFinite(dateMs) ? Math.max(0, dateMs - Date.now()) : null;
+};
+const cooldownUntilMs = (kind, auth) => {
+  const refresh = refreshTokenOf(kind, auth);
+  if (!refresh) return 0;
+  const until = refreshCooldown.get(refreshFlightKey(kind, refresh));
+  return until && until > Date.now() ? until : 0;
+};
+const rateLimitedError = (kind) => {
+  const label = kind.charAt(0).toUpperCase() + kind.slice(1);
+  return new CliRefreshError(`${label} 登录续期正在限流退避中，稍后自动重试，无需重新登录`, { transient: true });
+};
+const setRefreshCooldown = (key, ms) => {
+  const waitMs = clampCooldownMs(ms);
+  const until = Date.now() + waitMs;
+  refreshCooldown.set(key, until);
+  const timer = setTimeout(() => {
+    if (refreshCooldown.get(key) === until) refreshCooldown.delete(key);
+  }, waitMs + 1_000);
+  timer.unref?.();
+};
+
 const refreshInFlight = new Map();
 const refreshFlightKey = (kind, refreshToken) => `${kind}:${crypto.createHash('sha256').update(refreshToken).digest('hex')}`;
 const retainRefreshEntry = (key, entry, timeoutMs) => {
@@ -1055,10 +1112,16 @@ const refreshForRequest = async (kind, auth, fetcher, timeoutMs) => {
   promise.then(
     () => retainRefreshEntry(key, entry, timeoutMs),
     (error) => {
-      // A rejected login should not be hammered by every late 401. Transient failures are
-      // removed immediately so the normal retry loop can try again.
+      // A rejected login should not be hammered by every late 401. Permanent failures and
+      // rate-limited (429) responses keep the shared rejection for the request window;
+      // rate limits additionally start a cooldown so later polls don't hit the token
+      // endpoint again until it expires. Other transient failures clear immediately
+      // for the normal retry loop.
       if (error?.permanent) retainRefreshEntry(key, entry, timeoutMs);
-      else if (refreshInFlight.get(key) === entry) refreshInFlight.delete(key);
+      else if (error?.retryAfterMs) {
+        setRefreshCooldown(key, error.retryAfterMs);
+        retainRefreshEntry(key, entry, timeoutMs);
+      } else if (refreshInFlight.get(key) === entry) refreshInFlight.delete(key);
     },
   );
   return promise;
@@ -1074,6 +1137,7 @@ async function fetchWithCliAuth(kind, { auth, source, fetcher, timeoutMs, buildR
     if (onAuthUpdate) await onAuthUpdate(kind, next, previous, source);
   };
   if (shouldRefreshFirst(kind, current)) {
+    if (cooldownUntilMs(kind, current)) throw rateLimitedError(kind);
     const previous = current;
     const next = await refreshForRequest(kind, previous, fetcher, timeoutMs);
     await emit(next, previous);
@@ -1093,6 +1157,7 @@ async function fetchWithCliAuth(kind, { auth, source, fetcher, timeoutMs, buildR
     } catch { authFailure = false; }
   }
   if (authFailure && refreshTokenOf(kind, current)) {
+    if (cooldownUntilMs(kind, current)) throw rateLimitedError(kind);
     const previous = current;
     const next = await refreshForRequest(kind, previous, fetcher, timeoutMs);
     await emit(next, previous);
@@ -1130,7 +1195,7 @@ module.exports = {
   writeLiveIfCurrent,
   fetchWithCliAuth,
   __grok: { selectGrokAuthEntry, selectGrokAuthRecord, grokEntryOf, grokScopeOf, grokEndpointIsAllowed, discoverGrokTokenEndpoint },
-  __test: { clearRefreshFlights: () => refreshInFlight.clear() },
+  __test: { clearRefreshFlights: () => refreshInFlight.clear(), clearRefreshCooldowns: () => refreshCooldown.clear(), retryAfterMsOf, clampCooldownMs },
   __claude: { resetClaudeProfileCache: () => { claudeProfileCache = { at: 0, value: undefined }; }, stripClaudeProfileMeta },
   __copilot: { copilotEntryOf },
   __grokbot: { oscryptDecrypt },

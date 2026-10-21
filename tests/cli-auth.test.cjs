@@ -235,6 +235,54 @@ test('Claude 续期失效分诊：本机凭据未动 → 提示其它设备轮�
   });
 });
 
+// 429 限流退避：IP 级限流（无效 token 同样 429）时进入冷却，冷却期内不发刷新请求、
+// 不提示重新登录；冷却清除后恢复正常续期
+test('Claude 429 限流：提示稍后重试而非重新登录，冷却期内不再撞 token 端点', async () => {
+  await withClaudeHome(async () => {
+    const tokenCalls = [];
+    let refreshShouldFail = true;
+    const fetcher = async (url, init) => {
+      if (url === __constants.CLAUDE_TOKEN_URL) {
+        tokenCalls.push(JSON.parse(init.body).refresh_token);
+        if (refreshShouldFail) return { ok: false, status: 429, headers: new Map(), json: async () => ({ error: { type: 'rate_limit_error' } }) };
+        return { ok: true, status: 200, json: async () => ({ access_token: 'a2', refresh_token: 'r2', expires_in: 3600 }) };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    };
+    const expiredAuth = { claudeAiOauth: { accessToken: 'a1', refreshToken: 'r1', expiresAt: Date.now() - 1000 } };
+    const first = await fetchWithCliAuth('claude', { auth: expiredAuth, source: 'snapshot', fetcher, timeoutMs: 1000, buildRequest: () => ({ url: 'https://example.test/usage' }) }).catch((error) => error);
+    assert.ok(first instanceof CliRefreshError, '429 抛出 CliRefreshError');
+    assert.equal(first.permanent, false, '429 不是永久失败');
+    assert.ok(first.transient, '429 是瞬时失败');
+    assert.doesNotMatch(first.message, /请.*重新登录|请.*重新导入/, '429 文案不要求重新登录');
+    assert.match(first.message, /限流/);
+    assert.ok(first.retryAfterMs >= 30_000, '无 Retry-After 时用默认冷却');
+    assert.equal(tokenCalls.length, 1);
+    // 冷却期内（含 poller 立即重试、后续轮询）：不再发刷新请求，快速失败
+    const second = await fetchWithCliAuth('claude', { auth: expiredAuth, source: 'snapshot', fetcher, timeoutMs: 1000, buildRequest: () => ({ url: 'https://example.test/usage' }) }).catch((error) => error);
+    assert.ok(second instanceof CliRefreshError);
+    assert.match(second.message, /限流退避/);
+    assert.equal(tokenCalls.length, 1, '冷却期内没有新的刷新请求');
+    // 冷却清除后：恢复续期并成功
+    cliAuth.__test.clearRefreshCooldowns();
+    cliAuth.__test.clearRefreshFlights();
+    refreshShouldFail = false;
+    const response = await fetchWithCliAuth('claude', { auth: expiredAuth, source: 'snapshot', fetcher, timeoutMs: 1000, buildRequest: (auth) => ({ url: 'https://example.test/usage', init: { headers: { Authorization: `Bearer ${auth.claudeAiOauth.accessToken}` } } }) });
+    assert.equal(response.status, 200);
+    assert.equal(tokenCalls.length, 2, '冷却结束后恢复刷新');
+  });
+});
+
+test('Retry-After 响应头被解析为冷却时长（秒数与 HTTP 日期）', () => {
+  const { retryAfterMsOf } = cliAuth.__test;
+  assert.equal(retryAfterMsOf({ headers: new Map([['retry-after', '120']]) }), 120_000);
+  const date = new Date(Date.now() + 60_000).toUTCString();
+  const parsed = retryAfterMsOf({ headers: new Map([['retry-after', date]]) });
+  assert.ok(parsed > 50_000 && parsed <= 60_000, `HTTP 日期解析：${parsed}`);
+  assert.equal(retryAfterMsOf({ headers: new Map() }), null);
+  assert.equal(retryAfterMsOf({}), null);
+});
+
 test('Claude 续期写回原键名：claudeAiOauth 进则 claudeAiOauth 出，live 文件形态不被破坏', async () => {
   const fetcher = async () => ({ ok: true, status: 200, json: async () => ({ access_token: 'a2', refresh_token: 'r2', expires_in: 3600 }) });
   const next = await refreshCliAuth('claude', { claudeAiOauth: { accessToken: 'a1', refreshToken: 'r1', expiresAt: Date.now() - 1000, subscriptionType: 'pro' } }, fetcher, 1000);
