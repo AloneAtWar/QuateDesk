@@ -1,0 +1,340 @@
+{
+  "schemaVersion": 1,
+  "project": "Quota Desk · 桌面和安卓一体主题",
+  "brief": "从真实 Android 原生设备页和远程 WebView 页面出发，探索三套同时覆盖桌面、手机设备列表、手机额度看板与主题选择的完整视觉方向。",
+  "round": "07 · Android 一体化主题",
+  "nativeViewport": "1200x820",
+  "candidates": [
+    {
+      "id": "sonar-board",
+      "name": "声纳信号 · 三端全景",
+      "concept": "把每个账号和配对电脑视为可定位的信号站。圆环成为声纳扫描面，刷新队列像下一次回波。",
+      "typography": "声纳扫描 / 圆形信号 / 安静的荧光",
+      "palette": [
+        "#081d20",
+        "#143033",
+        "#75ead2",
+        "#ff9470"
+      ],
+      "traits": [
+        "原生设备页是信号站列表",
+        "WebView 首卡像一次回波",
+        "扫码取景框沿用声纳准星"
+      ],
+      "source": "sonar-board.html"
+    },
+    {
+      "id": "bulletin-board",
+      "name": "新刊放送 · 三端全景",
+      "concept": "把额度与刷新时间做成一份随时更新的快报。纸色大标题、蓝色编辑标记和朱红焦点让手机读数有优先级。",
+      "typography": "大字快报 / 非对称分栏 / 纸张与油墨",
+      "palette": [
+        "#fff4db",
+        "#fffdf4",
+        "#1d3552",
+        "#eb573a"
+      ],
+      "traits": [
+        "原生设备卡像刊物封面",
+        "WebView 把关键余额放大成头条",
+        "扫码页使用印刷裁切角标"
+      ],
+      "source": "bulletin-board.html"
+    },
+    {
+      "id": "score-board",
+      "name": "竞技计分 · 三端全景",
+      "concept": "把每次额度刷新看作实时比分。亮黄的大数字、粗色带和并排对照适合快速扫视多个账号。",
+      "typography": "直播计分 / 粗数字 / 高能色块",
+      "palette": [
+        "#2329a0",
+        "#f3f0dd",
+        "#eaff44",
+        "#ff6b56"
+      ],
+      "traits": [
+        "设备列表像场馆入口",
+        "WebView 把百分比做成比分牌",
+        "刷新队列像下一场赛程"
+      ],
+      "source": "score-board.html"
+    },
+    {
+      "id": "sonar-desktop",
+      "name": "声纳信号 · 桌面看板",
+      "concept": "把每个账号和配对电脑视为可定位的信号站。圆环成为声纳扫描面，刷新队列像下一次回波。",
+      "typography": "声纳扫描 / 圆形信号 / 安静的荧光",
+      "palette": [
+        "#081d20",
+        "#143033",
+        "#75ead2",
+        "#ff9470"
+      ],
+      "traits": [
+        "桌面看板",
+        "原生设备页是信号站列表",
+        "WebView 首卡像一次回波",
+        "扫码取景框沿用声纳准星"
+      ],
+      "nativeViewport": "1200x820",
+      "source": "sonar-desktop.html"
+    },
+    {
+      "id": "sonar-native",
+      "name": "声纳信号 · 安卓设备页",
+      "concept": "把每个账号和配对电脑视为可定位的信号站。圆环成为声纳扫描面，刷新队列像下一次回波。",
+      "typography": "声纳扫描 / 圆形信号 / 安静的荧光",
+      "palette": [
+        "#081d20",
+        "#143033",
+        "#75ead2",
+        "#ff9470"
+      ],
+      "traits": [
+        "安卓设备页",
+        "原生设备页是信号站列表",
+        "WebView 首卡像一次回波",
+        "扫码取景框沿用声纳准星"
+      ],
+      "nativeViewport": "390x844",
+      "source": "sonar-native.html"
+    },
+    {
+      "id": "sonar-remote",
+      "name": "声纳信号 · 手机额度页",
+      "concept": "把每个账号和配对电脑视为可定位的信号站。圆环成为声纳扫描面，刷新队列像下一次回波。",
+      "typography": "声纳扫描 / 圆形信号 / 安静的荧光",
+      "palette": [
+        "#081d20",
+        "#143033",
+        "#75ead2",
+        "#ff9470"
+      ],
+      "traits": [
+        "手机额度页",
+        "原生设备页是信号站列表",
+        "WebView 首卡像一次回波",
+        "扫码取景框沿用声纳准星"
+      ],
+      "nativeViewport": "390x844",
+      "source": "sonar-remote.html"
+    },
+    {
+      "id": "sonar-picker",
+      "name": "声纳信号 · 手机主题选择",
+      "concept": "把每个账号和配对电脑视为可定位的信号站。圆环成为声纳扫描面，刷新队列像下一次回波。",
+      "typography": "声纳扫描 / 圆形信号 / 安静的荧光",
+      "palette": [
+        "#081d20",
+        "#143033",
+        "#75ead2",
+        "#ff9470"
+      ],
+      "traits": [
+        "手机主题选择",
+        "原生设备页是信号站列表",
+        "WebView 首卡像一次回波",
+        "扫码取景框沿用声纳准星"
+      ],
+      "nativeViewport": "390x844",
+      "source": "sonar-picker.html"
+    },
+    {
+      "id": "bulletin-desktop",
+      "name": "新刊放送 · 桌面看板",
+      "concept": "把额度与刷新时间做成一份随时更新的快报。纸色大标题、蓝色编辑标记和朱红焦点让手机读数有优先级。",
+      "typography": "大字快报 / 非对称分栏 / 纸张与油墨",
+      "palette": [
+        "#fff4db",
+        "#fffdf4",
+        "#1d3552",
+        "#eb573a"
+      ],
+      "traits": [
+        "桌面看板",
+        "原生设备卡像刊物封面",
+        "WebView 把关键余额放大成头条",
+        "扫码页使用印刷裁切角标"
+      ],
+      "nativeViewport": "1200x820",
+      "source": "bulletin-desktop.html"
+    },
+    {
+      "id": "bulletin-native",
+      "name": "新刊放送 · 安卓设备页",
+      "concept": "把额度与刷新时间做成一份随时更新的快报。纸色大标题、蓝色编辑标记和朱红焦点让手机读数有优先级。",
+      "typography": "大字快报 / 非对称分栏 / 纸张与油墨",
+      "palette": [
+        "#fff4db",
+        "#fffdf4",
+        "#1d3552",
+        "#eb573a"
+      ],
+      "traits": [
+        "安卓设备页",
+        "原生设备卡像刊物封面",
+        "WebView 把关键余额放大成头条",
+        "扫码页使用印刷裁切角标"
+      ],
+      "nativeViewport": "390x844",
+      "source": "bulletin-native.html"
+    },
+    {
+      "id": "bulletin-remote",
+      "name": "新刊放送 · 手机额度页",
+      "concept": "把额度与刷新时间做成一份随时更新的快报。纸色大标题、蓝色编辑标记和朱红焦点让手机读数有优先级。",
+      "typography": "大字快报 / 非对称分栏 / 纸张与油墨",
+      "palette": [
+        "#fff4db",
+        "#fffdf4",
+        "#1d3552",
+        "#eb573a"
+      ],
+      "traits": [
+        "手机额度页",
+        "原生设备卡像刊物封面",
+        "WebView 把关键余额放大成头条",
+        "扫码页使用印刷裁切角标"
+      ],
+      "nativeViewport": "390x844",
+      "source": "bulletin-remote.html"
+    },
+    {
+      "id": "bulletin-picker",
+      "name": "新刊放送 · 手机主题选择",
+      "concept": "把额度与刷新时间做成一份随时更新的快报。纸色大标题、蓝色编辑标记和朱红焦点让手机读数有优先级。",
+      "typography": "大字快报 / 非对称分栏 / 纸张与油墨",
+      "palette": [
+        "#fff4db",
+        "#fffdf4",
+        "#1d3552",
+        "#eb573a"
+      ],
+      "traits": [
+        "手机主题选择",
+        "原生设备卡像刊物封面",
+        "WebView 把关键余额放大成头条",
+        "扫码页使用印刷裁切角标"
+      ],
+      "nativeViewport": "390x844",
+      "source": "bulletin-picker.html"
+    },
+    {
+      "id": "score-desktop",
+      "name": "竞技计分 · 桌面看板",
+      "concept": "把每次额度刷新看作实时比分。亮黄的大数字、粗色带和并排对照适合快速扫视多个账号。",
+      "typography": "直播计分 / 粗数字 / 高能色块",
+      "palette": [
+        "#2329a0",
+        "#f3f0dd",
+        "#eaff44",
+        "#ff6b56"
+      ],
+      "traits": [
+        "桌面看板",
+        "设备列表像场馆入口",
+        "WebView 把百分比做成比分牌",
+        "刷新队列像下一场赛程"
+      ],
+      "nativeViewport": "1200x820",
+      "source": "score-desktop.html"
+    },
+    {
+      "id": "score-native",
+      "name": "竞技计分 · 安卓设备页",
+      "concept": "把每次额度刷新看作实时比分。亮黄的大数字、粗色带和并排对照适合快速扫视多个账号。",
+      "typography": "直播计分 / 粗数字 / 高能色块",
+      "palette": [
+        "#2329a0",
+        "#f3f0dd",
+        "#eaff44",
+        "#ff6b56"
+      ],
+      "traits": [
+        "安卓设备页",
+        "设备列表像场馆入口",
+        "WebView 把百分比做成比分牌",
+        "刷新队列像下一场赛程"
+      ],
+      "nativeViewport": "390x844",
+      "source": "score-native.html"
+    },
+    {
+      "id": "score-remote",
+      "name": "竞技计分 · 手机额度页",
+      "concept": "把每次额度刷新看作实时比分。亮黄的大数字、粗色带和并排对照适合快速扫视多个账号。",
+      "typography": "直播计分 / 粗数字 / 高能色块",
+      "palette": [
+        "#2329a0",
+        "#f3f0dd",
+        "#eaff44",
+        "#ff6b56"
+      ],
+      "traits": [
+        "手机额度页",
+        "设备列表像场馆入口",
+        "WebView 把百分比做成比分牌",
+        "刷新队列像下一场赛程"
+      ],
+      "nativeViewport": "390x844",
+      "source": "score-remote.html"
+    },
+    {
+      "id": "score-picker",
+      "name": "竞技计分 · 手机主题选择",
+      "concept": "把每次额度刷新看作实时比分。亮黄的大数字、粗色带和并排对照适合快速扫视多个账号。",
+      "typography": "直播计分 / 粗数字 / 高能色块",
+      "palette": [
+        "#2329a0",
+        "#f3f0dd",
+        "#eaff44",
+        "#ff6b56"
+      ],
+      "traits": [
+        "手机主题选择",
+        "设备列表像场馆入口",
+        "WebView 把百分比做成比分牌",
+        "刷新队列像下一场赛程"
+      ],
+      "nativeViewport": "390x844",
+      "source": "score-picker.html"
+    },
+    {
+      "id": "mobile-baseline",
+      "name": "当前手机额度页 · 基线",
+      "concept": "目前的真实 WebView 演示界面；账号卡文字与圆环在手机上被缩到较小尺度。",
+      "typography": "当前应用字体",
+      "palette": [
+        "#141d1f",
+        "#1a2527",
+        "#9bdfb2"
+      ],
+      "traits": [
+        "当前产品截图"
+      ],
+      "nativeViewport": "390x844",
+      "kind": "image",
+      "source": "shots/baseline-mobile/page.png"
+    },
+    {
+      "id": "theme-contract",
+      "name": "跨端主题结构 · 自定义主题",
+      "concept": "把主题作为跨端身份，而不只是亮暗或调色板。",
+      "typography": "主题契约与使用流程",
+      "palette": [
+        "#e8ebe7",
+        "#fbfff9",
+        "#11382d",
+        "#70e2bd"
+      ],
+      "traits": [
+        "主题选择流程",
+        "Android 和网页共享主题 ID",
+        "自定义主题所需内容",
+        "旧版兼容"
+      ],
+      "nativeViewport": "1200x820",
+      "source": "design-notes.html"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+[
+  {
+    "file": "page.png",
+    "state": null,
+    "size": "1200x820",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "eyebrow",
+        "label": "标题上方的眉标",
+        "count": 1,
+        "examples": [
+          "small「BULLETIN / QUOTA MONITOR」"
+        ]
+      }
+    ]
+  }
+]

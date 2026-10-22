@@ -1,0 +1,37 @@
+[
+  {
+    "file": "page.png",
+    "state": null,
+    "size": "1200x820",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "numbered",
+        "label": "标题上方的编号标签",
+        "count": 1,
+        "examples": [
+          "small「07 / DESKTOP + NATIVE AN」"
+        ]
+      },
+      {
+        "rule": "smallText",
+        "label": "正文小于 13px",
+        "count": 2,
+        "examples": [
+          "p「把额度与刷新时间做成一份随时更新的快报。纸色大标」（12px）",
+          "small「相机画面保持中性暗色；主题只控制准星、提示与操作」（10.8333px）"
+        ]
+      },
+      {
+        "rule": "longMeasure",
+        "label": "正文行太长",
+        "count": 1,
+        "examples": [
+          "small「相机画面保持中性暗色；主题只控制准星、提示与操作」（每行约 57 字）"
+        ]
+      }
+    ]
+  }
+]

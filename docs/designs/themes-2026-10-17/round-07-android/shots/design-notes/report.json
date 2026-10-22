@@ -1,0 +1,37 @@
+[
+  {
+    "file": "page.png",
+    "state": null,
+    "size": "1200x820",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "numbered",
+        "label": "标题上方的编号标签",
+        "count": 1,
+        "examples": [
+          "div.eyebrow「07 / DESIGN CONTRACT / D」"
+        ]
+      },
+      {
+        "rule": "sideStripe",
+        "label": "彩色单侧边线",
+        "count": 1,
+        "examples": [
+          "div.callout「这轮是设计探索稿；原生画面按 Android 源」（6px）"
+        ]
+      },
+      {
+        "rule": "longMeasure",
+        "label": "正文行太长",
+        "count": 2,
+        "examples": [
+          "p.lead「当前安卓原生层画设备列表、扫码和连接状态，桌面端」（每行约 67 字）",
+          "div.callout「这轮是设计探索稿；原生画面按 Android 源」（每行约 78 字）"
+        ]
+      }
+    ]
+  }
+]
