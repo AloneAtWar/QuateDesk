@@ -5,7 +5,7 @@ import { formatLocalDateTime } from './local-cli-usage-format';
 const fieldsFrom = (config) => ({ enabled: config.enabled, endpoint: config.endpoint, username: config.username, folder: config.folder, password: '', passphrase: '' });
 const when = (value) => value ? formatLocalDateTime(value) : '尚无记录';
 
-export default function WebDavSyncSettings() {
+export default function WebDavSyncSettings({ showHeading = true }) {
   const bridge = window.quotaDesk;
   const [status, setStatus] = useState(null);
   const [draft, setDraft] = useState(null);
@@ -46,7 +46,7 @@ export default function WebDavSyncSettings() {
     } finally { if (alive.current) setBusy(''); }
   };
   return <section className="drawer-section usage-sync-settings" aria-label="WebDAV 云同步">
-    <div className="drawer-section-title"><Cloud size={16} /><span>WebDAV 云同步</span><span className="usage-archive-badge">客户端加密</span></div>
+    <div className="drawer-section-title">{showHeading && <><Cloud size={16} /><span>WebDAV 云同步</span></>}<span className="usage-archive-badge">客户端加密</span></div>
     {buildVersion && <p className="usage-sync-build">当前版本 v{buildVersion}</p>}
     <p className="usage-archive-help">连接你自己的网盘或 NAS，每台设备只上传本机档案，其他来源按版本更新到导入档案中。</p>
     {draft && <form onSubmit={(event) => { event.preventDefault(); run('save', () => bridge.saveUsageSyncConfig(draft), '同步配置已保存'); }}>

@@ -121,6 +121,45 @@ button { cursor: pointer; }
 @keyframes settings-content-in { from { opacity: .6; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .settings-drawer, .drawer-scroll > :first-child { animation: none; } .settings-nav { scroll-behavior: auto; } }
 
+.settings-directory { padding-top: 4px; }
+.settings-accounts-list { max-height: min(360px, 45dvh); overflow-y: auto; scrollbar-gutter: stable; }
+.settings-entry { display: grid; grid-template-columns: 20px minmax(0, 1fr) 15px; align-items: center; gap: 10px; width: 100%; padding: 16px 4px; border: 0; border-bottom: 1px solid var(--line); color: var(--ink-soft); background: transparent; text-align: left; transition: color .18s ease, background .18s ease; }
+.settings-entry:last-child { border-bottom: 0; }
+.settings-entry:hover { color: var(--ink); background: var(--green-bg); }
+.settings-entry:active { background: var(--green-bg-2); }
+.settings-entry > svg { flex-shrink: 0; }
+.settings-entry > svg:last-child { color: var(--muted); }
+.settings-entry-copy { display: grid; gap: 5px; min-width: 0; }
+.settings-entry-copy b { color: var(--ink); font-size: 12px; font-weight: 600; }
+.settings-entry-copy small { color: var(--ink-soft); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.settings-entry:focus-visible, .settings-drawer input:focus-visible, .settings-drawer select:focus-visible, .settings-drawer textarea:focus-visible { outline: 2px solid var(--focus-border); outline-offset: 2px; }
+.settings-disclosure { border-bottom: 1px solid var(--line); }
+.settings-disclosure:last-child { border-bottom: 0; }
+.settings-disclosure > .settings-entry { border-bottom: 0; list-style: none; cursor: pointer; }
+.settings-disclosure > .settings-entry::-webkit-details-marker { display: none; }
+.settings-disclosure > .settings-entry > svg:last-child { transition: transform .18s ease; }
+.settings-disclosure[open] > .settings-entry > svg:last-child { transform: rotate(90deg); }
+.settings-disclosure-content { padding: 0 4px 12px; animation: settings-content-in .18s ease-out; }
+.settings-disclosure-tools { display: flex; align-items: center; gap: 8px; padding-top: 4px; color: var(--ink-soft); font-size: 11px; }
+.settings-disclosure-tools > span { display: inline-flex; align-items: center; gap: 6px; }
+.settings-disclosure-tools .mini-add { margin-left: auto; }
+.settings-disclosure-tools .title-help { margin: 0; }
+@media (prefers-reduced-motion: reduce) { .settings-disclosure-content { animation: none; } .settings-disclosure > .settings-entry > svg:last-child { transition: none; } }
+.settings-window-backdrop { z-index: 40; padding: 16px; }
+.modal.settings-window { display: flex; flex-direction: column; width: min(480px, 100%); max-height: calc(100dvh - 32px); padding: 0; overflow: hidden; }
+.settings-window:focus { outline: 0; }
+.settings-window-header { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 16px; border-bottom: 1px solid var(--line); }
+.settings-window-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.settings-window-heading > svg { flex-shrink: 0; color: var(--ink-soft); }
+.settings-window-heading h2 { margin: 0; font-size: 15px; line-height: 1.5; letter-spacing: -.02em; }
+.settings-window-heading > .title-help { flex-shrink: 0; margin: 0; }
+.settings-window-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.settings-window-actions .mini-add { margin-left: 0; white-space: nowrap; }
+.settings-window-content { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 16px 16px; scrollbar-gutter: stable; }
+.settings-window-content > .drawer-section:last-child { padding-bottom: 0; }
+.settings-window button:focus-visible, .settings-window select:focus-visible, .settings-window input:focus-visible { outline: 2px solid var(--focus-border); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .settings-entry { transition: none; } .settings-window, .settings-window-backdrop { animation: none; } }
+
 .rule-editor { display: grid; grid-template-columns: 1fr 1fr 26px; align-items: end; gap: 8px; margin: 9px 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
 .rule-editor label { display: grid; gap: 5px; min-width: 0; }
 .rule-editor label span { color: var(--ink-soft); font-size: 12px; line-height: 1.5; }
