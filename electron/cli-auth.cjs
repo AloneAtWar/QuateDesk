@@ -5,7 +5,12 @@
 // 多账号也能各自续期（协议实现对照 codex-rs login/auth、claude code 与 gemini-cli 源码）：
 // - Codex:  POST auth.openai.com/oauth/token（JSON：client_id + grant_type=refresh_token）
 // - Claude: POST console.anthropic.com/v1/oauth/token（JSON：client_id + grant_type=refresh_token）
-// - Gemini: POST oauth2.googleapis.com/token（表单：client_id + client_secret + refresh_token）
+//           refresh token 每次续期轮换、官方登录不支持多设备同时保活：本机 Claude Code
+//           登录同一账号时跟随 live 凭据（resolveCliAuth），账号身份取 ~/.claude.json 的
+//           oauthAccount（accountUuid，随快照保存为 qdOAuthProfile 元数据）
+// - Gemini: POST oauth2.googleapis.com/token（表单：client_id + client_secret + refresh_token）。
+//           live 凭据三级回落（旧扁平文件 → FileKeychain 加密文件 → Windows 凭据管理器），
+//           见下方 readGeminiLiveAuth
 // - Kimi:   POST auth.kimi.com/api/account.gateway.v1.AuthService/RefreshToken（connect-rpc JSON）。
 //           Kimi 网页会话与 kimi CLI 的 coding OAuth 是两套体系（HS512 vs ES256），月额度只在
 //           网页会员服务里，因此订阅凭据通过扫码登录获得，没有本机 live 文件可回落。
@@ -83,11 +88,58 @@ const writeJsonAtomic = (filePath, value) => {
   fs.renameSync(tempPath, filePath);
 };
 
-// 各 CLI 的 live 凭据文件路径；Codex 遵循 CODEX_HOME 环境变量（与 codex CLI 一致）
+// Claude Code 的账号身份（Profile）：凭据 token 本身是不透明字符串、refresh token 每次
+// 续期还会轮换，无法承载稳定身份；Claude Code 登录时会把 oauthAccount（accountUuid /
+// emailAddress / organizationUuid 等）写进 ~/.claude.json（或 CLAUDE_CONFIG_DIR 下），
+// 与 .credentials.json 一并更新——这是本机唯一稳定的账号标识（magpie 同样以此判定账号
+// 归属）。导入快照时把 Profile 一并存进 bundle（qdOAuthProfile 键，仅快照元数据，
+// 回写 live 文件前剥离），使身份与去重 / 「本机激活」比对在续期轮换后依然稳定。
+const CLAUDE_PROFILE_KEY = 'qdOAuthProfile';
+const claudeHome = () => process.env.CLAUDE_CONFIG_DIR || os.homedir();
+let claudeProfileCache = { at: 0, value: undefined };
+const readClaudeProfile = () => {
+  // ~/.claude.json 可能很大且每次 resolve 都会读：短 TTL 缓存（登录切换在分钟级以上）
+  if (Date.now() - claudeProfileCache.at < 5_000) return claudeProfileCache.value;
+  let value = null;
+  const account = readJsonFile(claudeProfilePath())?.oauthAccount;
+  if (account && typeof account === 'object') {
+    const accountUuid = String(account.accountUuid || '').trim();
+    if (accountUuid) {
+      value = { accountUuid };
+      const email = String(account.emailAddress || '').trim();
+      if (email) value.emailAddress = email.toLowerCase();
+      const organizationUuid = String(account.organizationUuid || '').trim();
+      if (organizationUuid) value.organizationUuid = organizationUuid;
+    }
+  }
+  claudeProfileCache = { at: Date.now(), value };
+  return value;
+};
+const claudeProfileOf = (auth) => (auth && typeof auth === 'object'
+  && auth[CLAUDE_PROFILE_KEY] && typeof auth[CLAUDE_PROFILE_KEY] === 'object'
+  && auth[CLAUDE_PROFILE_KEY].accountUuid ? auth[CLAUDE_PROFILE_KEY] : null);
+// 同一账号判定：accountUuid 相同；双方都带组织时组织也须相同（同邮箱可挂个人 + 多组织席位）
+const claudeProfileMatches = (left, right) => Boolean(left && right
+  && left.accountUuid === right.accountUuid
+  && (!left.organizationUuid || !right.organizationUuid || left.organizationUuid === right.organizationUuid));
+// 回写 live 文件前剥离快照元数据（qdOAuthProfile），保持 Claude Code 原生文件形态
+const stripClaudeProfileMeta = (auth) => {
+  if (!auth || typeof auth !== 'object' || !(CLAUDE_PROFILE_KEY in auth)) return auth;
+  const { [CLAUDE_PROFILE_KEY]: _meta, ...rest } = auth;
+  return rest;
+};
+
+// 各 CLI 的 live 凭据文件路径；Codex 遵循 CODEX_HOME 环境变量（与 codex CLI 一致），
+// Gemini 遵循 GEMINI_CLI_HOME（与 gemini-cli 一致），Claude 遵循 CLAUDE_CONFIG_DIR
+const claudeProfilePath = () => path.join(claudeHome(), '.claude.json');
+const claudeCredentialsPath = () => (process.env.CLAUDE_CONFIG_DIR
+  ? path.join(process.env.CLAUDE_CONFIG_DIR, '.credentials.json')
+  : path.join(os.homedir(), '.claude', '.credentials.json'));
+const geminiHome = () => process.env.GEMINI_CLI_HOME || path.join(os.homedir(), '.gemini');
 const liveAuthPath = (kind) => {
   if (kind === 'codex') return path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'auth.json');
-  if (kind === 'claude') return path.join(os.homedir(), '.claude', '.credentials.json');
-  if (kind === 'gemini') return path.join(os.homedir(), '.gemini', 'oauth_creds.json');
+  if (kind === 'claude') return claudeCredentialsPath();
+  if (kind === 'gemini') return path.join(geminiHome(), 'oauth_creds.json');
   if (kind === 'grok') return path.join(process.env.GROK_HOME || path.join(os.homedir(), '.grok'), 'auth.json');
   if (kind === 'copilot') return path.join(os.homedir(), '.config', 'github-copilot', 'hosts.json');
   return null;
@@ -164,8 +216,151 @@ const readGrokBotLiveAuth = () => {
   }
 };
 
+// ── Gemini live 登录的多级回落 ──────────────────────────────────────────────
+// 新版 gemini-cli 不再写扁平的 oauth_creds.json：凭据优先存系统密钥库（keytar，
+// Windows 上为凭据管理器的普通凭据），keytar 不可用时回落 AES-256-GCM 加密文件
+// ~/.gemini/gemini-credentials.json（FileKeychain）。首次运行会把旧 oauth_creds.json
+// 迁移进新存储并删除文件。对照 gemini-cli 的 oauth-credential-storage.ts /
+// fileKeychain.ts / keychainService.ts 与 node-keytar 的 keytar_win.cc：
+// - 凭据管理器条目：TargetName = "gemini-cli-oauth/main-account"，blob 为 UTF-8 JSON
+//   { serverName, token: { accessToken, refreshToken, tokenType, scope, expiresAt }, updatedAt }
+// - FileKeychain：scrypt("gemini-cli-oauth", `${hostname}-${username}-gemini-cli`, 32)
+//   派生 AES key，文件内容 "iv:authTag:密文"（hex），明文为
+//   { "gemini-cli-oauth": { "main-account": "<同上 JSON 字符串>" } }
+// 归一化为 google-auth-library 的扁平格式后，下游检测 / 续期 / 额度查询零改动。
+// 这些来源只读不写回：Google 的 refresh_token 不轮换，续期结果只需更新账号快照
+// （与 Grok Bot 的 sand-secrets.json 同策略）。
+const GEMINI_KEYCHAIN_SERVICE = 'gemini-cli-oauth';
+const GEMINI_MAIN_ACCOUNT = 'main-account';
+const GEMINI_SECURE_TTL_MS = 60_000;
+
+const geminiAuthFromKeytarShape = (payload) => {
+  const token = payload && typeof payload === 'object' && payload.token && typeof payload.token === 'object'
+    ? payload.token : null;
+  if (!token || (!token.accessToken && !token.refreshToken)) return null;
+  const auth = {};
+  if (token.accessToken) auth.access_token = token.accessToken;
+  if (token.refreshToken) auth.refresh_token = token.refreshToken;
+  if (Number.isFinite(Number(token.expiresAt))) auth.expiry_date = Number(token.expiresAt);
+  if (token.scope) auth.scope = token.scope;
+  if (token.tokenType) auth.token_type = token.tokenType;
+  return auth;
+};
+
+// FileKeychain 的加密文件（hex 三段式 AES-256-GCM）
+const readGeminiFileKeychain = () => {
+  let encrypted;
+  try { encrypted = fs.readFileSync(path.join(geminiHome(), 'gemini-credentials.json'), 'utf8').trim(); }
+  catch { return null; }
+  const [ivHex, tagHex, cipherHex] = encrypted.split(':');
+  if (!ivHex || !tagHex || !cipherHex) return null;
+  const iv = Buffer.from(ivHex, 'hex');
+  const tag = Buffer.from(tagHex, 'hex');
+  if ((iv.length !== 12 && iv.length !== 16) || tag.length !== 16) return null;
+  try {
+    const salt = `${os.hostname()}-${os.userInfo().username}-gemini-cli`;
+    const key = crypto.scryptSync(GEMINI_KEYCHAIN_SERVICE, salt, 32);
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
+    decipher.setAuthTag(tag);
+    const plain = Buffer.concat([decipher.update(Buffer.from(cipherHex, 'hex')), decipher.final()]).toString('utf8');
+    const raw = JSON.parse(plain)?.[GEMINI_KEYCHAIN_SERVICE]?.[GEMINI_MAIN_ACCOUNT];
+    if (typeof raw !== 'string') return null;
+    return geminiAuthFromKeytarShape(JSON.parse(raw));
+  } catch { return null; }
+};
+
+// Windows 凭据管理器的普通凭据（keytar 写入形态）。CredRead 需要 P/Invoke，
+// 走 PowerShell 子进程（与 dpapiUnprotect 同一模式）；blob 是 UTF-8 JSON，
+// 手工创建的条目可能是 UTF-16，两种编码都试。
+const WINDOWS_CRED_READ_SCRIPT = [
+  '$target = [Console]::In.ReadToEnd().Trim()',
+  'Add-Type -TypeDefinition @"',
+  'using System;',
+  'using System.Runtime.InteropServices;',
+  'public static class QuotaDeskCredRead {',
+  '  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]',
+  '  static extern bool CredRead(string target, uint type, uint flags, out IntPtr credPtr);',
+  '  [DllImport("advapi32.dll")]',
+  '  static extern void CredFree(IntPtr ptr);',
+  '  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]',
+  '  struct CREDENTIAL {',
+  '    public uint Flags; public uint Type;',
+  '    public string TargetName; public string Comment;',
+  '    public uint LastWrittenLow; public uint LastWrittenHigh;',
+  '    public uint CredentialBlobSize; public IntPtr CredentialBlob;',
+  '    public uint Persist; public uint AttributeCount; public IntPtr Attributes;',
+  '    public string TargetAlias; public string UserName;',
+  '  }',
+  '  public static string Read(string target) {',
+  '    IntPtr ptr;',
+  '    if (!CredRead(target, 1, 0, out ptr)) return "";',
+  '    try {',
+  '      CREDENTIAL cred = (CREDENTIAL)Marshal.PtrToStructure(ptr, typeof(CREDENTIAL));',
+  '      if (cred.CredentialBlob == IntPtr.Zero || cred.CredentialBlobSize == 0) return "";',
+  '      byte[] blob = new byte[cred.CredentialBlobSize];',
+  '      Marshal.Copy(cred.CredentialBlob, blob, 0, blob.Length);',
+  '      return Convert.ToBase64String(blob);',
+  '    } finally { CredFree(ptr); }',
+  '  }',
+  '}',
+  '"@',
+  '[Console]::Out.Write([QuotaDeskCredRead]::Read($target))',
+].join('\n');
+
+const parseCredentialBlobJson = (blob) => {
+  for (const encoding of ['utf8', 'utf16le']) {
+    try {
+      const parsed = JSON.parse(blob.toString(encoding));
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch {}
+  }
+  return null;
+};
+
+const readGeminiWindowsCredential = () => {
+  if (process.platform !== 'win32') return null;
+  let blob;
+  try {
+    const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_CRED_READ_SCRIPT], {
+      input: `${GEMINI_KEYCHAIN_SERVICE}/${GEMINI_MAIN_ACCOUNT}`,
+      timeout: 10_000,
+    });
+    const base64 = String(output).trim();
+    if (!base64) return null;
+    blob = Buffer.from(base64, 'base64');
+  } catch { return null; }
+  return geminiAuthFromKeytarShape(parseCredentialBlobJson(blob));
+};
+
+// 密钥库 / 加密文件的读取带 TTL 缓存：凭据管理器要走 PowerShell 子进程，
+// 额度轮询每次都读会反复起进程；缓存也保证一次检测内的结果一致
+let geminiSecureCache = { at: 0, value: null };
+const readGeminiSecureAuth = () => {
+  if (Date.now() - geminiSecureCache.at < GEMINI_SECURE_TTL_MS) return geminiSecureCache.value;
+  geminiSecureCache = { at: Date.now(), value: readGeminiFileKeychain() || readGeminiWindowsCredential() };
+  return geminiSecureCache.value;
+};
+
+const readGeminiLiveAuth = () => {
+  // 旧版 gemini-cli 的扁平文件仍是首选（存在即说明旧版 CLI 还在管理它，零成本直读）
+  const legacy = readJsonFile(liveAuthPath('gemini'));
+  if (legacy && (legacy.access_token || legacy.refresh_token)) return legacy;
+  return readGeminiSecureAuth();
+};
+
+// Claude 的 live 登录 = 凭据文件 + 同步附着的账号 Profile（同一登录的身份来源）。
+// Claude Code 被拒绝续期时会把凭据清空（magpie 记录的 2.1.x 行为），空 token 视为未登录。
+const readClaudeLiveAuth = () => {
+  const credentials = readJsonFile(liveAuthPath('claude'));
+  if (!credentials) return null;
+  const profile = readClaudeProfile();
+  return profile ? { ...credentials, [CLAUDE_PROFILE_KEY]: profile } : credentials;
+};
+
 const readLiveAuth = (kind) => {
   if (kind === 'grokbot') return readGrokBotLiveAuth();
+  if (kind === 'gemini') return readGeminiLiveAuth();
+  if (kind === 'claude') return readClaudeLiveAuth();
   return readJsonFile(liveAuthPath(kind));
 };
 
@@ -235,10 +430,23 @@ const grokEntryOf = (auth) => {
   return selectGrokAuthEntry(auth);
 };
 
+// Claude OAuth 条目所在键名（live 文件与快照同构，flat key）。新版 Claude Code 写
+// claudeAiOauth，旧版写 "claude.ai_oauth"（与 cc-switch parse_claude_credentials_json
+// 的双键兼容一致）；claudeOauth 是本应用早期读取的键名，保留兼容旧快照。
+const CLAUDE_OAUTH_KEYS = ['claudeAiOauth', 'claude.ai_oauth', 'claudeOauth'];
+const claudeOauthEntryLike = (value) => Boolean(value && typeof value === 'object'
+  && (value.accessToken || value.refreshToken || value.access_token || value.refresh_token));
+const claudeOauthKeyOf = (auth) => (auth && typeof auth === 'object'
+  ? CLAUDE_OAUTH_KEYS.find((key) => claudeOauthEntryLike(auth[key])) || null : null);
+const claudeOauthOf = (auth) => {
+  const key = claudeOauthKeyOf(auth);
+  return key ? auth[key] : null;
+};
+
 const hasTokens = (kind, auth) => {
   if (!auth || typeof auth !== 'object') return false;
   if (kind === 'codex') return Boolean(auth.tokens?.access_token || auth.tokens?.refresh_token);
-  if (kind === 'claude') return Boolean(auth.claudeOauth?.accessToken || auth.claudeOauth?.refreshToken);
+  if (kind === 'claude') { const oauth = claudeOauthOf(auth); return claudeOauthEntryLike(oauth); }
   if (kind === 'kimi') return Boolean(auth.accessToken || auth.refreshToken);
   if (kind === 'grok') return isGrokEntry(grokEntryOf(auth));
   if (kind === 'copilot') return Boolean(copilotEntryOf(auth));
@@ -267,9 +475,18 @@ const cliIdentity = (kind, auth) => {
     email = String(claims?.email || '').toLowerCase();
     fingerprint = String(auth.tokens?.account_id || shaTag(auth.tokens?.refresh_token));
   } else if (kind === 'claude') {
-    // Claude 凭据没有账号标识字段：access token 是 JWT 时取 sub 声明（续期轮换也稳定），否则退到 refresh_token 指纹
-    const claims = parseJwtClaims(auth.claudeOauth?.accessToken);
-    fingerprint = String(claims?.sub || claims?.user_id || '') || shaTag(auth.claudeOauth?.refreshToken || auth.claudeOauth?.accessToken);
+    // 身份优先取 oauthAccount 的 accountUuid（登录不变则稳定，续期轮换不影响）；
+    // 没有 Profile 的旧快照退回 JWT sub（历史上部分 access token 是 JWT），最后退到
+    // refresh_token 指纹——它随每次续期轮换，仅作无法识别时的兜底
+    const profile = claudeProfileOf(auth);
+    if (profile) {
+      email = profile.emailAddress || '';
+      fingerprint = profile.accountUuid;
+    } else {
+      const oauth = claudeOauthOf(auth) || {};
+      const claims = parseJwtClaims(oauth.accessToken || oauth.access_token);
+      fingerprint = String(claims?.sub || claims?.user_id || '') || shaTag(oauth.refreshToken || oauth.refresh_token || oauth.accessToken || oauth.access_token);
+    }
   } else if (kind === 'kimi') {
     // Kimi 网页会话没有邮箱等展示字段：userId 是稳定账号标识，展示退到指纹尾号
     fingerprint = String(auth.userId || '') || shaTag(auth.refreshToken);
@@ -315,9 +532,19 @@ const parseCliSnapshot = (kind, secretVariables = {}) => {
   return hasTokens(kind, auth) ? auth : null;
 };
 
-// 凭据解析优先级：账号自己的登录快照 → 本机 CLI 的 live 登录文件
+// 凭据解析优先级：账号自己的登录快照 → 本机 CLI 的 live 登录文件。
+// Claude 例外：本机 Claude Code 登录着同一账号（accountUuid 一致）时跟随 live——
+// Claude Code 会随时轮换 refresh token，快照里那份会随即失效，live 才是事实源；
+// 快照退为该账号离开本机后的回落（magpie 的 syncClaudeDir 同策略）。
 const resolveCliAuth = (kind, secretVariables = {}) => {
   const snapshot = parseCliSnapshot(kind, secretVariables);
+  if (kind === 'claude' && snapshot) {
+    const live = readClaudeLiveAuth();
+    if (live && hasTokens('claude', live)
+      && claudeProfileMatches(claudeProfileOf(snapshot), claudeProfileOf(live))) {
+      return { source: 'live', auth: live };
+    }
+  }
   if (snapshot) return { source: 'snapshot', auth: snapshot };
   const live = readLiveAuth(kind);
   if (kind === 'grok') {
@@ -336,10 +563,20 @@ const resolveCliAuth = (kind, secretVariables = {}) => {
 
 const refreshTokenOf = (kind, auth) => {
   if (kind === 'codex') return auth?.tokens?.refresh_token || '';
-  if (kind === 'claude') return auth?.claudeOauth?.refreshToken || '';
+  if (kind === 'claude') { const oauth = claudeOauthOf(auth); return oauth?.refreshToken || oauth?.refresh_token || ''; }
   if (kind === 'kimi') return auth?.refreshToken || '';
   if (kind === 'grok') return grokEntryRefreshToken(grokEntryOf(auth));
   return auth?.refresh_token || '';
+};
+
+// 过期时间的归一化：接受 epoch 秒 / epoch 毫秒 / ISO 字符串（快照与各端点返回的形态
+// 不一），统一为 epoch 毫秒；无法解析返回 null
+const normalizeExpiryMs = (value) => {
+  if (value === undefined || value === null || value === '') return null;
+  const number = Number(value);
+  if (Number.isFinite(number) && number > 0) return number < 1e10 ? number * 1000 : number;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
 };
 
 // access token 是否临近过期（Codex 的 access_token 是 JWT，读 exp 声明；解析不出交给 401 兜底）
@@ -349,9 +586,9 @@ const accessTokenExpiryMs = (kind, auth) => {
     return claims?.exp ? Number(claims.exp) * 1000 : null;
   }
   if (kind === 'claude') {
-    const raw = auth?.claudeOauth?.expiresAt || auth?.claudeOauth?.expires_at;
-    const ms = new Date(raw).getTime();
-    return Number.isFinite(ms) ? ms : null;
+    // 新版 Claude Code 的 expiresAt 是 epoch 毫秒数字；旧版/其它实现可能是 ISO 字符串或 epoch 秒
+    const oauth = claudeOauthOf(auth);
+    return normalizeExpiryMs(oauth?.expiresAt ?? oauth?.expires_at);
   }
   if (kind === 'kimi') {
     // 网页会话的 access_token 是 HS512 JWT（exp = iat + 900s），读 exp 声明
@@ -385,12 +622,13 @@ const shouldRefreshFirst = (kind, auth) => {
 
 // refresh 失败分为永久（invalid_grant/refresh_token 失效，需要重新登录）与瞬时（网络）两类
 class CliRefreshError extends Error {
-  constructor(message, { permanent = false, transient = false, authStatus = null } = {}) {
+  constructor(message, { permanent = false, transient = false, authStatus = null, retryAfterMs = null } = {}) {
     super(message);
     this.name = 'CliRefreshError';
     this.permanent = permanent;
     this.transient = transient;
     if (authStatus) this.authStatus = authStatus;
+    if (retryAfterMs) this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -421,6 +659,10 @@ async function refreshCodexAuth(auth, fetcher, timeoutMs) {
   if (!response.ok) {
     const code = payload?.error?.code || payload?.error || payload?.code;
     const permanent = response.status === 401 || response.status === 400 || /invalid_grant|refresh_token/i.test(String(code));
+    if (!permanent && response.status === 429) {
+      // 限流退避：与 Claude 同策略，冷却期内不再撞 token 端点（见 refreshCooldown）
+      throw new CliRefreshError('Codex 登录续期暂时失败（HTTP 429），OpenAI 限流中，稍后自动重试，无需重新登录', { transient: true, retryAfterMs: retryAfterMsOf(response) ?? REFRESH_COOLDOWN_DEFAULT_MS });
+    }
     throw new CliRefreshError(`Codex 登录续期被拒绝（HTTP ${response.status}${code ? ` · ${code}` : ''}），请在 Codex CLI 重新登录该账号后重新导入`, { permanent, authStatus: permanent ? 'reauth_required' : null });
   }
   const tokens = { ...auth.tokens };
@@ -437,28 +679,57 @@ async function refreshCodexAuth(auth, fetcher, timeoutMs) {
 }
 
 async function refreshClaudeAuth(auth, fetcher, timeoutMs) {
-  const oauth = auth.claudeOauth || {};
-  if (!oauth.refreshToken) throw new CliRefreshError('Claude 登录快照缺少 refreshToken，无法续期', { permanent: true, authStatus: 'reauth_required' });
+  // 续期结果写回原键名（claudeAiOauth / "claude.ai_oauth" / claudeOauth），保证回写
+  // live 文件后 Claude Code 仍能识别；没有已知键时按新版 Claude Code 的写法落 claudeAiOauth
+  const oauthKey = claudeOauthKeyOf(auth) || 'claudeAiOauth';
+  const oauth = auth[oauthKey] || {};
+  if (!oauth.refreshToken && !oauth.refresh_token) throw new CliRefreshError('Claude 登录快照缺少 refreshToken，无法续期', { permanent: true, authStatus: 'reauth_required' });
   let response;
   let payload;
   try {
     response = await postTokenRequest(fetcher, CLAUDE_TOKEN_URL, {
-      json: { grant_type: 'refresh_token', refresh_token: oauth.refreshToken, client_id: CLAUDE_CLIENT_ID },
+      json: { grant_type: 'refresh_token', refresh_token: oauth.refreshToken || oauth.refresh_token, client_id: CLAUDE_CLIENT_ID },
       headers: { 'User-Agent': 'anthropic' },
       timeoutMs,
     });
     payload = await response.json();
   } catch (error) { throw asRefreshError('Claude', error); }
   if (!response.ok) {
-    const permanent = response.status === 401 || response.status === 400 || /invalid_grant|refresh_token/i.test(String(payload?.error || ''));
-    throw new CliRefreshError(`Claude 登录续期被拒绝（HTTP ${response.status}），请在 Claude Code 重新登录该账号后重新导入`, { permanent, authStatus: permanent ? 'reauth_required' : null });
+    const codeText = String(payload?.error || '').trim();
+    const permanent = response.status === 401 || response.status === 400 || /invalid_grant|refresh_token/i.test(codeText);
+    if (!permanent) {
+      // 瞬时失败（429/5xx）：限流时进入冷却退避，稍后自动重试，绝不是要求重新登录。
+      // 实测 Anthropic 的 IP 级限流用无效 token 也会 429（请求未到 token 校验），此时
+      // 提示重登只会误导用户。优先尊重 Retry-After，缺失时按默认冷却处理。
+      const retryAfterMs = response.status === 429 ? retryAfterMsOf(response) : null;
+      throw new CliRefreshError(
+        `Claude 登录续期暂时失败（HTTP ${response.status}${codeText ? ` · ${codeText}` : ''}），${response.status === 429 ? 'Anthropic 限流中，稍后自动重试，无需重新登录' : '稍后自动重试'}`,
+        { transient: true, ...(response.status === 429 ? { retryAfterMs: retryAfterMs ?? REFRESH_COOLDOWN_DEFAULT_MS } : {}) },
+      );
+    }
+    // 失效路径分诊：本机登录的 refresh token 没动过 → 凭据是在其它设备/客户端被轮换或
+    // 吊销（Claude 官方登录不支持多设备同时保活）；本机登录已变化 → 提示重新导入。
+    // （同账号的「本机已变化」通常已被 resolveCliAuth 的跟随分支吸收，走不到这里。）
+    let hint = '请在 Claude Code 重新登录该账号后重新导入';
+    {
+      const liveRefresh = refreshTokenOf('claude', readClaudeLiveAuth());
+      const attempted = oauth.refreshToken || oauth.refresh_token;
+      hint = liveRefresh && liveRefresh !== attempted
+        ? '本机 Claude Code 的登录已变化，若仍是同一账号请重新导入本机登录'
+        : '该账号的续期凭据已在其它设备/客户端被轮换或吊销（Claude 官方登录不支持多设备同时保活），请重新登录后导入';
+    }
+    throw new CliRefreshError(`Claude 登录续期被拒绝（HTTP ${response.status}），${hint}`, { permanent, authStatus: permanent ? 'reauth_required' : null });
   }
   const nextOauth = { ...oauth };
   if (payload.access_token) nextOauth.accessToken = payload.access_token;
   if (payload.refresh_token) nextOauth.refreshToken = payload.refresh_token;
-  const expiresAt = payload.expires_at || (payload.expires_in ? new Date(Date.now() + Number(payload.expires_in) * 1000).toISOString() : null);
-  if (expiresAt) nextOauth.expiresAt = expiresAt;
-  return { ...auth, claudeOauth: nextOauth };
+  // expiresAt 统一写 epoch 毫秒（新版 Claude Code 的形态；读取端三态兼容，但写回 live
+  // 文件时保持与 Claude Code 一致，避免它把秒级/ISO 值误读成 1970 而触发多余的重登）
+  const expiryMs = normalizeExpiryMs(payload.expires_at)
+    ?? (Number.isFinite(Number(payload.expires_in)) && Number(payload.expires_in) > 0
+      ? Date.now() + Number(payload.expires_in) * 1000 : null);
+  if (expiryMs) nextOauth.expiresAt = expiryMs;
+  return { ...auth, [oauthKey]: nextOauth };
 }
 
 async function refreshGeminiAuth(auth, fetcher, timeoutMs) {
@@ -766,13 +1037,57 @@ const writeLiveIfCurrent = (kind, previousAuth, nextAuth) => {
   const previousRefresh = refreshTokenOf(kind, previousAuth);
   const live = readJsonFile(livePath);
   if (!live || !previousRefresh || refreshTokenOf(kind, live) !== previousRefresh) return false;
-  try { writeJsonAtomic(livePath, nextAuth); return true; }
+  // Claude 的 nextAuth 带快照元数据（qdOAuthProfile）：live 文件保持 Claude Code 原生形态
+  const clean = kind === 'claude' ? stripClaudeProfileMeta(nextAuth) : nextAuth;
+  try { writeJsonAtomic(livePath, clean); return true; }
   catch { return false; }
 };
 
-// 同一个账号可能同时触发手动刷新、定时轮询和窗口刷新。Kimi / xAI 都会轮换
-// refresh_token，因此相同旧 token 的并发请求必须共享一次刷新结果。业务请求的
+// 同一个账号可能同时触发手动刷新、定时轮询和窗口刷新。Claude / Codex / Kimi / xAI 的
+// refresh token 都会轮换（Anthropic 与 OpenAI 均有旧 token 复用检测，并发复用会被判
+// invalid_grant），因此相同旧 token 的并发请求必须共享一次刷新结果。业务请求的
 // 401 可能错峰返回，成功结果需保留到一次请求超时窗口结束，避免迟到请求复用旧 token。
+// 429 限流退避：token 端点被 IP 级限流时继续硬撞只会不断续期封禁窗口（实测持续 2 小时
+// 不清——每 5 分钟轮询 × 立即重试 2 次，自锁）。同一把 refresh token 被限流后进入冷却期，
+// 期内不再发刷新请求。优先尊重 Retry-After（秒数或 HTTP 日期），缺失时默认 10 分钟，
+// 钳制在 30 秒到 1 小时之间。
+const refreshCooldown = new Map(); // flightKey → untilMs
+const REFRESH_COOLDOWN_DEFAULT_MS = 10 * 60_000;
+const REFRESH_COOLDOWN_MAX_MS = 60 * 60_000;
+const clampCooldownMs = (ms) => {
+  const value = Number(ms);
+  if (!Number.isFinite(value)) return REFRESH_COOLDOWN_DEFAULT_MS;
+  return Math.min(REFRESH_COOLDOWN_MAX_MS, Math.max(30_000, value));
+};
+const retryAfterMsOf = (response) => {
+  let raw = null;
+  try { raw = response?.headers?.get?.('retry-after'); } catch { raw = null; }
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  if (/^\d+$/.test(text)) return Number(text) * 1000;
+  const dateMs = Date.parse(text);
+  return Number.isFinite(dateMs) ? Math.max(0, dateMs - Date.now()) : null;
+};
+const cooldownUntilMs = (kind, auth) => {
+  const refresh = refreshTokenOf(kind, auth);
+  if (!refresh) return 0;
+  const until = refreshCooldown.get(refreshFlightKey(kind, refresh));
+  return until && until > Date.now() ? until : 0;
+};
+const rateLimitedError = (kind) => {
+  const label = kind.charAt(0).toUpperCase() + kind.slice(1);
+  return new CliRefreshError(`${label} 登录续期正在限流退避中，稍后自动重试，无需重新登录`, { transient: true });
+};
+const setRefreshCooldown = (key, ms) => {
+  const waitMs = clampCooldownMs(ms);
+  const until = Date.now() + waitMs;
+  refreshCooldown.set(key, until);
+  const timer = setTimeout(() => {
+    if (refreshCooldown.get(key) === until) refreshCooldown.delete(key);
+  }, waitMs + 1_000);
+  timer.unref?.();
+};
+
 const refreshInFlight = new Map();
 const refreshFlightKey = (kind, refreshToken) => `${kind}:${crypto.createHash('sha256').update(refreshToken).digest('hex')}`;
 const retainRefreshEntry = (key, entry, timeoutMs) => {
@@ -785,7 +1100,6 @@ const retainRefreshEntry = (key, entry, timeoutMs) => {
   timer.unref?.();
 };
 const refreshForRequest = async (kind, auth, fetcher, timeoutMs) => {
-  if (kind !== 'kimi' && kind !== 'grok') return refreshCliAuth(kind, auth, fetcher, timeoutMs);
   const refresh = refreshTokenOf(kind, auth);
   if (!refresh) return refreshCliAuth(kind, auth, fetcher, timeoutMs);
   const key = refreshFlightKey(kind, refresh);
@@ -798,10 +1112,16 @@ const refreshForRequest = async (kind, auth, fetcher, timeoutMs) => {
   promise.then(
     () => retainRefreshEntry(key, entry, timeoutMs),
     (error) => {
-      // A rejected login should not be hammered by every late 401. Transient failures are
-      // removed immediately so the normal retry loop can try again.
+      // A rejected login should not be hammered by every late 401. Permanent failures and
+      // rate-limited (429) responses keep the shared rejection for the request window;
+      // rate limits additionally start a cooldown so later polls don't hit the token
+      // endpoint again until it expires. Other transient failures clear immediately
+      // for the normal retry loop.
       if (error?.permanent) retainRefreshEntry(key, entry, timeoutMs);
-      else if (refreshInFlight.get(key) === entry) refreshInFlight.delete(key);
+      else if (error?.retryAfterMs) {
+        setRefreshCooldown(key, error.retryAfterMs);
+        retainRefreshEntry(key, entry, timeoutMs);
+      } else if (refreshInFlight.get(key) === entry) refreshInFlight.delete(key);
     },
   );
   return promise;
@@ -817,6 +1137,7 @@ async function fetchWithCliAuth(kind, { auth, source, fetcher, timeoutMs, buildR
     if (onAuthUpdate) await onAuthUpdate(kind, next, previous, source);
   };
   if (shouldRefreshFirst(kind, current)) {
+    if (cooldownUntilMs(kind, current)) throw rateLimitedError(kind);
     const previous = current;
     const next = await refreshForRequest(kind, previous, fetcher, timeoutMs);
     await emit(next, previous);
@@ -836,6 +1157,7 @@ async function fetchWithCliAuth(kind, { auth, source, fetcher, timeoutMs, buildR
     } catch { authFailure = false; }
   }
   if (authFailure && refreshTokenOf(kind, current)) {
+    if (cooldownUntilMs(kind, current)) throw rateLimitedError(kind);
     const previous = current;
     const next = await refreshForRequest(kind, previous, fetcher, timeoutMs);
     await emit(next, previous);
@@ -856,7 +1178,13 @@ module.exports = {
   liveAuthPath,
   grokAuthPath,
   readLiveAuth,
+  readClaudeProfile,
+  claudeProfileOf,
+  claudeProfileMatches,
+  CLAUDE_PROFILE_KEY,
   cliIdentity,
+  claudeOauthOf,
+  claudeOauthKeyOf,
   parseCliSnapshot,
   resolveCliAuth,
   refreshTokenOf,
@@ -867,8 +1195,11 @@ module.exports = {
   writeLiveIfCurrent,
   fetchWithCliAuth,
   __grok: { selectGrokAuthEntry, selectGrokAuthRecord, grokEntryOf, grokScopeOf, grokEndpointIsAllowed, discoverGrokTokenEndpoint },
+  __test: { clearRefreshFlights: () => refreshInFlight.clear(), clearRefreshCooldowns: () => refreshCooldown.clear(), retryAfterMsOf, clampCooldownMs },
+  __claude: { resetClaudeProfileCache: () => { claudeProfileCache = { at: 0, value: undefined }; }, stripClaudeProfileMeta },
   __copilot: { copilotEntryOf },
   __grokbot: { oscryptDecrypt },
+  __gemini: { geminiAuthFromKeytarShape, readGeminiFileKeychain, parseCredentialBlobJson, resetGeminiSecureCache: () => { geminiSecureCache = { at: 0, value: null }; } },
   __constants: {
     CODEX_CLIENT_ID, CODEX_TOKEN_URL, CLAUDE_CLIENT_ID, CLAUDE_TOKEN_URL,
     GEMINI_CLIENT_ID, GEMINI_CLIENT_SECRET, GEMINI_TOKEN_URL, KIMI_AUTH_HOST, KIMI_REFRESH_PATH,

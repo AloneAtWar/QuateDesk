@@ -22,6 +22,26 @@ contextBridge.exposeInMainWorld('quotaDesk', {
   getLocalCliUsageModels: (options) => ipcRenderer.invoke('cliUsage:get-models', options),
   getLocalCliUsageSources: () => ipcRenderer.invoke('cliUsage:get-sources'),
   scanLocalCliUsage: () => ipcRenderer.invoke('cliUsage:scan'),
+  getUsageArchives: () => ipcRenderer.invoke('archives:info'),
+  exportUsageArchives: (options) => ipcRenderer.invoke('archives:export', options),
+  importUsageArchives: () => ipcRenderer.invoke('archives:import'),
+  updateUsageArchive: (options) => ipcRenderer.invoke('archives:update', options),
+  deleteUsageArchive: (sourceId) => ipcRenderer.invoke('archives:delete', sourceId),
+  getUsageSyncStatus: () => ipcRenderer.invoke('usage-sync:status'),
+  saveUsageSyncConfig: (config) => ipcRenderer.invoke('usage-sync:save', config),
+  testUsageSyncConnection: (config) => ipcRenderer.invoke('usage-sync:test', config),
+  syncUsageArchives: () => ipcRenderer.invoke('usage-sync:run'),
+  restoreUsageSyncSource: (sourceId) => ipcRenderer.invoke('usage-sync:restore', sourceId),
+  onUsageSyncChanged: (callback) => {
+    const listener = (_event, status) => callback(status);
+    ipcRenderer.on('usage-sync:changed', listener);
+    return () => ipcRenderer.removeListener('usage-sync:changed', listener);
+  },
+  onUsageArchivesChanged: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('archives:changed', listener);
+    return () => ipcRenderer.removeListener('archives:changed', listener);
+  },
   clearHistory: () => ipcRenderer.invoke('history:clear'),
   exportData: (options) => ipcRenderer.invoke('data:export', options),
   importData: () => ipcRenderer.invoke('data:import'),

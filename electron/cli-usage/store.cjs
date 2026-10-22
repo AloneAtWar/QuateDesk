@@ -4,12 +4,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
+const { UsageArchives } = require('./archives.cjs');
 const {
   canonicalModelKey, modelKeyForGrouping, modelDisplayName, hmacHex, projectLabelFromPath,
   buildDayBoundaries, localDateString, zoneOffsetMs, shiftDateString, computeStreaks, createModelRuleMatcher,
 } = require('./normalize.cjs');
 
-const SCHEMA_VERSION = '3';
+const SCHEMA_VERSION = '4';
 
 const AGENT_ORDER = ['zcode', 'kimi', 'claude', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'openclaw', 'hermes', 'dsh'];
 
@@ -142,6 +143,8 @@ CREATE TABLE IF NOT EXISTS project_labels (
     this.migrate();
     this.upsertEventStatement = this.db.prepare(UPSERT_EVENT_SQL);
     this.upsertLabelStatement = this.db.prepare('INSERT INTO project_labels (project_key, label) VALUES (?, ?) ON CONFLICT(project_key) DO UPDATE SET label = excluded.label');
+    this.archives = new UsageArchives(this.db, AGENT_ORDER);
+    this.db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)").run(SCHEMA_VERSION);
   }
 
   // 老库(schema v1)的 usage_events 没有 root_id,补列后 WSL 事件才能按根清除
@@ -198,7 +201,10 @@ CREATE TABLE IF NOT EXISTS project_labels (
   }
 
   getProjectLabels() {
-    return Object.fromEntries(this.db.prepare('SELECT project_key AS projectKey, label FROM project_labels').all().map((row) => [row.projectKey, row.label]));
+    return Object.fromEntries([
+      ...this.db.prepare('SELECT project_key AS projectKey, label FROM project_labels').all().map((row) => [row.projectKey, row.label]),
+      ...this.archives.importedProjectLabels(),
+    ]);
   }
 
   // ---- 来源文件游标 ------------------------------------------------------
@@ -296,7 +302,7 @@ ON CONFLICT(root_id) DO UPDATE SET agent = excluded.agent, label = excluded.labe
   }
 
   countEvents(agent) {
-    const row = this.db.prepare('SELECT COUNT(*) AS records FROM usage_events WHERE agent = ?').get(agent);
+    const row = this.db.prepare('SELECT COUNT(*) AS records FROM reported_usage_events WHERE agent = ?').get(agent);
     return Number(row?.records || 0);
   }
 
@@ -305,22 +311,22 @@ ON CONFLICT(root_id) DO UPDATE SET agent = excluded.agent, label = excluded.labe
   }
 
   countEventsAll() {
-    const row = this.db.prepare('SELECT COUNT(*) AS records FROM usage_events').get();
+    const row = this.db.prepare('SELECT COUNT(*) AS records FROM reported_usage_events').get();
     return Number(row?.records || 0);
   }
 
   earliestEventMs(agentFilter, modelRules = null) {
     if (modelRules === null || modelRules === undefined) {
       const row = agentFilter && agentFilter !== 'all'
-        ? this.db.prepare('SELECT MIN(occurred_at_ms) AS earliest FROM usage_events WHERE agent = ?').get(agentFilter)
-        : this.db.prepare('SELECT MIN(occurred_at_ms) AS earliest FROM usage_events').get();
+        ? this.db.prepare('SELECT MIN(occurred_at_ms) AS earliest FROM reported_usage_events WHERE agent = ?').get(agentFilter)
+        : this.db.prepare('SELECT MIN(occurred_at_ms) AS earliest FROM reported_usage_events').get();
       return row?.earliest ? Number(row.earliest) : null;
     }
     const matchesModel = createModelRuleMatcher(modelRules);
     const filterByAgent = agentFilter && agentFilter !== 'all';
     const iterator = filterByAgent
-      ? this.db.prepare('SELECT occurred_at_ms, model, canonical_model_key FROM usage_events WHERE agent = ? ORDER BY occurred_at_ms').iterate(agentFilter)
-      : this.db.prepare('SELECT occurred_at_ms, model, canonical_model_key FROM usage_events ORDER BY occurred_at_ms').iterate();
+      ? this.db.prepare('SELECT occurred_at_ms, model, canonical_model_key FROM reported_usage_events WHERE agent = ? ORDER BY occurred_at_ms').iterate(agentFilter)
+      : this.db.prepare('SELECT occurred_at_ms, model, canonical_model_key FROM reported_usage_events ORDER BY occurred_at_ms').iterate();
     for (const row of iterator) {
       if (matchesModel(row.canonical_model_key, row.model)) return Number(row.occurred_at_ms);
     }
@@ -330,15 +336,15 @@ ON CONFLICT(root_id) DO UPDATE SET agent = excluded.agent, label = excluded.labe
   totalTokensAll(agentFilter, modelRules = null) {
     if (modelRules === null || modelRules === undefined) {
       const row = agentFilter && agentFilter !== 'all'
-        ? this.db.prepare('SELECT SUM(total_tokens) AS total FROM usage_events WHERE agent = ?').get(agentFilter)
-        : this.db.prepare('SELECT SUM(total_tokens) AS total FROM usage_events').get();
+        ? this.db.prepare('SELECT SUM(total_tokens) AS total FROM reported_usage_events WHERE agent = ?').get(agentFilter)
+        : this.db.prepare('SELECT SUM(total_tokens) AS total FROM reported_usage_events').get();
       return Number(row?.total || 0);
     }
     const matchesModel = createModelRuleMatcher(modelRules);
     const filterByAgent = agentFilter && agentFilter !== 'all';
     const iterator = filterByAgent
-      ? this.db.prepare('SELECT model, canonical_model_key, total_tokens FROM usage_events WHERE agent = ?').iterate(agentFilter)
-      : this.db.prepare('SELECT model, canonical_model_key, total_tokens FROM usage_events').iterate();
+      ? this.db.prepare('SELECT model, canonical_model_key, total_tokens FROM reported_usage_events WHERE agent = ?').iterate(agentFilter)
+      : this.db.prepare('SELECT model, canonical_model_key, total_tokens FROM reported_usage_events').iterate();
     let total = 0;
     for (const row of iterator) {
       if (matchesModel(row.canonical_model_key, row.model)) total += Number(row.total_tokens) || 0;
@@ -351,8 +357,8 @@ ON CONFLICT(root_id) DO UPDATE SET agent = excluded.agent, label = excluded.labe
     const matchesModel = createModelRuleMatcher(modelRules);
     const filterByAgent = agentFilter && agentFilter !== 'all';
     const iterator = filterByAgent
-      ? this.db.prepare('SELECT canonical_model_key, MIN(model) AS model FROM usage_events WHERE agent = ? GROUP BY canonical_model_key').iterate(agentFilter)
-      : this.db.prepare('SELECT canonical_model_key, MIN(model) AS model FROM usage_events GROUP BY canonical_model_key').iterate();
+      ? this.db.prepare('SELECT canonical_model_key, MIN(model) AS model FROM reported_usage_events WHERE agent = ? GROUP BY canonical_model_key').iterate(agentFilter)
+      : this.db.prepare('SELECT canonical_model_key, MIN(model) AS model FROM reported_usage_events GROUP BY canonical_model_key').iterate();
     const models = [];
     for (const row of iterator) {
       if (!matchesModel(row.canonical_model_key, row.model)) continue;
@@ -370,7 +376,7 @@ ON CONFLICT(root_id) DO UPDATE SET agent = excluded.agent, label = excluded.labe
     if (modelRules === null || modelRules === undefined) return null;
     const matchesModel = createModelRuleMatcher(modelRules);
     const counts = Object.fromEntries(AGENT_ORDER.map((agent) => [agent, 0]));
-    const iterator = this.db.prepare('SELECT agent, model, canonical_model_key, COUNT(*) AS records FROM usage_events GROUP BY agent, canonical_model_key, model').iterate();
+    const iterator = this.db.prepare('SELECT agent, model, canonical_model_key, COUNT(*) AS records FROM reported_usage_events GROUP BY agent, canonical_model_key, model').iterate();
     for (const row of iterator) {
       if (!matchesModel(row.canonical_model_key, row.model)) continue;
       counts[row.agent] = (counts[row.agent] || 0) + Number(row.records || 0);
@@ -402,8 +408,8 @@ ON CONFLICT(root_id) DO UPDATE SET agent = excluded.agent, label = excluded.labe
 
     const filterByAgent = agent && agent !== 'all';
     const iterate = filterByAgent
-      ? this.db.prepare('SELECT agent, occurred_at_ms, session_key, model, canonical_model_key, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, total_tokens FROM usage_events WHERE agent = ? AND occurred_at_ms >= ? AND occurred_at_ms < ? ORDER BY occurred_at_ms')
-      : this.db.prepare('SELECT agent, occurred_at_ms, session_key, model, canonical_model_key, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, total_tokens FROM usage_events WHERE occurred_at_ms >= ? AND occurred_at_ms < ? ORDER BY occurred_at_ms');
+      ? this.db.prepare('SELECT agent, occurred_at_ms, session_key, model, canonical_model_key, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, total_tokens FROM reported_usage_events WHERE agent = ? AND occurred_at_ms >= ? AND occurred_at_ms < ? ORDER BY occurred_at_ms')
+      : this.db.prepare('SELECT agent, occurred_at_ms, session_key, model, canonical_model_key, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, total_tokens FROM reported_usage_events WHERE occurred_at_ms >= ? AND occurred_at_ms < ? ORDER BY occurred_at_ms');
     const params = filterByAgent ? [agent, startMs, endMs] : [startMs, endMs];
 
     let index = 0;
@@ -441,6 +447,7 @@ ON CONFLICT(root_id) DO UPDATE SET agent = excluded.agent, label = excluded.labe
     return {
       range: { start: boundaries[0].date, end: boundaries[boundaries.length - 1].date, timezone },
       filter: { agent, timezone, endDate, modelRules },
+      archiveScope: { importedSources: Number(this.db.prepare('SELECT COUNT(*) AS count FROM usage_archive_sources WHERE enabled = 1').get().count) },
       matchedModels: this.matchingModels(agent, modelRules),
       recordsByAgent: this.matchingRecordsByAgent(modelRules),
       summary: {
@@ -502,8 +509,8 @@ ON CONFLICT(root_id) DO UPDATE SET agent = excluded.agent, label = excluded.labe
     const groups = new Map();
     const matchesModel = createModelRuleMatcher(modelRules);
     const select = filterByAgent
-      ? 'SELECT agent, session_key, model, canonical_model_key, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, reasoning_tokens, extra_tokens, total_tokens FROM usage_events WHERE agent = ? AND occurred_at_ms >= ? AND occurred_at_ms < ?'
-      : 'SELECT agent, session_key, model, canonical_model_key, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, reasoning_tokens, extra_tokens, total_tokens FROM usage_events WHERE occurred_at_ms >= ? AND occurred_at_ms < ?';
+      ? 'SELECT agent, session_key, model, canonical_model_key, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, reasoning_tokens, extra_tokens, total_tokens FROM reported_usage_events WHERE agent = ? AND occurred_at_ms >= ? AND occurred_at_ms < ?'
+      : 'SELECT agent, session_key, model, canonical_model_key, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, reasoning_tokens, extra_tokens, total_tokens FROM reported_usage_events WHERE occurred_at_ms >= ? AND occurred_at_ms < ?';
     const params = filterByAgent ? [agent, startMs, endMs] : [startMs, endMs];
 
     for (const row of this.db.prepare(select).iterate(...params)) {
@@ -605,7 +612,7 @@ ON CONFLICT(root_id) DO UPDATE SET agent = excluded.agent, label = excluded.labe
     const groups = new Map();
     const sessionsOverall = new Set();
 
-    const select = `SELECT agent, occurred_at_ms, session_key, project_key, model, canonical_model_key, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, extra_tokens, total_tokens FROM usage_events WHERE ${clauses.join(' AND ')} ORDER BY occurred_at_ms`;
+    const select = `SELECT agent, occurred_at_ms, session_key, project_key, model, canonical_model_key, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, extra_tokens, total_tokens FROM reported_usage_events WHERE ${clauses.join(' AND ')} ORDER BY occurred_at_ms`;
     let index = 0;
     for (const row of this.db.prepare(select).iterate(...params)) {
       const stamp = Number(row.occurred_at_ms);
@@ -665,8 +672,8 @@ ON CONFLICT(root_id) DO UPDATE SET agent = excluded.agent, label = excluded.labe
     const sideClauses = clauses.slice(2);
     const sideParams = params.slice(2);
     const sideRow = sideClauses.length
-      ? this.db.prepare(`SELECT SUM(total_tokens) AS total, MIN(occurred_at_ms) AS earliest FROM usage_events WHERE ${sideClauses.join(' AND ')}`).get(...sideParams)
-      : this.db.prepare('SELECT SUM(total_tokens) AS total, MIN(occurred_at_ms) AS earliest FROM usage_events').get();
+      ? this.db.prepare(`SELECT SUM(total_tokens) AS total, MIN(occurred_at_ms) AS earliest FROM reported_usage_events WHERE ${sideClauses.join(' AND ')}`).get(...sideParams)
+      : this.db.prepare('SELECT SUM(total_tokens) AS total, MIN(occurred_at_ms) AS earliest FROM reported_usage_events').get();
 
     const bucketTotals = buckets.map((bucket) => bucket.totalTokens);
     let peakIndex = -1;

@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import {
-  AppWindow, AlertCircle, Bell, BellOff, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronLeft, ChevronRight, CircleGauge, CircleStop, Clock3, Copy, Database, Download, Eye, ExternalLink, Globe, HelpCircle, History, LayoutGrid,
+  AppWindow, AlertCircle, Bell, BellOff, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronLeft, ChevronRight, CircleGauge, CircleStop, Clock3, Cloud, Copy, Database, Download, Eye, ExternalLink, Globe, HelpCircle, History, LayoutGrid,
   Ellipsis, Flame, KeyRound, Monitor, Play, Plus, Power, RefreshCw, Rows3, Settings2, ShieldCheck, SlidersHorizontal, Square, Bot,
   Pencil, Pin, QrCode, Sparkles, SquareTerminal, SunMoon, Tag, Trash2, TrendingUp, Trophy, UploadCloud, X, Zap, Bug,
 } from 'lucide-react';
@@ -11,12 +11,20 @@ import { adapterDefinitions } from './adapters';
 import { newApiTemplateScript } from './newapi-template';
 import { computeUsageStreaks, formatProviderUsageCost, formatProviderUsageSummaryTokens } from './provider-usage-format';
 import LocalCliUsageView from './local-cli-usage/LocalCliUsageView';
+import UsageArchivesSettings from './local-cli-usage/UsageArchivesSettings';
+import WebDavSyncSettings from './local-cli-usage/WebDavSyncSettings';
 import { computeHeatmapCells, useHeatmapPan } from './heatmap-pan';
 import StatisticsView from './statistics/StatisticsView';
 import qrcode from 'qrcode-generator';
 import { AppShell } from './app-shell';
+import { SettingsWindow } from './settings-window';
+import { SettingsDisclosure } from './settings-disclosure';
 import { ViewMenu } from './view-menu';
 import { EmptyWorkspace } from './empty-workspace';
+import { useBoardPullRefresh } from './use-board-pull-refresh';
+import { BoardPullRefreshIndicator } from './board-pull-refresh-indicator';
+import { accountRefreshFeedback, TransientToast, useTransientToast } from './transient-toast';
+import { buildRefreshQueues, getUpcomingRefreshItems } from './upcoming-refresh';
 import './styles.css';
 
 const formatReset = (resetAt) => {
@@ -158,6 +166,11 @@ const reloginChannel = (provider, account = null) => {
   }
   if (provider?.id === 'grok' || mode === 'grok') return { kind: 'grok', action: '重新导入', title: 'Grok 令牌已失效，点击重新导入本机 CLI 登录' };
   if (provider?.id === 'grokbot' || mode === 'grokbot') return { kind: 'grok', action: '重新导入', title: 'Grok Bot 登录已失效，点击重新导入本机客户端登录' };
+  // Claude / Codex / Gemini 快照失效：续期被拒（多为在其它设备登录同一账号轮换了凭据），
+  // 在本机 CLI 重新登录该账号后点击「重新导入」回写快照即可恢复
+  if (provider?.id === 'claude' || mode === 'claude') return { kind: 'cli', action: '重新导入', title: 'Claude 登录已失效（官方登录不支持多设备同时保活，其它设备登录会轮换掉这里的凭据），在本机重新登录后点击重新导入' };
+  if (provider?.id === 'codex' || mode === 'codex') return { kind: 'cli', action: '重新导入', title: 'Codex 登录已失效，在本机重新登录后点击重新导入本机 CLI 登录' };
+  if (provider?.id === 'gemini' || mode === 'gemini') return { kind: 'cli', action: '重新导入', title: 'Gemini 登录已失效，在本机重新登录后点击重新导入本机 CLI 登录' };
   if (provider?.id === 'copilot' || mode === 'copilot') return { kind: 'copilot', action: '重新授权', title: 'GitHub 授权已失效，点击重新设备码登录' };
   if (provider?.id === 'mimo' || mode === 'mimo') return { kind: 'mimo', action: '重新登录', title: 'Xiaomi MiMo 登录已失效，点击重新登录小米账号' };
   return null;
@@ -409,22 +422,48 @@ function ConcentricRings({ account }) {
   const meters = [...(account.windows || [])].sort((a, b) => (durationOrder[b.key] || 9) - (durationOrder[a.key] || 9)).slice(0, 4);
   const smallest = meters.reduce((current, meter) => !current || (durationOrder[meter.key] || 9) < (durationOrder[current.key] || 9) ? meter : current, null);
   const [hoveredKey, setHoveredKey] = useState(null);
+  // 触屏没有悬停：点中心读数逐个切换窗口。环本体不挂点击——环盘占卡片大半，
+  // 拦截点击会让手机上点卡片打不开趋势页
+  const [tappedKey, setTappedKey] = useState(null);
   const unavailable = meters.find((meter) => meter.available === false);
-  const active = unavailable || meters.find((meter) => meter.key === hoveredKey) || smallest;
+  const active = unavailable || meters.find((meter) => meter.key === hoveredKey) || meters.find((meter) => meter.key === tappedKey) || smallest;
+  const cycleWindow = (event) => {
+    event.stopPropagation();
+    if (meters.length < 2) return;
+    const index = active ? meters.findIndex((meter) => meter.key === active.key) : -1;
+    const next = meters[(index + 1) % meters.length];
+    if (!next) return;
+    // 轮回一圈回到默认展示（最短周期窗口）时清除手选，恢复自动展示
+    setTappedKey(next.key === smallest?.key ? null : next.key);
+  };
   return <div className="concentric-rings" aria-label={`${meters.length} 个额度窗口`}>
     {meters.map((meter, index) => <div className={`quota-ring ring-${index} ${active?.key === meter.key ? 'is-active' : ''}`} key={meter.key} style={{ '--progress': `${Math.max(0, Math.min(100, Number(meter.remaining || 0))) * 3.6}deg` }} onMouseEnter={() => setHoveredKey(meter.key)} onMouseLeave={() => setHoveredKey(null)}><span /></div>)}
-    <div className={`ring-core ${unavailable ? 'unavailable' : ''}`}><strong>{unavailable ? '不可用' : active ? formatAmount(active) : '—'}</strong><small>{active ? windowCatalog[active.key]?.label || active.key : '暂无窗口'}</small></div>
+    <div className={`ring-core ${unavailable ? 'unavailable' : ''}`} role={meters.length > 1 ? 'button' : undefined} tabIndex={meters.length > 1 ? 0 : undefined} aria-label={meters.length > 1 ? '查看各窗口剩余额度' : undefined} onClick={meters.length > 1 ? cycleWindow : undefined} onKeyDown={meters.length > 1 ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); cycleWindow(event); } } : undefined}><strong>{unavailable ? '不可用' : active ? formatAmount(active) : '—'}</strong><small>{active ? windowCatalog[active.key]?.label || active.key : '暂无窗口'}</small></div>
   </div>;
 }
 
 function ResetTimeline({ accounts, providers }) {
   const scrollRef = useRef(null);
   const dragRef = useRef(null);
-  const [active, setActive] = useState(null);
+  const downRef = useRef(null);
+  const pointersRef = useRef(new Set());
+  const [hovered, setHovered] = useState(null);
+  // 触屏没有悬停：点圆点钉住详情，再点一次或点空白处取消；悬停优先于点击展示
+  const [tappedKey, setTappedKey] = useState(null);
   const points = useMemo(() => accounts.flatMap((account) => (account.windows || [])
     .filter((meter) => meter.key !== 'balance' && meter.resetAt)
     .map((meter) => ({ account, meter, at: new Date(meter.resetAt).getTime() }))
     .filter((point) => !Number.isNaN(point.at))), [accounts]);
+  const sortedPoints = useMemo(() => [...points].sort((a, b) => a.at - b.at), [points]);
+  // 钉住详情期间点到时间轴以外（卡片、页签等）取消钉住
+  useEffect(() => {
+    if (tappedKey == null) return undefined;
+    const onPointerDown = (event) => {
+      if (!event.target.closest?.('.reset-timeline')) setTappedKey(null);
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onPointerDown, true);
+  }, [tappedKey]);
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return undefined;
@@ -466,26 +505,61 @@ function ResetTimeline({ accounts, providers }) {
     dayTicks.push({ at: t, label: (d.getMonth() + 1) + '/' + d.getDate() });
   }
   let lastLabelX = -50;
+  const pointKey = (point) => `${point.account.id}:${point.meter.key}:${point.at}`;
+  const pointDetail = (point) => {
+    const provider = providers.find((item) => item.id === point.account.providerId);
+    const d = new Date(point.at);
+    return {
+      name: point.account.name,
+      providerName: provider?.name || '',
+      label: windowCatalog[point.meter.key]?.label || point.meter.key,
+      amount: formatAmount(point.meter),
+      absolute: (d.getMonth() + 1) + '/' + d.getDate() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()),
+      relative: formatReset(point.meter.resetAt),
+    };
+  };
+  const tappedPoint = tappedKey == null ? null : sortedPoints.find((point) => pointKey(point) === tappedKey) || null;
+  const active = hovered || (tappedPoint ? pointDetail(tappedPoint) : null);
+  // 拖动平移；未移动就抬起视为点击：命中圆点钉住详情，点空白取消
   const startDrag = (event) => {
+    pointersRef.current.add(event.pointerId);
+    downRef.current = { x: event.clientX, moved: pointersRef.current.size > 1 };
     dragRef.current = { x: event.clientX, left: scrollRef.current ? scrollRef.current.scrollLeft : 0 };
     if (event.currentTarget.setPointerCapture) event.currentTarget.setPointerCapture(event.pointerId);
   };
   const moveDrag = (event) => {
+    const down = downRef.current;
+    if (down && Math.abs(event.clientX - down.x) > 5) down.moved = true;
     if (dragRef.current && scrollRef.current) scrollRef.current.scrollLeft = dragRef.current.left - (event.clientX - dragRef.current.x);
   };
-  const endDrag = () => { dragRef.current = null; };
+  const endDrag = (event) => {
+    pointersRef.current.delete(event.pointerId);
+    const down = downRef.current;
+    dragRef.current = null;
+    downRef.current = null;
+    if (!down || down.moved || pointersRef.current.size > 0) return;
+    const hit = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('.timeline-point');
+    const point = hit ? sortedPoints[Number(hit.dataset.index)] : null;
+    const key = point ? pointKey(point) : null;
+    setTappedKey(key && key !== tappedKey ? key : null);
+  };
+  const cancelDrag = (event) => {
+    if (event.pointerId != null) pointersRef.current.delete(event.pointerId);
+    dragRef.current = null;
+    downRef.current = null;
+  };
   return <section className="surface-section timeline-section">
     {heading}
     <div className="timeline-detail">{active
       ? <><b>{active.name}</b><em>{active.providerName} · {active.label}</em><strong>{active.amount}</strong><small>{active.absolute} · {active.relative}</small></>
-      : <span className="timeline-detail-hint">悬停圆点查看账号详情</span>}</div>
-    <div className="reset-timeline" ref={scrollRef} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerLeave={endDrag} onPointerCancel={endDrag}>
+      : <span className="timeline-detail-hint">点击或悬停圆点查看账号详情</span>}</div>
+    <div className="reset-timeline" ref={scrollRef} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerLeave={cancelDrag} onPointerCancel={cancelDrag}>
       <div className="timeline-track" style={{ width }}>
         <div className="timeline-axis" />
         <div className="timeline-now"><span>现在</span></div>
         {nearTicks.map((tick) => Math.round(toX(tick.at)) < 34 ? null : <div className="timeline-tick near" key={tick.at} style={{ left: Math.round(toX(tick.at)) }}><span>{tick.label}</span></div>)}
         {dayTicks.map((tick) => <div className="timeline-tick" key={tick.at} style={{ left: Math.round(toX(tick.at)) }}><span>{tick.label}</span></div>)}
-        {[...points].sort((a, b) => a.at - b.at).map((point) => {
+        {sortedPoints.map((point, index) => {
           const provider = providers.find((item) => item.id === point.account.providerId);
           const x = Math.max(10, Math.round(toX(point.at)));
           const showLabel = x - lastLabelX >= 72;
@@ -494,15 +568,7 @@ function ResetTimeline({ accounts, providers }) {
           const d = new Date(point.at);
           const near = point.at - now <= NEAR_HOURS * 3600e3;
           const timeLabel = near ? pad(d.getHours()) + ':' + pad(d.getMinutes()) : (d.getMonth() + 1) + '/' + d.getDate() + ' ' + pad(d.getHours()) + '时';
-          const detail = {
-            name: point.account.name,
-            providerName: provider?.name || '',
-            label,
-            amount: formatAmount(point.meter),
-            absolute: (d.getMonth() + 1) + '/' + d.getDate() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()),
-            relative: formatReset(point.meter.resetAt),
-          };
-          return <div key={point.account.id + '-' + point.meter.key} className="timeline-point" style={{ left: x }} onMouseEnter={() => setActive(detail)} onMouseLeave={() => setActive(null)}>
+          return <div key={point.account.id + '-' + point.meter.key} className="timeline-point" data-index={index} style={{ left: x }} onMouseEnter={() => setHovered(pointDetail(point))} onMouseLeave={() => setHovered(null)}>
             <i className={provider?.tone || 'slate'} />{showLabel && <span><b>{point.account.name}</b><em>{label + ' · ' + timeLabel}</em></span>}
           </div>;
         })}
@@ -633,7 +699,7 @@ const matchRangeKey = (next, fullStart, fullEnd) => {
   return null;
 };
 
-function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange }) {
+function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange, onToast }) {
   const [hover, setHover] = useState(null);
   // 断线区间（无数据时段）的悬停提示：{ from, to } 为区间前后两个数据点的时间
   const [hoverGap, setHoverGap] = useState(null);
@@ -931,7 +997,11 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
   // 详情条优先级：悬停点 > 断线提示 > 选中点（悬停离开后回落到选中的常驻信息）
   const detailPoint = hoverPoint || (!hoverGap ? selectedPoint : null);
   const pickRange = (preset) => {
-    if (!rangeAvailable(preset.ms, fullStart, fullEnd)) return;
+    if (!rangeAvailable(preset.ms, fullStart, fullEnd)) {
+      // 保留可点击状态而不是 disabled：触屏上点按也有反馈，而不是毫无响应
+      onToast?.({ id: Date.now(), ok: false, message: `「${preset.label}」暂不可用：历史记录不足` });
+      return;
+    }
     setView(presetView(preset.ms, fullStart, fullEnd));
     onRangeKeyChange?.(preset.id);
   };
@@ -956,7 +1026,7 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
       <div className="range-control" role="group" aria-label="趋势时间范围" onPointerDown={(event) => event.stopPropagation()}>
         {RANGE_PRESETS.map((preset) => {
           const available = rangeAvailable(preset.ms, fullStart, fullEnd);
-          return <button type="button" key={preset.id} className={rangeKey === preset.id ? 'active' : ''} disabled={!available} title={available ? preset.label : `历史不足 ${preset.label}`} onClick={() => pickRange(preset)}>{preset.label}</button>;
+          return <button type="button" key={preset.id} className={rangeKey === preset.id ? 'active' : ''} aria-disabled={!available || undefined} title={available ? preset.label : `历史不足 ${preset.label}`} onClick={() => pickRange(preset)}>{preset.label}</button>;
         })}
       </div>
     </div>
@@ -1013,9 +1083,13 @@ function WasteView({ account, wasteWindows }) {
   const [cycles, setCycles] = useState(null);
   const [curWindow, setCurWindow] = useState(wasteWindows[0]);
   const [hover, setHover] = useState(null);
+  // 触屏没有悬停：点击柱子选中、再点一次或点空白处取消；悬停优先于选中展示
+  const [selectedKey, setSelectedKey] = useState(null);
   const [dragging, setDragging] = useState(false);
   const scrollRef = useRef(null);
   const dragRef = useRef(null);
+  const downRef = useRef(null);
+  const pointersRef = useRef(new Set());
   useEffect(() => {
     let active = true;
     // 网页演示模式没有周期档案接口，直接降级为空状态
@@ -1050,6 +1124,8 @@ function WasteView({ account, wasteWindows }) {
     return new Date(cycle.from).getTime() <= new Date(derived).getTime() ? cycle.from : derived;
   };
   // 单行详情条内容：按周期形态（进行中 / 提前重置 / 失真 / 可靠）组织
+  const cycleKey = (cycle, index) => cycle.now ? 'now' : `${cycle.end}-${index}`;
+  const selectedCycle = selectedKey == null ? null : shown.find((cycle, index) => cycleKey(cycle, index) === selectedKey) || null;
   const renderDetail = (cycle) => {
     const range = `${formatWasteDay(displayFrom(cycle))} → ${formatWasteDay(cycle.end)}`;
     if (cycle.now) return <>
@@ -1063,10 +1139,48 @@ function WasteView({ account, wasteWindows }) {
     if (!cycle.reliable) return <><span className="when">{range} 周期</span><span>浪费 <b>≤{Math.round(cycle.remaining)}%</b></span>{amount}{observed}<span className="warn">可能失真：距重置约 {formatWasteGap(cycle.gapMs)}</span></>;
     return <><span className="when">{range} 周期</span><span>浪费 <b>{Math.round(cycle.remaining)}%</b></span>{amount}{observed}</>;
   };
-  // 周期过多柱宽触底时横向拖动平移
-  const startDrag = (event) => { const el = scrollRef.current; if (!el) return; dragRef.current = { x: event.clientX, left: el.scrollLeft }; el.setPointerCapture?.(event.pointerId); setDragging(true); };
-  const moveDrag = (event) => { const drag = dragRef.current; if (!drag || !scrollRef.current) return; scrollRef.current.scrollLeft = drag.left - (event.clientX - drag.x); };
-  const endDrag = () => { dragRef.current = null; setDragging(false); };
+  // 周期过多柱宽触底时横向拖动平移；未移动就抬起视为点击（命中柱子选中/切换，点空白取消）
+  const startDrag = (event) => {
+    pointersRef.current.add(event.pointerId);
+    downRef.current = { x: event.clientX, moved: pointersRef.current.size > 1 };
+    const el = scrollRef.current;
+    if (!el) return;
+    dragRef.current = { x: event.clientX, left: el.scrollLeft };
+    el.setPointerCapture?.(event.pointerId);
+    setDragging(true);
+  };
+  const moveDrag = (event) => {
+    const down = downRef.current;
+    if (down && Math.abs(event.clientX - down.x) > 5) down.moved = true;
+    const drag = dragRef.current;
+    if (!drag || !scrollRef.current) return;
+    scrollRef.current.scrollLeft = drag.left - (event.clientX - drag.x);
+  };
+  const endDrag = (event) => {
+    pointersRef.current.delete(event.pointerId);
+    const down = downRef.current;
+    dragRef.current = null;
+    downRef.current = null;
+    setDragging(false);
+    if (!down || down.moved || pointersRef.current.size > 0) return;
+    const key = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('.waste-col')?.dataset.key;
+    setSelectedKey(key && key !== selectedKey ? key : null);
+  };
+  const cancelDrag = (event) => {
+    if (event.pointerId != null) pointersRef.current.delete(event.pointerId);
+    dragRef.current = null;
+    downRef.current = null;
+    setDragging(false);
+  };
+  // 选中期间点到图表区域以外（页签、图例等）也取消选中
+  useEffect(() => {
+    if (selectedKey == null) return undefined;
+    const onPointerDown = (event) => {
+      if (!event.target.closest?.('.waste-scroll')) setSelectedKey(null);
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onPointerDown, true);
+  }, [selectedKey]);
   const softColor = `color-mix(in srgb, ${CHART_COLORS[curWindow] || 'var(--violet)'} 30%, transparent)`;
   // 柱子少时每根都标完整区间；多了只标结束日期并按需抽稀，避免文字挤在一起
   const compactLabels = shown.length <= 6;
@@ -1074,22 +1188,23 @@ function WasteView({ account, wasteWindows }) {
   return <div className="waste-view">
     <div className="waste-row">
       {wasteWindows.length >= 2
-        ? <div className="seg-control">{wasteWindows.map((key) => <button type="button" key={key} className={curWindow === key ? 'active' : ''} onClick={() => setCurWindow(key)}>{windowCatalog[key]?.label || key} 额度</button>)}</div>
+        ? <div className="seg-control">{wasteWindows.map((key) => <button type="button" key={key} className={curWindow === key ? 'active' : ''} onClick={() => { setCurWindow(key); setSelectedKey(null); }}>{windowCatalog[key]?.label || key} 额度</button>)}</div>
         : <span className="waste-label">{windowCatalog[curWindow]?.label || curWindow} 额度 · 浪费统计</span>}
       <span className="waste-stats">{windowCycles.length ? <>
         <span>{windowCycles.length} 个周期</span><span>平均浪费 <b>{avg != null ? `${avg.toFixed(0)}%` : '—'}</b>（{good.length} 可靠）</span>{good.length ? <span>累计 <b>{Math.round(total * 100) / 100}</b> 倍额度</span> : <span>累计 —</span>}
       </> : <><span>0 个周期</span><span>平均浪费 —</span><span>累计 —</span></>}</span>
     </div>
-    <div className="chart-detail waste-detail">{hover ? renderDetail(hover) : <span className="chart-detail-hint">{empty ? '悬停查看当前周期详情' : '悬停查看周期详情 · 周期过多时可左右拖动'}</span>}</div>
-    <div className={`waste-scroll${dragging ? ' dragging' : ''}`} ref={scrollRef} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag} onPointerLeave={endDrag}>
+    <div className="chart-detail waste-detail">{hover ? renderDetail(hover) : selectedCycle ? renderDetail(selectedCycle) : <span className="chart-detail-hint">{empty ? '点击柱子查看当前周期详情' : '点击或悬停柱子查看周期详情 · 周期过多时可左右拖动'}</span>}</div>
+    <div className={`waste-scroll${dragging ? ' dragging' : ''}`} ref={scrollRef} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={cancelDrag} onPointerLeave={cancelDrag}>
       <div className={`waste-plot ${curWindow === 'monthly' ? 'mo' : 'wk'}`}>
         {!empty && [25, 50, 75].map((value) => <div key={value} className="waste-gridline" style={{ bottom: `${value}%` }} />)}
         {!empty && avg != null && <div className="waste-avg" style={{ bottom: `${Math.min(100, avg)}%` }}><em>平均 {avg.toFixed(0)}%</em></div>}
         {empty && !nowCycle && <div className="waste-empty-hint"><span>还没有已完成的周期</span><span>第一个周期重置后自动生成统计</span></div>}
         {shown.map((cycle, index) => {
-          const classes = ['waste-col', cycle.now ? 'now' : cycle.kind === 'early' ? 'early' : !cycle.reliable ? 'bad' : '', hover === cycle ? 'hot' : ''].filter(Boolean).join(' ');
+          const key = cycleKey(cycle, index);
+          const classes = ['waste-col', cycle.now ? 'now' : cycle.kind === 'early' ? 'early' : !cycle.reliable ? 'bad' : '', hover === cycle || selectedKey === key ? 'hot' : ''].filter(Boolean).join(' ');
           const tip = `${formatWasteDay(displayFrom(cycle))} → ${formatWasteDay(cycle.end)}${cycle.now ? '（进行中）' : ` · 浪费 ${Math.round(cycle.remaining)}%`}`;
-          return <div key={cycle.now ? 'now' : `${cycle.end}-${index}`} className={classes} title={tip} onMouseEnter={() => setHover(cycle)} onMouseLeave={() => setHover(null)}>
+          return <div key={key} className={classes} data-key={key} title={tip} onMouseEnter={() => setHover(cycle)} onMouseLeave={() => setHover(null)}>
             <div className="waste-bar" style={{ height: `${Math.max(2, Math.min(100, cycle.remaining))}%` }} />
           </div>;
         })}
@@ -1441,8 +1556,8 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
 }
 
 // 历史视图切换下拉：趋势/用量/本机/浪费四个入口常驻；不可用的入口保留在列表里但不可选，
-// 悬停 title 与项内小字都说明原因（触屏没有悬停，小字保证原因可见）
-function HistoryViewSwitch({ tabs, view, onChange, domId, panelId }) {
+// 悬停 title 说明原因；触屏没有悬停，点按置灰项时弹 toast 提示（菜单尺寸保持不变）
+function HistoryViewSwitch({ tabs, view, onChange, domId, panelId, onToast }) {
   const [open, setOpen] = useState(false);
   const close = () => setOpen(false);
   const onKeyDown = (event) => { if (event.key === 'Escape') { event.stopPropagation(); close(); } };
@@ -1456,7 +1571,15 @@ function HistoryViewSwitch({ tabs, view, onChange, domId, panelId }) {
           const disabled = Boolean(tab.reason);
           return <button type="button" role="tab" key={tab.key} id={`${domId}-tab-${tab.key}`} aria-controls={panelId} aria-selected={view === tab.key} aria-disabled={disabled || undefined}
             className={`${view === tab.key ? 'active' : ''}${disabled ? ' disabled' : ''}`} title={disabled ? `暂不可用：${tab.reason}` : tab.label}
-            onClick={() => { if (disabled) return; onChange(tab.key); close(); }}>
+            onClick={() => {
+              if (disabled) {
+                // 菜单保持打开，方便直接换一个可用的视图
+                onToast?.({ id: Date.now(), ok: false, message: `「${tab.label}」暂不可用：${tab.reason}` });
+                return;
+              }
+              onChange(tab.key);
+              close();
+            }}>
             {tab.label}{!disabled && <span>{view === tab.key && <Check size={12} />}</span>}
           </button>;
         })}
@@ -1465,7 +1588,7 @@ function HistoryViewSwitch({ tabs, view, onChange, domId, panelId }) {
   </>;
 }
 
-function HistoryView({ account, provider, onBack, onProviderUsageState, settings, setSettings, readOnly = false, wasteWindowsOverride }) {
+function HistoryView({ account, provider, onBack, onProviderUsageState, settings, setSettings, readOnly = false, wasteWindowsOverride, onToast }) {
   const [points, setPoints] = useState(null);
   const [hiddenKeys, setHiddenKeys] = useState([]);
   const [view, setView] = useState('trend');
@@ -1555,14 +1678,15 @@ function HistoryView({ account, provider, onBack, onProviderUsageState, settings
   return <div className="view-stack history-view">
     <section className="surface-section">
       <div className="history-head">
+        {onBack && <button type="button" className="back-button" onClick={onBack} title="返回看板" aria-label="返回看板"><ChevronLeft size={15} /></button>}
         <AccountIdentity account={account} provider={provider} />
         {account.disabled && <span className="history-disabled-tag"><CircleStop size={12} /> 已停用 · {formatDisabledDate(account.disabledAt)}</span>}
-        <HistoryViewSwitch tabs={historyTabs} view={view} onChange={setView} domId={historyDomId} panelId={historyPanelId} />
+        <HistoryViewSwitch tabs={historyTabs} view={view} onChange={setView} domId={historyDomId} panelId={historyPanelId} onToast={onToast} />
       </div>
       <div className={`history-tabpanel${showLocalUsage ? ' local-usage-tabpanel' : ''}`} role="tabpanel" id={historyPanelId} aria-labelledby={`${historyDomId}-tab-${view}`}>{showProviderUsage ? <ProviderUsageView account={account} provider={provider} onState={onProviderUsageState} readOnly={readOnly} /> : showLocalUsage ? <LocalCliUsageView settings={settings} setSettings={setSettings} modelRules={localAnalysis.modelRules} scopeName={provider?.name || '当前厂商'} embedded /> : showWaste ? <WasteView account={account} wasteWindows={wasteWindows} /> : <div className="trend-view">
         {points === null ? <div className="settings-empty chart-empty">正在读取历史记录…</div>
           : points.length === 0 ? <div className="settings-empty chart-empty">暂无历史数据，每次成功刷新额度后都会记录一条</div>
-            : <UsageChart points={points} hiddenKeys={hiddenKeys} rangeKey={rangeKey} onRangeKeyChange={setRangeKey} />}
+            : <UsageChart points={points} hiddenKeys={hiddenKeys} rangeKey={rangeKey} onRangeKeyChange={setRangeKey} onToast={onToast} />}
         {legendKeys.length > 0 && <div className="chart-legend">{legendKeys.map((key, index) => {
           const sample = latestSamples[key];
           const hidden = hiddenKeys.includes(key);
@@ -1723,9 +1847,7 @@ function StatusView({ accounts, providers, runtime, onTestAccount, testingAccoun
   </div>;
 }
 
-// 看板底部的「即将刷新」栏：启用账号的每个带重置时间的额度窗口各占一条，从近到远单行排列；
-// 「即将刷新」标题固定在左，仅右侧条目区单行滑动：触屏走浏览器原生横向滚动，鼠标按住拖动
-// 或悬停滚动滚轮平移（滚动条隐藏）；未滑到边时两端渐隐提示还有更多条目
+// 底栏始终保留单队列，上方可展开三个周期队列；按钮独立置于面板上沿正中。
 const REFRESH_DRAG_MOVE_PX = 4;
 // 条目的剩余百分比配色：剩得越多、刷新时浪费越多，颜色越重（<20% 绿 / <40% 青 / <70% 橙 / ≥70% 红）；
 // 窗口已用尽，或同账号更长周期的窗口已耗尽（短周期刷新了也跑不动）时置灰
@@ -1742,13 +1864,7 @@ const refreshChipTone = (account, meter) => {
   if (remaining < 70) return 'warn';
   return 'waste';
 };
-function UpcomingRefreshBar({ accounts, providers, onOpenHistory }) {
-  const upcoming = useMemo(() => accounts
-    .filter((account) => !account.disabled)
-    .flatMap((account) => (account.windows || [])
-      .filter((meter) => meter.resetAt && !Number.isNaN(new Date(meter.resetAt).getTime()))
-      .map((meter) => ({ account, meter, at: new Date(meter.resetAt).getTime() })))
-    .sort((a, b) => a.at - b.at), [accounts]);
+function UpcomingRefreshTrack({ items, providers, onOpenHistory, labelId, showCycle = false }) {
   const trackRef = useRef(null);
   const [edges, setEdges] = useState({ left: false, right: false });
   const [dragging, setDragging] = useState(false);
@@ -1779,8 +1895,7 @@ function UpcomingRefreshBar({ accounts, providers, onOpenHistory }) {
       track.removeEventListener('wheel', onWheel);
       if (observer) observer.disconnect();
     };
-  }, [upcoming.length]);
-  if (!upcoming.length) return null;
+  }, [items]);
   // 仅鼠标启用拖拽：触屏交给原生横向滚动（touch-action 不受限，竖向手势仍滚动整页）
   const onPointerDown = (event) => {
     if (event.pointerType !== 'mouse' || event.button !== 0) return;
@@ -1803,8 +1918,8 @@ function UpcomingRefreshBar({ accounts, providers, onOpenHistory }) {
     }
     track.scrollLeft = drag.startScroll - dx;
   };
-  const endDrag = () => {
-    if (dragRef.current?.moved) suppressClickRef.current = true;
+  const endDrag = (event) => {
+    suppressClickRef.current = event.type !== 'pointercancel' && Boolean(dragRef.current?.moved);
     dragRef.current = null;
     setDragging(false);
   };
@@ -1814,30 +1929,56 @@ function UpcomingRefreshBar({ accounts, providers, onOpenHistory }) {
     event.preventDefault();
     event.stopPropagation();
   };
-  return <footer className="refresh-bar">
-    <span className="refresh-bar-title"><Clock3 size={12} />即将刷新</span>
-    <div className={`refresh-track-wrap${edges.left ? ' more-left' : ''}${edges.right ? ' more-right' : ''}`}>
+  return <div className={`refresh-track-wrap${edges.left ? ' more-left' : ''}${edges.right ? ' more-right' : ''}`}>
       <div
         ref={trackRef}
         className={`refresh-track${dragging ? ' dragging' : ''}`}
+        role="region"
+        aria-labelledby={labelId}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
         onClickCapture={onClickCapture}
       >
-        {upcoming.map(({ account, meter }) => {
+        {items.length === 0 && <span className="refresh-queue-empty">—</span>}
+        {items.map(({ account, meter }) => {
           const provider = providers.find((item) => item.id === account.providerId);
           const label = windowCatalog[meter.key]?.label || meter.key;
           const tone = refreshChipTone(account, meter);
           const percent = meter.unit === '%' && Number.isFinite(Number(meter.remaining)) ? `${Math.round(meter.remaining)}%` : '';
-          return <button type="button" className="refresh-chip" key={`${account.id}-${meter.key}`} title={`${account.name} · ${label}${percent ? ` · 剩余 ${percent}` : ''} · ${formatResetAbsolute(meter.resetAt)}`} onClick={() => onOpenHistory?.(account)}>
-            <Logo provider={provider} size="xs" interactive={false} /><span>{account.name}</span><em>{label}</em>{percent && <b className={tone}>{percent}</b>}<small>{formatResetCompact(meter.resetAt)}</small>
+          return <button type="button" className="refresh-chip" key={`${account.id}-${meter.key}`} title={`${account.name} · ${label}${percent ? ` · 剩余 ${percent}` : ''} · ${formatResetAbsolute(meter.resetAt)}`} aria-label={`${account.name} · ${label}${percent ? ` · 剩余 ${percent}` : ''} · ${formatReset(meter.resetAt)}`} onClick={() => onOpenHistory?.(account)}>
+            <Logo provider={provider} size="xs" interactive={false} /><span>{account.name}</span>{showCycle && <em>{label}</em>}{percent && <b className={tone}>{percent}</b>}<small>{formatResetCompact(meter.resetAt)}</small>
           </button>;
         })}
       </div>
+  </div>;
+}
+
+function UpcomingRefreshBar({ accounts, providers, onOpenHistory }) {
+  const [expanded, setExpanded] = useState(false);
+  const panelId = useId();
+  const upcoming = useMemo(() => getUpcomingRefreshItems(accounts), [accounts]);
+  const queues = useMemo(() => buildRefreshQueues(accounts), [accounts]);
+  return <section className="upcoming-refresh" aria-label="即将刷新">
+    {queues.length > 0 && <button type="button" className="refresh-queues-toggle" aria-label={expanded ? '收起刷新队列' : '展开刷新队列'} aria-expanded={expanded} aria-controls={panelId} onClick={() => setExpanded((value) => !value)}>
+      <ChevronDown size={14} aria-hidden="true" />
+    </button>}
+    <div className="refresh-queues-surface">
+      <div id={panelId} className={`refresh-queues-panel${expanded ? ' expanded' : ''}`} inert={!expanded} aria-hidden={!expanded}>
+        <div className="refresh-queues-content">
+          {queues.map(({ key, items }) => <div className="refresh-queue" role="group" aria-labelledby={`${panelId}-${key}`} data-cycle={key} key={key}>
+            <span className="refresh-queue-label" id={`${panelId}-${key}`}>{windowCatalog[key].label.replace(/\s+/g, '')}</span>
+            <UpcomingRefreshTrack items={items} providers={providers} onOpenHistory={onOpenHistory} labelId={`${panelId}-${key}`} />
+          </div>)}
+        </div>
+      </div>
+      <footer className="refresh-bar">
+        <span className="refresh-bar-title" id={`${panelId}-title`}><Clock3 size={12} />即将刷新</span>
+        <UpcomingRefreshTrack items={upcoming} providers={providers} onOpenHistory={onOpenHistory} labelId={`${panelId}-title`} showCycle />
+      </footer>
     </div>
-  </footer>;
+  </section>;
 }
 
 function Toggle({ checked, onChange, label, description }) {
@@ -1846,6 +1987,7 @@ function Toggle({ checked, onChange, label, description }) {
 
 function RemoteViewSettings() {
   const bridge = window.quotaDesk;
+  const [copyToast, setCopyToast] = useTransientToast();
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -1889,6 +2031,17 @@ function RemoteViewSettings() {
   const pairingLink = status?.running && activeLanUrl && status?.pairingKey ? `${activeLanUrl}#pair=${encodeURIComponent(status.pairingKey)}` : '';
   // 本机预览走 127.0.0.1:远程页检测到回环会自动换取预览令牌,链接不再携带配对密钥
   const previewLink = status?.running && status?.localUrl ? status.localUrl : '';
+  const copyPairingLink = async () => {
+    if (!pairingLink || busy) return;
+    setBusy('copy');
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('clipboard_unavailable');
+      await navigator.clipboard.writeText(pairingLink);
+      setCopyToast({ id: Date.now(), ok: true, message: '配对链接已复制' });
+    } catch {
+      setCopyToast({ id: Date.now(), ok: false, message: '复制失败，请重试' });
+    } finally { setBusy(''); }
+  };
   const qrImage = useMemo(() => {
     if (!pairingLink) return '';
     try { const qr = qrcode(0, 'M'); qr.addData(pairingLink); qr.make(); return qr.createDataURL(4, 6); }
@@ -1912,6 +2065,7 @@ function RemoteViewSettings() {
   };
   if (!bridge?.getRemoteViewStatus) return <small className="drawer-help">远程查看设置仅在桌面应用中可用。</small>;
   return <div className="remote-setting">
+    {createPortal(<TransientToast toast={copyToast} />, document.body)}
     <Toggle checked={Boolean(status?.enabled)} onChange={(enabled) => action('toggle', () => bridge.setRemoteViewEnabled(enabled))} label="启用局域网访问" description="允许其他设备连接这台电脑，默认关闭" />
     {!status && !error && <small className="drawer-help">正在读取状态…</small>}
     <div className="remote-setting-port-row">
@@ -1936,6 +2090,7 @@ function RemoteViewSettings() {
       {pairingLink ? <>
         {lanUrls.length > 1 && <label className="field remote-qr-address-field"><span>访问设备</span><select value={activeLanUrl} onChange={(event) => setSelectedLanUrl(event.target.value)}>{lanUrls.map((url) => <option key={url} value={url}>{new URL(url).host}</option>)}</select></label>}
         <div className="remote-setting-qr">{qrImage && <img src={qrImage} alt="配对信息二维码" />}</div>
+        <button type="button" className="outline-button remote-qr-copy" disabled={Boolean(busy)} onClick={copyPairingLink}><Copy size={14} />{busy === 'copy' ? '复制中…' : '复制配对链接'}</button>
       </> : <div className="remote-qr-unavailable">启用局域网访问并连接网络后，可以生成新的配对二维码。</div>}
       <section className="remote-paired-devices">
         <div className="remote-paired-devices-head"><span><b>已配对设备</b><small>重置配对密钥不会移除这些设备</small></span><span>{pairedDevices.length} 台</span></div>
@@ -1950,7 +2105,6 @@ function RemoteViewSettings() {
       </section>
       {error && <small className="remote-setting-error" role="alert">{error}</small>}
       {confirmRotate ? <div className="remote-qr-reset-confirm"><span>只影响之后添加的设备。已配对设备仍可访问。</span><div><button type="button" className="remote-qr-reset-danger" disabled={Boolean(busy)} onClick={resetPairingKey}>{busy === 'rotate' ? '正在重置…' : '确认重置'}</button><button type="button" className="remote-qr-reset-cancel" onClick={() => setConfirmRotate(false)}>取消</button></div></div> : <button type="button" className="remote-setting-link remote-qr-reset" onClick={() => setConfirmRotate(true)}>重置配对密钥</button>}
-      {pairingLink && <small className="drawer-help">配对链接只保存在二维码中；二维码会包含本次配对密钥。</small>}
     </section></div>}
   </div>;
 }
@@ -1966,7 +2120,7 @@ const normalizeSharedSettings = (settings = {}) => ({
   })),
 });
 
-function SharedSettingsPanel({ variant = 'desktop', desktopSection = 'all', settings = {}, setSettings, onSave, theme, setTheme, mode, setMode }) {
+function SharedSettingsPanel({ variant = 'desktop', desktopSection = 'all', showHeading = true, settings = {}, setSettings, onSave, theme, setTheme, mode, setMode }) {
   const remote = variant === 'remote';
   const [draft, setDraft] = useState(() => normalizeSharedSettings(settings));
   const [saving, setSaving] = useState(false);
@@ -1984,23 +2138,26 @@ function SharedSettingsPanel({ variant = 'desktop', desktopSection = 'all', sett
     finally { setSaving(false); }
   };
   if (!remote) return <>
-    {(desktopSection === 'all' || desktopSection === 'general') && <>
+    {['all', 'general', 'monitoring'].includes(desktopSection) && <section className="drawer-section">
+      {showHeading && <div className="drawer-section-title"><Bell size={16} /><span>刷新与提醒</span></div>}
+      <Toggle checked={values.alerts !== false} onChange={(value) => update((old) => ({ ...old, alerts: value }))} label="启用提醒" description="同时控制看板标记与桌面通知" />
+      <div className="setting-select"><span><b>轮询间隔</b><small>所有账号共用的检查频率</small></span><select value={values.pollMinutes} onChange={(event) => update((old) => ({ ...old, pollMinutes: event.target.value }))}><option value="5">5 分钟</option><option value="10">10 分钟</option><option value="15">15 分钟</option><option value="30">30 分钟</option></select></div>
+    </section>}
+    {['all', 'general', 'rules'].includes(desktopSection) && <>
     <section className="drawer-section">
-      <div className="drawer-section-title"><Bell size={16} /><span>刷新提醒规则</span><button className="mini-add" onClick={() => update((old) => ({ ...old, reminderRules: [...(old.reminderRules || []), { id: `rule-${Date.now()}`, beforeMinutes: 120, minRemaining: 50 }] }))}><Plus size={14} /> 新增规则</button></div>
-      <Toggle checked={values.alerts !== false} onChange={(value) => update((old) => ({ ...old, alerts: value }))} label="启用提醒" description="关闭后不发送桌面通知，也不标记命中规则" />
+      <div className="drawer-section-title">{showHeading && <Bell size={16} />}<span>{showHeading ? '提醒规则' : '提醒条件'}</span><button className="mini-add" onClick={() => update((old) => ({ ...old, reminderRules: [...(old.reminderRules || []), { id: `rule-${Date.now()}`, beforeMinutes: 120, minRemaining: 50 }] }))}><Plus size={14} /> 新增规则</button></div>
       {rules.length === 0 ? <div className="settings-empty">当前没有运行规则</div> : rules.map((rule, index) => <div className="rule-editor" key={rule.id}>
         <label><span>距重置 ≤（分钟）</span><input type="number" min="1" value={rule.beforeMinutes} onChange={(event) => update((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, beforeMinutes: event.target.value } : item) }))} /></label>
         <label><span>剩余额度 ≥（%）</span><input type="number" min="0" max="100" value={rule.minRemaining} onChange={(event) => update((old) => ({ ...old, reminderRules: old.reminderRules.map((item, itemIndex) => itemIndex === index ? { ...item, minRemaining: event.target.value } : item) }))} /></label>
         <button className="icon-button danger rule-delete" title="删除规则" aria-label={`删除 ${rule.label || '规则'}`} onClick={() => update((old) => ({ ...old, reminderRules: old.reminderRules.filter((item) => item.id !== rule.id) }))}><Trash2 size={13} /></button>
       </div>)}
       <small className="drawer-help">同时满足两项条件时提醒。</small>
-      <div className="setting-select"><span><b>轮询间隔</b><small>所有账号统一检查频率</small></span><select value={values.pollMinutes} onChange={(event) => update((old) => ({ ...old, pollMinutes: event.target.value }))}><option value="5">5 分钟</option><option value="10">10 分钟</option><option value="15">15 分钟</option><option value="30">30 分钟</option></select></div>
     </section>
     </>}
     {(desktopSection === 'all' || desktopSection === 'display') && <>
-    <section className="drawer-section"><div className="drawer-section-title"><SunMoon size={16} /><span>外观显示</span></div>
+    <section className="drawer-section">{showHeading && <div className="drawer-section-title"><SunMoon size={16} /><span>外观显示</span></div>}
       <div className="setting-select"><span><b>界面主题</b><small>主窗口与桌面浮窗同步应用</small></span><select value={values.theme === 'light' ? 'light' : 'dark'} onChange={(event) => update((old) => ({ ...old, theme: event.target.value }))}><option value="dark">暗色</option><option value="light">亮色</option></select></div>
-      <Toggle checked={values.showUpcomingRefresh !== false} onChange={(value) => update((old) => ({ ...old, showUpcomingRefresh: value }))} label="显示即将刷新" description="在看板底部按重置时间从近到远列出即将刷新的账号，电脑端与手机远程查看页均生效" />
+      <Toggle checked={values.showUpcomingRefresh !== false} onChange={(value) => update((old) => ({ ...old, showUpcomingRefresh: value }))} label="显示即将刷新" description="在电脑和手机看板底部显示各周期的刷新队列" />
     </section>
     </>}
   </>;
@@ -2046,7 +2203,8 @@ function AccountRow({ account, provider, testing, onEdit, onTest, onToggleDisabl
 }
 
 function SettingsDrawer({ variant = 'desktop', accounts, providers, settings, setSettings, onClose, openModal, onDeleteAccount, onToggleAccountDisabled, onTestAccount, testingAccountId, onEditProvider, autoLaunch, onToggleAutoLaunch, appVersion, update, onOpenUpdate, onCheckUpdate, onClearHistory, runtime, onReopenOnboarding, onOpenDevTools, onExportData, onImportData, dataBusy, onSaveRemoteSettings, theme, setTheme, mode, setMode }) {
-  const [category, setCategory] = useState('general');
+  const [category, setCategory] = useState('appearance');
+  const [page, setPage] = useState(null);
   const drawerRef = useRef(null);
   const scrollRef = useRef(null);
   const categoryNavRef = useRef(null);
@@ -2098,11 +2256,76 @@ function SettingsDrawer({ variant = 'desktop', accounts, providers, settings, se
       if (previousFocus?.isConnected) previousFocus.focus();
     };
   }, [variant]);
-  const selectCategory = (key) => { setCategory(key); scrollRef.current?.scrollTo({ top: 0 }); };
+  const selectCategory = (key) => { setCategory(key); setPage(null); scrollRef.current?.scrollTo({ top: 0 }); };
   if (variant === 'remote') return <SharedSettingsPanel variant="remote" settings={settings} onSave={onSaveRemoteSettings} theme={theme} setTheme={setTheme} mode={mode} setMode={setMode} />;
   const proxyMode = ['direct', 'system', 'manual'].includes(settings.proxyMode) ? settings.proxyMode : 'system';
-  const categories = [['general', '通用'], ['accounts', '账号管理'], ['other', '其他']];
-  return <><div className="drawer-shade" onClick={onClose} /><aside className="settings-drawer" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabIndex={-1} ref={drawerRef}>
+  const categories = [['appearance', '外观'], ['accounts', '账号'], ['monitoring', '监控'], ['data', '数据'], ['system', '系统']];
+  const pages = [
+    {
+      id: 'display', category: 'appearance', title: '外观与窗口', icon: SunMoon, inline: true,
+      content: <>
+        <SharedSettingsPanel desktopSection="display" settings={settings} setSettings={setSettings} />
+        {window.quotaDesk?.resetWindowSize && <section className="drawer-section"><div className="drawer-section-title"><AppWindow size={16} /><span>主窗口</span></div><div className="setting-select"><span><b>窗口大小</b><small>拖动窗口边缘自由调整（最小 520 × 470），内容自动多列铺开；大小会被记住</small></span><button className="outline-button" onClick={() => window.quotaDesk.resetWindowSize()}>恢复默认大小</button></div></section>}
+      </>,
+    },
+    {
+      id: 'widget', category: 'appearance', title: '浮窗样式与轮换', icon: Monitor, disclosure: true,
+      summary: `大小 ${Math.round(clampWidgetScale(settings.widgetScale) * 100)}% · 长度 ${Math.round(clampWidgetLength(settings.widgetLength) * 100)}%`,
+      overview: <section className="drawer-section"><Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" description="固定在桌面顶层，双击展开主窗口" /></section>,
+      help: <TitleHelp>长度只调整横向宽度（60%–150%）。浮窗会展示账号的全部额度窗口（含 1M）；空间不足时会逐级收起：标签先缩成小圆点再隐藏，倒计时按周期从长到短逐个隐藏，最后才收起最长周期的额度。只有一个额度窗口的账号通常不用收起任何内容；名称放不下时会显示省略号，悬停可查看完整内容。</TitleHelp>,
+      content: <section className="drawer-section"><Toggle checked={settings.widgetAutoScroll !== false} onChange={(value) => setSettings((old) => ({ ...old, widgetAutoScroll: value }))} label="自动轮换账号" description="多个账号时每隔几秒切换展示；关闭后固定当前账号，滚轮仍可手动切换" /><label className="size-slider"><span>大小</span><input type="range" min={80} max={300} step={5} value={Math.round(clampWidgetScale(settings.widgetScale) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetScale: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetScale(settings.widgetScale) * 100)}%</b></label><label className="size-slider"><span>长度</span><input type="range" min={Math.round(WIDGET_MIN_LENGTH * 100)} max={Math.round(WIDGET_MAX_LENGTH * 100)} step={5} value={Math.round(clampWidgetLength(settings.widgetLength) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetLength: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetLength(settings.widgetLength) * 100)}%</b></label><button type="button" className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetScale: 0.9, widgetLength: 0.9 }))}>恢复默认大小与长度</button><div className="widget-setting-preview"><div style={{ width: Math.round(WIDGET_BASE_SIZE.width * clampWidgetLength(settings.widgetLength)), maxWidth: '100%', margin: '0 auto' }}>{(() => { const previewAccount = accounts.find((item) => !item.disabled) ?? accounts[0]; return <WidgetRow account={previewAccount} provider={providers.find((item) => item.id === previewAccount?.providerId)} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} />; })()}</div></div><button className="outline-button full" onClick={() => { setPage(null); setSettings((old) => ({ ...old, widgetPreview: true })); }}><Eye size={15} /> 预览并调整</button></section>,
+    },
+    {
+      id: 'accounts', category: 'accounts', title: '账号与凭据', icon: ShieldCheck, inline: true,
+      content: <section className="drawer-section"><div className="drawer-section-title"><ShieldCheck size={16} /><span>账号与凭据</span><button type="button" className="mini-add" onClick={() => openModal('account')}><Plus size={14} /> 添加账号</button></div><div className="settings-list settings-accounts-list">{accounts.length === 0 && <div className="settings-empty">还没有账号</div>}{accounts.map((account) => <AccountRow key={account.id} account={account} provider={providers.find((item) => item.id === account.providerId)} testing={testingAccountId === account.id} onEdit={(item) => openModal({ type: 'account-edit', account: item })} onTest={onTestAccount} onToggleDisabled={onToggleAccountDisabled} onDelete={onDeleteAccount} />)}</div>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button full drawer-import-button" onClick={() => openModal('import-ccswitch')}><Download size={14} /> 从 cc-switch 导入账号</button>}</section>,
+    },
+    {
+      id: 'providers', category: 'accounts', title: '厂商适配', icon: LayoutGrid, disclosure: true,
+      summary: `${providers.length} 个厂商 · 查询接口与额度映射`,
+      actions: <button type="button" className="mini-add" onClick={() => openModal('provider')}><Plus size={14} /> 新增厂商</button>,
+      content: <section className="drawer-section"><div className="settings-list providers-list">{providers.map((provider) => <div className="settings-account" key={provider.id}><Logo provider={provider} size="sm" /><div><b title={provider.name}>{provider.name}</b><small>{provider.requestConfig?.adapterMode === 'script' ? '脚本适配' : ['grok', 'grokbot'].includes(provider.requestConfig?.adapterMode) ? '专属适配' : '标准映射'}</small></div><button className="row-icon-button" title="编辑厂商" aria-label={`编辑 ${provider.name}`} onClick={() => onEditProvider(provider)}><Pencil size={13} /></button><span className="adapter-state"><Check size={13} /></span></div>)}</div></section>,
+    },
+    {
+      id: 'reminders', category: 'monitoring', title: '提醒规则', icon: Bell, disclosure: true,
+      summary: `${(settings.reminderRules || []).length} 条规则 · 重置时间与剩余额度`,
+      overview: <SharedSettingsPanel desktopSection="monitoring" settings={settings} setSettings={setSettings} />,
+      content: <SharedSettingsPanel desktopSection="rules" showHeading={false} settings={settings} setSettings={setSettings} />,
+    },
+    {
+      id: 'local-usage', category: 'monitoring', title: '本机用量', icon: SquareTerminal, inline: true,
+      content: <section className="drawer-section"><div className="drawer-section-title"><SquareTerminal size={16} /><span>本机用量</span></div><Toggle checked={settings.localCliUsage?.scanWsl !== false} onChange={(value) => setSettings((old) => ({ ...old, localCliUsage: { ...(old.localCliUsage || {}), scanWsl: value } }))} label="统计 WSL 用量" description="统计运行中 WSL 发行版的 CLI 用量，未安装时自动忽略" /></section>,
+    },
+    {
+      id: 'history', category: 'data', title: '历史与备份', icon: History, inline: true,
+      content: <section className="drawer-section"><div className="drawer-section-title"><History size={16} /><span>历史与备份</span><TitleHelp><span>额度历史：每次成功刷新后记录一条；超过保留时长的记录会自动清理；选择“永久”时，超过 30 天的记录会自动降采样为每小时一条，删除账号也会一并删除该账号的历史。</span><br /><span>数据导入与导出：导出包含账号信息、账号凭据、自定义厂商、额度历史和周期档案；导入会合并数据并跳过重复账号与厂商。导出文件含敏感凭据，请妥善保管。</span></TitleHelp></div><div className="setting-select"><span><b>保留时长</b><small>每次成功刷新后记录，用于账号趋势图</small></span><select value={settings.historyDays} onChange={(event) => setSettings((old) => ({ ...old, historyDays: Number(event.target.value) }))}><option value={3}>3 天</option><option value={7}>7 天（默认）</option><option value={15}>15 天</option><option value={30}>30 天</option><option value={60}>60 天</option><option value={90}>3 个月（最长）</option><option value={0}>永久</option></select></div><button className="outline-button full" onClick={onClearHistory}><Trash2 size={14} /> 清除全部历史记录</button><div className="data-transfer-actions"><button type="button" className="outline-button" disabled={Boolean(dataBusy)} onClick={onExportData}><Download size={14} /> {dataBusy === 'export' ? '正在导出…' : '导出数据'}</button><button type="button" className="outline-button" disabled={Boolean(dataBusy)} onClick={onImportData}><UploadCloud size={14} /> {dataBusy === 'import' ? '正在导入…' : '导入数据'}</button></div></section>,
+    },
+    {
+      id: 'archives', category: 'data', title: '用量档案', icon: Database, disclosure: true,
+      summary: '本机与导入来源 · 用量档案导入、导出',
+      content: <UsageArchivesSettings showHeading={false} />,
+    },
+    {
+      id: 'sync', category: 'data', title: 'WebDAV 云同步', icon: Cloud,
+      summary: '加密同步用量档案至网盘或 NAS',
+      content: <WebDavSyncSettings showHeading={false} />,
+      available: Boolean(window.quotaDesk?.getUsageSyncStatus),
+    },
+    {
+      id: 'proxy', category: 'system', title: '网络代理', icon: Globe, inline: true,
+      content: <section className="drawer-section"><div className="drawer-section-title"><Globe size={16} /><span>网络代理</span><TitleHelp>访问 Claude、Codex、Gemini、Grok 等境外厂商时直连常被中断，建议配置可用代理。地址以代理工具实际监听的端口为准（Clash Verge Rev 默认 mixed-port 7897）；只填写 host:port 时按 HTTP 代理处理。切换代理模式后，建议点击账号行的“刷新”验证效果。</TitleHelp></div><div className="setting-select"><span><b>代理模式</b><small>所有账号的额度请求共用，保存后立即生效</small></span><select value={proxyMode} onChange={(event) => setSettings((old) => ({ ...old, proxyMode: event.target.value }))}><option value="system">跟随系统（默认）</option><option value="manual">手动输入</option><option value="direct">不使用代理</option></select></div>{proxyMode === 'manual' && <label className="field drawer-proxy-field"><span>代理地址 <small>留空时退回跟随系统</small></span><input value={settings.proxyUrl ?? ''} onChange={(event) => setSettings((old) => ({ ...old, proxyUrl: event.target.value }))} placeholder="http://127.0.0.1:7897 或 socks5://127.0.0.1:7898" spellCheck="false" autoComplete="off" /></label>}</section>,
+    },
+    {
+      id: 'remote', category: 'system', title: '远程查看', icon: Monitor, disclosure: true,
+      summary: '局域网访问、端口与配对设备',
+      content: <section className="drawer-section"><RemoteViewSettings /></section>,
+    },
+    {
+      id: 'startup', category: 'system', title: '启动与更新', icon: Power, inline: true,
+      content: <section className="drawer-section"><div className="drawer-section-title"><Power size={16} /><span>启动与更新</span></div><Toggle checked={autoLaunch} onChange={onToggleAutoLaunch} label="开机自启" description="登录 Windows 后自动启动 Quota Desk" /><Toggle checked={settings.autoUpdate !== false} onChange={(value) => setSettings((old) => ({ ...old, autoUpdate: value }))} label="自动检查更新" description="启动时及每小时自动检查 GitHub 上是否有新版本" /><div className="setting-select"><span><b>版本更新</b><small>当前版本 v{appVersion || '-'}</small></span>{update && ['available', 'downloading', 'downloaded'].includes(update.status) ? <button className="outline-button" onClick={onOpenUpdate}>v{update.version} 可用</button> : <button className="outline-button" disabled={update?.status === 'checking'} onClick={onCheckUpdate}>{update?.status === 'checking' ? '正在检查…' : '检查更新'}</button>}</div>{settings.ignoredUpdateVersion && <div className="setting-select"><span><b>已忽略 v{settings.ignoredUpdateVersion}</b><small>该版本的更新不再主动提醒，进入设置的检查更新仍可用</small></span><button className="outline-button" onClick={() => setSettings((old) => ({ ...old, ignoredUpdateVersion: null }))}>恢复提醒</button></div>}<button type="button" className="outline-button full" onClick={onReopenOnboarding}><Sparkles size={14} /> 重新打开新手指引</button>{onOpenDevTools && <button type="button" className="outline-button full" onClick={onOpenDevTools}><Bug size={14} /> 打开调试面板（F12）</button>}</section>,
+    },
+  ].filter((item) => item.available !== false);
+  const activePage = pages.find((item) => item.id === page && !item.inline && !item.disclosure);
+  return <><div className="drawer-shade" onClick={onClose} /><aside className="settings-drawer" role="dialog" aria-modal={activePage ? undefined : true} aria-labelledby="settings-title" tabIndex={-1} ref={drawerRef} inert={Boolean(activePage)}>
     <div className="drawer-header"><h2 id="settings-title">设置</h2><button type="button" className="icon-button" onClick={onClose} title="关闭（Esc）" aria-label="关闭设置"><X size={17} /></button></div>
     <div className="settings-nav-strip">
       <button type="button" className="settings-nav-arrow" hidden={!categoryScroll.left && !categoryScroll.right} aria-label="向左滚动设置分类" disabled={!categoryScroll.left} onClick={() => categoryNavRef.current?.scrollBy({ left: -220 })}><ChevronLeft size={15} /></button>
@@ -2115,25 +2338,18 @@ function SettingsDrawer({ variant = 'desktop', accounts, providers, settings, se
       <button type="button" className="settings-nav-arrow" hidden={!categoryScroll.left && !categoryScroll.right} aria-label="向右滚动设置分类" disabled={!categoryScroll.right} onClick={() => categoryNavRef.current?.scrollBy({ left: 220 })}><ChevronRight size={15} /></button>
     </div>
     <div className="drawer-scroll" id="settings-content" ref={scrollRef}>
-      {category === 'general' && <>
-        <SharedSettingsPanel desktopSection="display" settings={settings} setSettings={setSettings} />
-        {window.quotaDesk?.resetWindowSize && <section className="drawer-section"><div className="drawer-section-title"><AppWindow size={16} /><span>主窗口</span></div><div className="setting-select"><span><b>窗口大小</b><small>拖动窗口边缘自由调整（最小 520 × 470），内容自动多列铺开；大小会被记住</small></span><button className="outline-button" onClick={() => window.quotaDesk.resetWindowSize()}>恢复默认大小</button></div></section>}
-        <section className="drawer-section"><div className="drawer-section-title"><Monitor size={16} /><span>桌面浮窗</span><TitleHelp>长度只调整横向宽度（60%–150%）。浮窗会展示账号的全部额度窗口（含 1M）；空间不足时会逐级收起：标签先缩成小圆点再隐藏，倒计时按周期从长到短逐个隐藏，最后才收起最长周期的额度。只有一个额度窗口的账号通常不用收起任何内容；名称放不下时会显示省略号，悬停可查看完整内容。</TitleHelp></div><Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" description="固定在桌面顶层，双击展开主窗口" /><Toggle checked={settings.widgetAutoScroll !== false} onChange={(value) => setSettings((old) => ({ ...old, widgetAutoScroll: value }))} label="自动轮换账号" description="多个账号时每隔几秒切换展示；关闭后固定当前账号，滚轮仍可手动切换" /><label className="size-slider"><span>大小</span><input type="range" min={80} max={300} step={5} value={Math.round(clampWidgetScale(settings.widgetScale) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetScale: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetScale(settings.widgetScale) * 100)}%</b></label><label className="size-slider"><span>长度</span><input type="range" min={Math.round(WIDGET_MIN_LENGTH * 100)} max={Math.round(WIDGET_MAX_LENGTH * 100)} step={5} value={Math.round(clampWidgetLength(settings.widgetLength) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetLength: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetLength(settings.widgetLength) * 100)}%</b></label><button type="button" className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetScale: 0.9, widgetLength: 0.9 }))}>恢复默认大小与长度</button><div className="widget-setting-preview"><div style={{ width: Math.round(WIDGET_BASE_SIZE.width * clampWidgetLength(settings.widgetLength)), maxWidth: '100%', margin: '0 auto' }}>{(() => { const previewAccount = accounts.find((item) => !item.disabled) ?? accounts[0]; return <WidgetRow account={previewAccount} provider={providers.find((item) => item.id === previewAccount?.providerId)} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} />; })()}</div></div><button className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetPreview: true }))}><Eye size={15} /> 预览并调整</button></section>
-        <section className="drawer-section"><div className="drawer-section-title"><Globe size={16} /><span>远程查看</span></div><RemoteViewSettings /></section>
-        <SharedSettingsPanel desktopSection="general" settings={settings} setSettings={setSettings} />
-      </>}
-      {category === 'accounts' && <>
-        <section className="drawer-section"><div className="drawer-section-title"><ShieldCheck size={16} /><span>账号与凭据</span><button className="mini-add" onClick={() => openModal('account')}><Plus size={14} /> 添加账号</button></div><div className="settings-list">{accounts.length === 0 && <div className="settings-empty">还没有账号</div>}{accounts.map((account) => <AccountRow key={account.id} account={account} provider={providers.find((item) => item.id === account.providerId)} testing={testingAccountId === account.id} onEdit={(item) => openModal({ type: 'account-edit', account: item })} onTest={onTestAccount} onToggleDisabled={onToggleAccountDisabled} onDelete={onDeleteAccount} />)}</div>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button full drawer-import-button" onClick={() => openModal('import-ccswitch')}><Download size={14} /> 从 cc-switch 导入账号</button>}</section>
-        <section className="drawer-section"><div className="drawer-section-title"><LayoutGrid size={16} /><span>厂商适配</span><button className="mini-add" onClick={() => openModal('provider')}><Plus size={14} /> 新增厂商</button></div><div className="settings-list providers-list">{providers.map((provider) => <div className="settings-account" key={provider.id}><Logo provider={provider} size="sm" /><div><b title={provider.name}>{provider.name}</b><small>{provider.requestConfig?.adapterMode === 'script' ? '脚本适配' : ['grok', 'grokbot'].includes(provider.requestConfig?.adapterMode) ? '专属适配' : '标准映射'}</small></div><button className="row-icon-button" title="编辑厂商" aria-label={`编辑 ${provider.name}`} onClick={() => onEditProvider(provider)}><Pencil size={13} /></button><span className="adapter-state"><Check size={13} /></span></div>)}</div></section>
-      </>}
-      {category === 'other' && <>
-        <section className="drawer-section"><div className="drawer-section-title"><Globe size={16} /><span>网络代理</span><TitleHelp>访问 Claude、Codex、Gemini、Grok 等境外厂商时直连常被中断，建议配置可用代理。地址以代理工具实际监听的端口为准（Clash Verge Rev 默认 mixed-port 7897）；只填写 host:port 时按 HTTP 代理处理。切换代理模式后，建议点击账号行的“刷新”验证效果。</TitleHelp></div><div className="setting-select"><span><b>代理模式</b><small>所有账号的额度请求共用，保存后立即生效</small></span><select value={proxyMode} onChange={(event) => setSettings((old) => ({ ...old, proxyMode: event.target.value }))}><option value="system">跟随系统（默认）</option><option value="manual">手动输入</option><option value="direct">不使用代理</option></select></div>{proxyMode === 'manual' && <label className="field drawer-proxy-field"><span>代理地址 <small>留空时退回跟随系统</small></span><input value={settings.proxyUrl ?? ''} onChange={(event) => setSettings((old) => ({ ...old, proxyUrl: event.target.value }))} placeholder="http://127.0.0.1:7897 或 socks5://127.0.0.1:7898" spellCheck="false" autoComplete="off" /></label>}</section>
-        <section className="drawer-section"><div className="drawer-section-title"><Database size={16} /><span>数据管理</span><TitleHelp><span>额度历史：每次成功刷新后记录一条；超过保留时长的记录会自动清理；选择“永久”时，超过 30 天的记录会自动降采样为每小时一条，删除账号也会一并删除该账号的历史。</span><br /><span>数据导入与导出：导出包含账号信息、账号凭据、自定义厂商、额度历史和周期档案；导入会合并数据并跳过重复账号与厂商。导出文件含敏感凭据，请妥善保管。</span></TitleHelp></div><div className="setting-select"><span><b>保留时长</b><small>每次成功刷新后记录，用于账号趋势图</small></span><select value={settings.historyDays} onChange={(event) => setSettings((old) => ({ ...old, historyDays: Number(event.target.value) }))}><option value={3}>3 天</option><option value={7}>7 天（默认）</option><option value={15}>15 天</option><option value={30}>30 天</option><option value={60}>60 天</option><option value={90}>3 个月（最长）</option><option value={0}>永久</option></select></div><button className="outline-button full" onClick={onClearHistory}><Trash2 size={14} /> 清除全部历史记录</button><div className="data-transfer-actions"><button type="button" className="outline-button" disabled={Boolean(dataBusy)} onClick={onExportData}><Download size={14} /> {dataBusy === 'export' ? '正在导出…' : '导出数据'}</button><button type="button" className="outline-button" disabled={Boolean(dataBusy)} onClick={onImportData}><UploadCloud size={14} /> {dataBusy === 'import' ? '正在导入…' : '导入数据'}</button></div></section>
-        <section className="drawer-section"><div className="drawer-section-title"><SquareTerminal size={16} /><span>本机用量</span></div><Toggle checked={settings.localCliUsage?.scanWsl !== false} onChange={(value) => setSettings((old) => ({ ...old, localCliUsage: { ...(old.localCliUsage || {}), scanWsl: value } }))} label="统计 WSL 用量" description="Windows 下同时扫描 WSL 各发行版内的 CLI 用量数据；仅统计运行中的发行版，未安装 WSL 时自动忽略" /></section>
-        <section className="drawer-section"><div className="drawer-section-title"><Power size={16} /><span>系统更新</span></div><Toggle checked={autoLaunch} onChange={onToggleAutoLaunch} label="开机自启" description="登录 Windows 后自动启动 Quota Desk" /><Toggle checked={settings.autoUpdate !== false} onChange={(value) => setSettings((old) => ({ ...old, autoUpdate: value }))} label="自动检查更新" description="启动时及每小时自动检查 GitHub 上是否有新版本" /><div className="setting-select"><span><b>版本更新</b><small>当前版本 v{appVersion || '-'}</small></span>{update && ['available', 'downloading', 'downloaded'].includes(update.status) ? <button className="outline-button" onClick={onOpenUpdate}>v{update.version} 可用</button> : <button className="outline-button" disabled={update?.status === 'checking'} onClick={onCheckUpdate}>{update?.status === 'checking' ? '正在检查…' : '检查更新'}</button>}</div>{settings.ignoredUpdateVersion && <div className="setting-select"><span><b>已忽略 v{settings.ignoredUpdateVersion}</b><small>该版本的更新不再主动提醒，进入设置的检查更新仍可用</small></span><button className="outline-button" onClick={() => setSettings((old) => ({ ...old, ignoredUpdateVersion: null }))}>恢复提醒</button></div>}<button type="button" className="outline-button full" onClick={onReopenOnboarding}><Sparkles size={14} /> 重新打开新手指引</button>{onOpenDevTools && <button type="button" className="outline-button full" onClick={onOpenDevTools}><Bug size={14} /> 打开调试面板（F12）</button>}</section>
-      </>}
+      <div className="settings-directory" key={category}>
+        {pages.filter((item) => item.category === category).map(({ id, title, icon: Icon, summary, inline, disclosure, help, actions, overview, content }) => <Fragment key={id}>
+          {overview}
+          {inline ? content : disclosure ? <SettingsDisclosure id={id} title={title} icon={Icon} summary={summary} help={help} actions={actions}>{content}</SettingsDisclosure> : <button type="button" className="settings-entry" id={`settings-entry-${id}`} aria-label={`打开${title}`} aria-describedby={`settings-summary-${id}`} aria-haspopup="dialog" onClick={() => setPage(id)}>
+            <Icon size={18} /><span className="settings-entry-copy"><b>{title}</b><small id={`settings-summary-${id}`}>{summary}</small></span><ChevronRight size={15} />
+          </button>}
+        </Fragment>)}
+      </div>
     </div>
-  </aside></>;
+  </aside>
+    {activePage && <SettingsWindow title={activePage.title} icon={activePage.icon} help={activePage.help} actions={activePage.actions} onClose={() => setPage(null)}>{activePage.content}</SettingsWindow>}
+  </>;
 }
 
 // 浮窗等比缩放容器：布局尺寸按比例反向缩小，再用 transform 放大，视觉上正好铺满窗口；长度只影响横向布局宽度
@@ -2479,7 +2695,7 @@ function ProviderUsageConnectionCard({ account, provider, onState }) {
   </div>;
 }
 
-function AccountEditModalV2({ account, provider, onClose, onSave, onTestDraft, onProviderUsageState, onScanLogin = null }) {
+function AccountEditModalV2({ account, provider, onClose, onSave, onTestDraft, onProviderUsageState, onScanLogin = null, onReloginCli = null }) {
   const [name, setName] = useState(account.name || '');
   const [identity, setIdentity] = useState(account.identity || '');
   const [tags, setTags] = useState((account.tags || []).join(', '));
@@ -2509,7 +2725,7 @@ function AccountEditModalV2({ account, provider, onClose, onSave, onTestDraft, o
     } finally { setTesting(false); }
   };
   const submit = async (event) => { event.preventDefault(); if (!name.trim() || (!cliProvider && !accountEndpoint) || !selected.length) return; const { publicVariables, secretVariables } = splitVariableValues(provider, variableValues); setSaving(true); try { await onSave({ account, name: name.trim(), identity: identity.trim(), tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean), endpoint: accountEndpoint, windowKeys: selected, timeoutSeconds: clampAccountTimeout(timeoutSeconds), variables: publicVariables, secretVariables }); } finally { setSaving(false); } };
-  return <div className="modal-backdrop" onClick={onClose}><form className="modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><h2>编辑 {account.name}</h2></div></div><div className="form-grid"><label className="field"><span>账号名</span><input required value={name} onChange={(event) => setName(event.target.value)} /></label><label className="field"><span>标识</span><input value={identity} onChange={(event) => setIdentity(event.target.value)} /></label></div><label className="field"><span>标签 <small>用逗号分隔，可留空</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} /></label>{!['script', 'grok', 'grokbot', 'mimo'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <label className="field"><span>详细额度接口路径</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} /></label>}<div className="form-grid"><label className="field"><span>请求超时（秒）<small>5–120，默认 15；跨境或代理网络可调大</small></span><input type="number" min="5" max="120" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.target.value)} placeholder="15" /></label></div><div className="field"><span>额度窗口</span><div className="window-choice">{availableWindows.map((key) => <button type="button" key={key} className={`window-choice-item ${selected.includes(key) ? 'selected' : ''}`} onClick={() => toggle(key)}><span>{selected.includes(key) ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>)}</div></div>{account.cliAuthSource === 'snapshot' && <div className="adapter-note"><ShieldCheck size={15} /><span>{cliProvider && (provider?.requestConfig?.adapterMode === 'kimi' || provider?.adapter === 'kimi') ? '该账号使用扫码导入的 Kimi 订阅登录快照：令牌由本应用自动续期；若登录在官方侧失效，请重新扫码「导入订阅登录」。' : cliProvider && (provider?.requestConfig?.adapterMode === 'copilot' || provider?.adapter === 'copilot') ? '该账号使用设备码授权的 GitHub 登录快照：令牌长期有效、无需续期；若授权被吊销或已改密，请重新「导入订阅登录」完成设备码授权。' : '该账号使用独立的登录快照：令牌由本应用自动续期，不依赖本机 CLI 当前激活的 profile；若登录在官方侧失效，请重新登录后再次「导入订阅登录」。'}</span></div>}{kimiKeyAccount && onScanLogin && <div className="kimi-upgrade-card"><div className="adapter-note"><QrCode size={15} /><span>该账号当前使用 API Key 查询额度，无法获取月订阅额度。可扫码登录切换为订阅模式（5 小时 / 7 天 / 月）；<b>请确保扫码账号与 API Key 属于同一用户，否则额度数据可能错乱</b>。扫码后 API Key 会保留（便于 cc-switch 导入时去重）。</span></div><button type="button" className="outline-button kimi-upgrade-button" onClick={onScanLogin}><QrCode size={13} /> 扫码登录</button></div>}{variableDefinitions.length > 0 && <div className="adapter-config account-variables"><span className="eyebrow">厂商变量</span><div className="form-grid">{variableDefinitions.map((item) => { const lockedKey = item.system && item.key === 'apiKey'; return <label className="field" key={item.key}><span>{item.label || item.key}{lockedKey ? <small> 创建后不可修改</small> : item.secret && <small> 留空保留原值</small>}</span><input type={item.secret ? 'password' : 'text'} required={item.required && !item.secret} disabled={lockedKey} value={lockedKey ? '' : (variableValues[item.key] ?? '')} onChange={(event) => setVariableValues((old) => ({ ...old, [item.key]: event.target.value }))} placeholder={lockedKey ? '如需更换请删除账号后重新添加' : item.secret ? '未修改' : (item.defaultValue || item.key)} /></label>; })}</div></div>}{!['script', 'grok', 'grokbot', 'mimo'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <div className="adapter-note"><KeyRound size={15} /><span>凭据创建后不可修改；如需更换 API Token，请删除该账号后重新添加。</span></div>}<ProviderUsageConnectionCard account={account} provider={provider} onState={onProviderUsageState} />{testResult && <div className={`draft-test-result ${testResult.ok ? 'ok' : 'fail'}`}><span>{testResult.ok ? '测试通过' : '测试失败'} · {testResult.message}</span></div>}<div className="modal-actions"><button type="button" className="outline-button" onClick={onClose}>取消</button><button type="button" className="outline-button" disabled={testing || !name.trim() || (!cliProvider && !accountEndpoint) || !selected.length} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" disabled={saving || !selected.length}>{saving ? '正在保存' : '保存'}</button></div></form></div>;
+  return <div className="modal-backdrop" onClick={onClose}><form className="modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><h2>编辑 {account.name}</h2></div></div><div className="form-grid"><label className="field"><span>账号名</span><input required value={name} onChange={(event) => setName(event.target.value)} /></label><label className="field"><span>标识</span><input value={identity} onChange={(event) => setIdentity(event.target.value)} /></label></div><label className="field"><span>标签 <small>用逗号分隔，可留空</small></span><input value={tags} onChange={(event) => setTags(event.target.value)} /></label>{!['script', 'grok', 'grokbot', 'mimo'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <label className="field"><span>详细额度接口路径</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value)} /></label>}<div className="form-grid"><label className="field"><span>请求超时（秒）<small>5–120，默认 15；跨境或代理网络可调大</small></span><input type="number" min="5" max="120" value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(event.target.value)} placeholder="15" /></label></div><div className="field"><span>额度窗口</span><div className="window-choice">{availableWindows.map((key) => <button type="button" key={key} className={`window-choice-item ${selected.includes(key) ? 'selected' : ''}`} onClick={() => toggle(key)}><span>{selected.includes(key) ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>)}</div></div>{account.cliAuthSource === 'snapshot' && <div className="adapter-note"><ShieldCheck size={15} /><span>{cliProvider && (provider?.requestConfig?.adapterMode === 'kimi' || provider?.adapter === 'kimi') ? '该账号使用扫码导入的 Kimi 订阅登录快照：令牌由本应用自动续期；若登录在官方侧失效，请重新扫码「导入订阅登录」。' : cliProvider && (provider?.requestConfig?.adapterMode === 'copilot' || provider?.adapter === 'copilot') ? '该账号使用设备码授权的 GitHub 登录快照：令牌长期有效、无需续期；若授权被吊销或已改密，请重新「导入订阅登录」完成设备码授权。' : cliProvider && (provider?.requestConfig?.adapterMode === 'claude' || provider?.adapter === 'claude') ? '该账号使用导入的 Claude 登录快照：令牌由本应用自动续期；本机 Claude Code 登录同一账号时会自动跟随其凭据。Claude 官方登录不支持多设备同时保活——在其它设备登录同一账号会轮换掉这里的凭据，届时请在本机重新登录该账号后点击「重新导入本机登录」。' : '该账号使用独立的登录快照：令牌由本应用自动续期，不依赖本机 CLI 当前激活的 profile；若登录在官方侧失效，请重新登录后再次「导入订阅登录」。'}</span></div>}{account.cliAuthSource === 'snapshot' && ['claude', 'codex', 'gemini', 'grok', 'grokbot'].includes(provider?.requestConfig?.adapterMode || provider?.adapter) && onReloginCli && <div className="kimi-upgrade-card"><div className="adapter-note"><RefreshCw size={15} /><span>手动替换底层凭据：在本机 CLI 重新登录该账号后，点击右侧按钮把最新登录回写进快照（身份指纹随之一并更新）。</span></div><button type="button" className="outline-button kimi-upgrade-button" onClick={onReloginCli}><RefreshCw size={13} /> 重新导入本机登录</button></div>}{kimiKeyAccount && onScanLogin && <div className="kimi-upgrade-card"><div className="adapter-note"><QrCode size={15} /><span>该账号当前使用 API Key 查询额度，无法获取月订阅额度。可扫码登录切换为订阅模式（5 小时 / 7 天 / 月）；<b>请确保扫码账号与 API Key 属于同一用户，否则额度数据可能错乱</b>。扫码后 API Key 会保留（便于 cc-switch 导入时去重）。</span></div><button type="button" className="outline-button kimi-upgrade-button" onClick={onScanLogin}><QrCode size={13} /> 扫码登录</button></div>}{variableDefinitions.length > 0 && <div className="adapter-config account-variables"><span className="eyebrow">厂商变量</span><div className="form-grid">{variableDefinitions.map((item) => { const lockedKey = item.system && item.key === 'apiKey'; return <label className="field" key={item.key}><span>{item.label || item.key}{lockedKey ? <small> 创建后不可修改</small> : item.secret && <small> 留空保留原值</small>}</span><input type={item.secret ? 'password' : 'text'} required={item.required && !item.secret} disabled={lockedKey} value={lockedKey ? '' : (variableValues[item.key] ?? '')} onChange={(event) => setVariableValues((old) => ({ ...old, [item.key]: event.target.value }))} placeholder={lockedKey ? '如需更换请删除账号后重新添加' : item.secret ? '未修改' : (item.defaultValue || item.key)} /></label>; })}</div></div>}{!['script', 'grok', 'grokbot', 'mimo'].includes(provider?.requestConfig?.adapterMode) && !cliProvider && <div className="adapter-note"><KeyRound size={15} /><span>凭据创建后不可修改；如需更换 API Token，请删除该账号后重新添加。</span></div>}<ProviderUsageConnectionCard account={account} provider={provider} onState={onProviderUsageState} />{testResult && <div className={`draft-test-result ${testResult.ok ? 'ok' : 'fail'}`}><span>{testResult.ok ? '测试通过' : '测试失败'} · {testResult.message}</span></div>}<div className="modal-actions"><button type="button" className="outline-button" onClick={onClose}>取消</button><button type="button" className="outline-button" disabled={testing || !name.trim() || (!cliProvider && !accountEndpoint) || !selected.length} onClick={runTest}>{testing ? '测试中…' : '测试'}</button><button className="primary-button" disabled={saving || !selected.length}>{saving ? '正在保存' : '保存'}</button></div></form></div>;
 }
 
 function ProviderModalV2({ provider, onClose, onSave }) {
@@ -2743,7 +2959,8 @@ const buildQrDataUrl = (content) => {
   } catch { return ''; }
 };
 
-// 标题旁的问号帮助：说明文字默认隐藏，悬停 / 键盘聚焦才展开。
+// 标题旁的问号帮助：说明文字默认隐藏，悬停 / 键盘聚焦 / 点按图标展开。
+// 触屏没有悬停、点按也未必触发 focus，点按改为切换气泡，点其他位置关闭。
 // 气泡用 portal 渲染到 body 顶层并 fixed 定位：不进弹窗的布局流（否则会撑出横向滚动条），
 // 也不受弹窗 overflow 裁剪，永远浮在最高层。
 function TitleHelp({ children }) {
@@ -2762,8 +2979,16 @@ function TitleHelp({ children }) {
     }
   };
   const hide = () => setAnchor(null);
+  useEffect(() => {
+    if (!anchor) return undefined;
+    const onPointerDown = (event) => {
+      if (!iconRef.current?.contains(event.target)) setAnchor(null);
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onPointerDown, true);
+  }, [anchor]);
   return <>
-    <span ref={iconRef} className="title-help" tabIndex={0} role="note" aria-label="说明" onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide}><HelpCircle size={14} /></span>
+    <span ref={iconRef} className="title-help" tabIndex={0} role="note" aria-label="说明" onMouseEnter={show} onMouseLeave={hide} onFocus={show} onBlur={hide} onClick={() => (anchor ? hide() : show())}><HelpCircle size={14} /></span>
     {anchor && createPortal(<span className="title-help-pop" style={anchor}>{children}</span>, document.body)}
   </>;
 }
@@ -3116,7 +3341,7 @@ function CopilotDevicePanel({ mode = 'import', reloginAccount = null, onExit, on
     }
   };
   // 「我已授权」：无倒计时——限频间隔内静默等到允许时刻再发，期间只显示「检测中…」；
-  // 结论以页面顶部的轻提示（toast）反馈，成功则直接进入第二步（界面切换即是反馈）
+  // 结论以页面底部的短暂提示反馈，成功则直接进入第二步（界面切换即是反馈）
   const checkNow = async () => {
     if (checkingRef.current) return;
     checkingRef.current = true;
@@ -3420,6 +3645,7 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
                     <span className={`kimi-qr-done-icon ${info.ok ? '' : 'duplicate'}`}>{info.ok ? <Check size={18} /> : <AlertCircle size={18} />}</span>
                     <div><b>{info.ok ? '已检测到本机登录' : '未检测到本机登录'}</b><small>{info.ok ? `标识：${info.display || '已登录'}` : `请先完成${channel.hint}（${channel.path}），再回来导入`}</small></div>
                   </div>}
+                {channel.kind === 'claude' && <div className="adapter-note"><AlertCircle size={15} /><span>Claude 官方登录不支持多设备同时保活：续期凭据每次刷新都会轮换，在其它设备登录同一账号会使这里失效（届时重新导入即可）。本机 Claude Code 登录同一账号时，此处会自动跟随其凭据并代为保活。</span></div>}
                 {error && <div className="adapter-note update-error"><AlertCircle size={15} /><span>{error}</span></div>}
                 {busy && <div className="adapter-note"><RefreshCw size={15} className="spinning" /><span>正在导入，请稍候…</span></div>}
                 <div className="form-grid">
@@ -3805,9 +4031,10 @@ function App() {
   const [dataBusy, setDataBusy] = useState(null);
   const [widgetIndex, setWidgetIndex] = useState(0);
   const [lastSync, setLastSync] = useState(new Date().toISOString());
-  const [desktopError, setDesktopError] = useState('');
-  const [toast, setToast] = useState(null);
-  useEffect(() => { if (!toast) return undefined; const timer = setTimeout(() => setToast(null), 4200); return () => clearTimeout(timer); }, [toast]);
+  const [toast, setToast] = useTransientToast();
+  const setDesktopError = useCallback((message) => {
+    if (message) setToast({ id: Date.now(), ok: false, message });
+  }, [setToast]);
   const [runtime, setRuntime] = useState({ running: Boolean(bridge), checking: false, nextPollAt: null });
   const [testingAccountId, setTestingAccountId] = useState(null);
   const [testResults, setTestResults] = useState({});
@@ -3879,14 +4106,14 @@ function App() {
       if (bridge) {
         const state = await bridge.pollAll();
         setAccounts(state.accounts); setLastSync(state.lastSync);
-        const failed = state.accounts.filter((account) => account.status === 'warning');
-        if (failed.length) setDesktopError(`${failed.length} 个账号检查失败，请到“账号总览”查看原因`);
+        setToast(accountRefreshFeedback(state.accounts));
       } else {
         await new Promise((resolve) => setTimeout(resolve, 500));
         setAccounts((old) => old.map((account) => ({ ...account, lastChecked: new Date().toISOString() })));
         setLastSync(new Date().toISOString());
+        setToast(accountRefreshFeedback(accounts));
       }
-    } catch (error) { setDesktopError(error.message); }
+    } catch { setToast(accountRefreshFeedback(accounts, { allFailed: true })); }
     finally { setRefreshing(false); }
   };
   const testAccount = async (account) => {
@@ -4088,7 +4315,9 @@ function App() {
     if (!inUsageView) { refreshAll(); return; }
     setRefreshing(true);
     const api = inLocalUsageView ? localUsageApiRef.current : wasteApiRef.current;
-    Promise.resolve(api?.refresh?.()).catch((error) => {
+    Promise.resolve(api?.refresh?.()).then(() => {
+      setToast({ id: Date.now(), ok: true, message: '数据已刷新' });
+    }).catch((error) => {
       setToast({ id: Date.now(), ok: false, message: error.message || '数据刷新失败' });
     }).finally(() => { setRefreshing(false); });
   };
@@ -4107,6 +4336,12 @@ function App() {
     setOnboardOpen(false);
   };
 
+  const boardPull = useBoardPullRefresh({
+    enabled: !inUsageView && !onboardOpen && accounts.length > 0 && !historyAccount && !settingsOpen && !modal && !viewMenuOpen,
+    refreshing,
+    onRefresh: refreshAll,
+  });
+
   const appShellControls = <>
     <span className="last-checked" title={inLocalUsageView ? '最后一次本机用量扫描时间' : inWasteView ? '最后一次历史周期读取时间' : '最后一次额度检查时间'}><Clock3 size={11} />{inLocalUsageView ? (localUsageMeta?.lastScannedAt ? formatChecked(localUsageMeta.lastScannedAt) : '未扫描') : inWasteView ? (wasteMeta?.loadedAt ? formatChecked(wasteMeta.loadedAt) : '未读取') : formatChecked(lastSync)}</span>
     {update && ['available', 'downloading', 'downloaded', 'error'].includes(update.status) && !(update.status === 'available' && update.version && update.version === settings.ignoredUpdateVersion) && <button className={`update-badge ${update.status}`} onClick={() => setUpdateOpen(true)} title="查看版本更新"><Download size={11} />{update.status === 'available' && `v${update.version} 可更新`}{update.status === 'downloading' && `下载中 ${update.percent || 0}%`}{update.status === 'downloaded' && '重启升级'}{update.status === 'error' && '更新失败'}</button>}
@@ -4119,9 +4354,10 @@ function App() {
   </>;
 
   return <AppShell controls={appShellControls} actions={appShellActions}>
-    {toast && <div className={`toast ${toast.ok ? 'ok' : 'fail'}`} role="status">{toast.ok ? <Check size={13} /> : <AlertCircle size={13} />}<span>{toast.message}</span></div>}
-    <main className={`main-shell${inUsageView ? ' local-usage-mode' : ''}`}>
-      <div className={`content-area${inUsageView ? ' local-usage-mode' : ''}`}>{desktopError && <div className="desktop-error"><AlertCircle size={15} /><span>{desktopError}</span><button onClick={() => setDesktopError('')} aria-label="关闭错误"><X size={14} /></button></div>}{inUsageView ? <StatisticsView mode={overviewMode} showNavigation={false} accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} Logo={Logo} api={bridge} onLocalApi={(api) => { localUsageApiRef.current = api; }} onLocalMeta={handleLocalUsageMeta} onWasteApi={(api) => { wasteApiRef.current = api; }} onWasteMeta={setWasteMeta} /> : onboardOpen ? <OnboardingWizard settings={settings} setSettings={setSettings} accounts={accounts} providers={providers} ccswitchAvailable={Boolean(bridge?.scanCcswitchImport) || new URLSearchParams(window.location.search).get('onboard') === '1'} onOpenImport={() => setModal('account')} onApplyCcswitch={async (keys, chosen) => {
+    <TransientToast toast={toast} />
+    <main ref={boardPull.ref} className={`main-shell${inUsageView ? ' local-usage-mode' : ''}`}>
+      <BoardPullRefreshIndicator pull={boardPull} />
+      <div className={`content-area${inUsageView ? ' local-usage-mode' : ''}`}>{inUsageView ? <StatisticsView mode={overviewMode} showNavigation={false} accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} Logo={Logo} api={bridge} onLocalApi={(api) => { localUsageApiRef.current = api; }} onLocalMeta={handleLocalUsageMeta} onWasteApi={(api) => { wasteApiRef.current = api; }} onWasteMeta={setWasteMeta} /> : onboardOpen ? <OnboardingWizard settings={settings} setSettings={setSettings} accounts={accounts} providers={providers} ccswitchAvailable={Boolean(bridge?.scanCcswitchImport) || new URLSearchParams(window.location.search).get('onboard') === '1'} onOpenImport={() => setModal('account')} onApplyCcswitch={async (keys, chosen) => {
         if (!bridge) {
           // 网页演示模式：直接把选中的模拟条目变成账号，走与真实导入一致的落库形态
           const stamp = Date.now();
@@ -4144,7 +4380,7 @@ function App() {
         const result = await bridge.applyCcswitchImport(keys);
         if (result?.state) { setAccounts(result.state.accounts || []); setProviders(result.state.providers || []); setLastSync(result.state.lastSync || new Date().toISOString()); if (result.state.runtime) setRuntime(result.state.runtime); }
         setToast({ id: Date.now(), ok: result?.imported > 0, message: result?.imported > 0 ? `已从 cc-switch 导入 ${result.imported} 个账号` : '没有导入新账号（凭据都已存在）' });
-      }} onDeleteAccount={deleteAccount} onFinish={finishOnboarding} /> : accounts.length === 0 ? <EmptyWorkspace onAddAccount={() => setModal('account')} onOpenSettings={() => setSettingsOpen(true)} onImport={window.quotaDesk?.scanCcswitchImport ? () => setModal('import-ccswitch') : undefined} /> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} onProviderUsageState={applyProviderUsageState} settings={settings} setSettings={setSettings} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} onReorderAccounts={reorderAccounts} sortWeights={{ fiveHourRemaining: settings.periodSort5hRemaining, otherRemaining: settings.periodSortLongRemaining }} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const kind = reloginChannel(provider)?.kind || 'kimi'; setModal({ type: `${kind}-relogin`, account }); }} />}</div>
+      }} onDeleteAccount={deleteAccount} onFinish={finishOnboarding} /> : accounts.length === 0 ? <EmptyWorkspace onAddAccount={() => setModal('account')} onOpenSettings={() => setSettingsOpen(true)} onImport={window.quotaDesk?.scanCcswitchImport ? () => setModal('import-ccswitch') : undefined} /> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} onProviderUsageState={applyProviderUsageState} settings={settings} setSettings={setSettings} onToast={setToast} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} onReorderAccounts={reorderAccounts} sortWeights={{ fiveHourRemaining: settings.periodSort5hRemaining, otherRemaining: settings.periodSortLongRemaining }} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const kind = reloginChannel(provider)?.kind || 'kimi'; setModal({ type: `${kind}-relogin`, account }); }} />}</div>
     </main>
     {settings.showUpcomingRefresh !== false && !inUsageView && !onboardOpen && !historyAccount && accounts.length > 0 && <UpcomingRefreshBar accounts={accounts} providers={providers} onOpenHistory={(account) => setHistoryAccountId(account.id)} />}
     {settingsOpen && <SettingsDrawer accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)} openModal={setModal} onDeleteAccount={deleteAccount} onToggleAccountDisabled={toggleAccountDisabled} onTestAccount={testAccount} testingAccountId={testingAccountId} onEditProvider={editProvider} autoLaunch={autoLaunch} onToggleAutoLaunch={toggleAutoLaunch} appVersion={appVersion} update={update} onOpenUpdate={() => setUpdateOpen(true)} onCheckUpdate={onCheckUpdate} onClearHistory={clearHistory} runtime={runtime} onExportData={exportData} onImportData={importData} dataBusy={dataBusy} onReopenOnboarding={() => { setSettingsOpen(false); setHistoryAccountId(null); setOnboardOpen(true); }} onOpenDevTools={bridge?.toggleDevTools ? () => bridge.toggleDevTools() : null} />}
@@ -4156,7 +4392,7 @@ function App() {
       lastSaved.current = '';
       setToast({ id: Date.now(), ok: !result?.duplicate, message: result?.duplicate ? `该登录已收录在账号「${result.name}」中` : `已导入「${result.name}」，正在刷新额度` });
     }} />}
-    {modal?.type === 'account-edit' && <AccountEditModalV2 account={accounts.find((item) => item.id === modal.account.id) || modal.account} provider={providers.find((item) => item.id === modal.account.providerId)} onClose={() => setModal(null)} onSave={updateAccount} onTestDraft={testDraft} onProviderUsageState={applyProviderUsageState} onScanLogin={() => setModal({ type: 'kimi-relogin', account: modal.account })} />}
+    {modal?.type === 'account-edit' && <AccountEditModalV2 account={accounts.find((item) => item.id === modal.account.id) || modal.account} provider={providers.find((item) => item.id === modal.account.providerId)} onClose={() => setModal(null)} onSave={updateAccount} onTestDraft={testDraft} onProviderUsageState={applyProviderUsageState} onScanLogin={() => setModal({ type: 'kimi-relogin', account: modal.account })} onReloginCli={() => setModal({ type: 'cli-relogin', account: modal.account })} />}
     {modal === 'provider' && <ProviderModalV2 onClose={() => setModal(null)} onSave={saveProvider} />}
     {modal?.type === 'provider-edit' && <ProviderModalV2 provider={modal.provider} onClose={() => setModal(null)} onSave={saveProvider} />}
     {modal === 'import-ccswitch' && <ImportCcswitchModal onClose={() => setModal(null)} onApplied={(result) => {
@@ -4167,7 +4403,7 @@ function App() {
         ? `已从 cc-switch 导入 ${result.imported} 个账号${result?.kimiApiKeyImported > 0 ? '；Kimi API Key 账号无法获取月额度，可在设置中扫码登录补全' : ''}`
         : '没有导入新账号（Key 都已存在）' });
     }} />}
-    {modal?.type === 'grok-relogin' && <ImportCliLoginModal accounts={accounts} providers={providers} reloginAccount={modal.account} onSaveAccount={saveAccount} onTestDraft={testDraft} onClose={() => setModal(null)} onToast={setToast} providerOrder={settings.providerOrder} onReorderProviders={(order) => setSettings((old) => ({ ...old, providerOrder: order }))} onImported={(_kind, result) => {
+    {(modal?.type === 'grok-relogin' || modal?.type === 'cli-relogin') && <ImportCliLoginModal accounts={accounts} providers={providers} reloginAccount={modal.account} onSaveAccount={saveAccount} onTestDraft={testDraft} onClose={() => setModal(null)} onToast={setToast} providerOrder={settings.providerOrder} onReorderProviders={(order) => setSettings((old) => ({ ...old, providerOrder: order }))} onImported={(_kind, result) => {
       if (result?.state) { setAccounts(result.state.accounts || []); setProviders(result.state.providers || []); setLastSync(result.state.lastSync || new Date().toISOString()); if (result.state.runtime) setRuntime(result.state.runtime); }
       lastSaved.current = '';
       setModal(null);

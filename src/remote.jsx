@@ -4,6 +4,9 @@ import { AlertCircle, ArrowUpRight, Clock3, KeyRound, LockKeyhole, Moon, Refresh
 import { formatChecked, HistoryView, Logo, StatusView, UpcomingRefreshBar } from './main.jsx';
 import StatisticsView from './statistics/StatisticsView';
 import { AppShell } from './app-shell';
+import { useBoardPullRefresh } from './use-board-pull-refresh';
+import { BoardPullRefreshIndicator } from './board-pull-refresh-indicator';
+import { accountRefreshFeedback, TransientToast, useTransientToast } from './transient-toast';
 import { MAIN_VIEW_ITEMS, ViewMenu } from './view-menu';
 import { initialAccounts, providerCatalog } from './data';
 import './styles.css';
@@ -165,7 +168,8 @@ function App() {
   const [pairError, setPairError] = useState('');
   const [snapshot, setSnapshot] = useState(null);
   const [loading, setLoading] = useState(Boolean(initialConnection.token));
-  const [connectionError, setConnectionError] = useState('');
+  const [toast, setToast] = useTransientToast();
+  const lastConnectionErrorRef = useRef('');
   const [selectedAccountId, setSelectedAccountId] = useState(null);
   // 与桌面端共用同一套主视图(看板/额度浪费/本机用量);旧版本可能存过 rows/periods,落到看板
   const [mode, setMode] = useState(() => {
@@ -177,6 +181,10 @@ function App() {
   const [localUsageMeta, setLocalUsageMeta] = useState(null);
   const [wasteMeta, setWasteMeta] = useState(null);
   const [statisticsLoading, setStatisticsLoading] = useState(false);
+  const [boardRefreshing, setBoardRefreshing] = useState(false);
+  const boardRefreshingRef = useRef(false);
+  const reloadSnapshotRef = useRef(null);
+  const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [theme, setTheme] = useState(() => initialConnection.theme || localStorage.getItem(THEME_KEY) || 'dark');
   // 本机用量在远程页是只读会话:设置不落库,仅本页生效(合并同名模型开关等)
@@ -226,13 +234,20 @@ function App() {
   useEffect(() => {
     if (!token) return undefined;
     let active = true;
-    const load = async () => {
+    let requestVersion = 0;
+    boardRefreshingRef.current = false;
+    setBoardRefreshing(false);
+    const load = async (force = false) => {
+      if (boardRefreshingRef.current && !force) return;
+      const version = ++requestVersion;
       try {
-        const data = import.meta.env.DEV && token === 'demo' ? { ...demoSnapshot, lastSync: new Date().toISOString() } : await requestJson('/api/snapshot', token);
-        if (!active) return;
-        setSnapshot(data); setConnectionError(''); setPairError(''); setNow(Date.now());
+        const data = import.meta.env.DEV && token === 'demo' ? { ...demoSnapshot, lastSync: new Date().toISOString() }
+          : await requestJson(force ? '/api/refresh' : '/api/snapshot', token, force ? { method: 'POST' } : {});
+        if (!active || version !== requestVersion) return;
+        setSnapshot(data); lastConnectionErrorRef.current = ''; setPairError(''); setNow(Date.now());
+        if (force) setToast(accountRefreshFeedback(data.accounts));
       } catch (error) {
-        if (!active) return;
+        if (!active || version !== requestVersion) return;
         if (error.unauthorized) {
           localStorage.removeItem(TOKEN_KEY);
           setToken('');
@@ -240,9 +255,16 @@ function App() {
           if (IS_LOOPBACK) { setPreviewConnecting(true); return; }
           setPairError(error.message);
         }
-        else setConnectionError('无法连接电脑，请确认 Quota Desk 已开启局域网访问，且设备能够访问二维码中的地址');
-      } finally { if (active) setLoading(false); }
+        else {
+          const feedback = force ? accountRefreshFeedback(snapshotRef.current?.accounts, { allFailed: true })
+            : { id: Date.now(), ok: false, message: '暂时无法连接电脑' };
+          const { message } = feedback;
+          if (force || lastConnectionErrorRef.current !== message) setToast(feedback);
+          lastConnectionErrorRef.current = message;
+        }
+      } finally { if (active && version === requestVersion) setLoading(false); }
     };
+    reloadSnapshotRef.current = load;
     load();
     const timer = setInterval(load, SNAPSHOT_REFRESH_MS);
     const onVisible = () => { if (document.visibilityState === 'visible') load(); };
@@ -251,6 +273,7 @@ function App() {
     window.addEventListener('online', onOnline);
     return () => {
       active = false;
+      if (reloadSnapshotRef.current === load) reloadSnapshotRef.current = null;
       clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('online', onOnline);
@@ -327,6 +350,28 @@ function App() {
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
   const selectedProvider = providers.find((provider) => provider.id === selectedAccount?.providerId);
   const readOnly = true;
+  const inLocalUsageView = mode === 'local-usage' && !selectedAccountId;
+  const inWasteView = mode === 'waste' && !selectedAccountId;
+  const inUsageView = inLocalUsageView || inWasteView;
+  const refreshAccounts = async () => {
+    const reload = reloadSnapshotRef.current;
+    if (!reload || boardRefreshingRef.current) return;
+    boardRefreshingRef.current = true;
+    setBoardRefreshing(true);
+    try { await reload(true); }
+    finally {
+      if (reloadSnapshotRef.current === reload) {
+        boardRefreshingRef.current = false;
+        setBoardRefreshing(false);
+      }
+    }
+  };
+  const pullEnabled = Boolean(token && !pairingKey && !previewConnecting && snapshot && accounts.length && !selectedAccountId && !inUsageView && !viewMenuOpen);
+  const boardPull = useBoardPullRefresh({ enabled: pullEnabled, refreshing: boardRefreshing, onRefresh: refreshAccounts, pageScroll: true });
+  useEffect(() => {
+    document.documentElement.classList.toggle('remote-board-pull', pullEnabled);
+    return () => document.documentElement.classList.remove('remote-board-pull');
+  }, [pullEnabled]);
 
   if (previewConnecting) return <AppShell variant="remote">
     <main className="main-shell content-area remote-main">
@@ -334,27 +379,28 @@ function App() {
     </main>
   </AppShell>;
   if (!token || pairingKey) return <Pairing pairingKey={pairingKey} onConnect={connect} message={pairError} theme={theme} setTheme={setTheme} />;
-  const inLocalUsageView = mode === 'local-usage' && !selectedAccountId;
-  const inWasteView = mode === 'waste' && !selectedAccountId;
-  const inUsageView = inLocalUsageView || inWasteView;
   const refreshStatistics = async () => {
     setStatisticsLoading(true);
     const api = inLocalUsageView ? localUsageApiRef.current : wasteApiRef.current;
-    try { await api?.refresh?.(); }
-    catch (error) { setConnectionError(error.message || '无法读取统计数据'); }
+    try {
+      await api?.refresh?.();
+      setToast({ id: Date.now(), ok: true, message: '数据已刷新' });
+    }
+    catch { setToast({ id: Date.now(), ok: false, message: '刷新失败，请稍后重试' }); }
     finally { setStatisticsLoading(false); }
   };
   const shellControls = <>
     <span className="last-checked" title={inLocalUsageView ? '最后一次本机用量扫描时间' : inWasteView ? '最后一次历史周期读取时间' : '最后一次额度检查时间'}><Clock3 size={11} />{inLocalUsageView ? (localUsageMeta?.lastScannedAt ? formatChecked(localUsageMeta.lastScannedAt) : '未扫描') : inWasteView ? (wasteMeta?.loadedAt ? formatChecked(wasteMeta.loadedAt) : '未读取') : lastSync ? formatChecked(lastSync) : '尚未检查'}</span>
-    <button type="button" className="control-solo" onClick={inUsageView ? refreshStatistics : () => location.reload()} disabled={statisticsLoading || (inWasteView && wasteMeta?.loading)} title={inLocalUsageView ? '重新扫描本机用量' : inWasteView ? '重新读取历史浪费' : '重新读取电脑数据'} aria-label={inLocalUsageView ? '重新扫描本机用量' : inWasteView ? '重新读取历史浪费' : '重新读取电脑数据'}><RefreshCw size={13} className={statisticsLoading || (inLocalUsageView && localUsageMeta?.scanning) || (inWasteView && wasteMeta?.loading) ? 'spinning' : ''} /></button>
-    <ViewMenu current={mode} onChange={(key) => { setSelectedAccountId(null); setMode(key); }} />
+    <button type="button" className="control-solo" onClick={inUsageView ? refreshStatistics : refreshAccounts} disabled={boardRefreshing || statisticsLoading || (inWasteView && wasteMeta?.loading)} title={inLocalUsageView ? '重新扫描本机用量' : inWasteView ? '重新读取历史浪费' : '立即刷新全部账号'} aria-label={inLocalUsageView ? '重新扫描本机用量' : inWasteView ? '重新读取历史浪费' : '立即刷新全部账号'}><RefreshCw size={13} className={boardRefreshing || statisticsLoading || (inLocalUsageView && localUsageMeta?.scanning) || (inWasteView && wasteMeta?.loading) ? 'spinning' : ''} /></button>
+    <ViewMenu current={mode} open={viewMenuOpen} onOpenChange={setViewMenuOpen} onChange={(key) => { setSelectedAccountId(null); setMode(key); }} />
     <button type="button" className="remote-title-theme" onClick={() => setTheme((old) => old === 'dark' ? 'light' : 'dark')} aria-label={theme === 'dark' ? '切换亮色主题' : '切换暗色主题'}>{theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}</button>
   </>;
   return <AppShell variant="remote" controls={shellControls}>
-    <main className={`main-shell content-area remote-main${inUsageView ? ' local-usage-mode' : ''}`}>
-      {connectionError && <div className="remote-banner offline" role="status"><WifiOff size={18} /><span>{connectionError}{snapshot ? '，下方保留本次读取的数据。' : '。'}</span></div>}
+    <TransientToast toast={toast} />
+    <main ref={boardPull.ref} className={`main-shell content-area remote-main${inUsageView ? ' local-usage-mode' : ''}`}>
+      <BoardPullRefreshIndicator pull={boardPull} hint="继续下拉刷新" />
       {loading && !snapshot ? <div className="remote-loading"><RefreshCw size={23} className="spinning" /><span>正在读取电脑上的额度</span></div> : snapshot ? <>
-        {selectedAccount ? <HistoryView key={selectedAccount.id} account={selectedAccount} provider={selectedProvider} onBack={() => setSelectedAccountId(null)} settings={localCliSettings} setSettings={setLocalCliSettings} readOnly wasteWindowsOverride={selectedAccount.wasteWindows} /> : inUsageView ? <StatisticsView mode={inWasteView ? 'waste' : 'local-usage'} showNavigation={false} accounts={accounts} providers={providers} settings={localCliSettings} setSettings={setLocalCliSettings} Logo={Logo} api={bridge} onLocalApi={(api) => { localUsageApiRef.current = api; }} onLocalMeta={setLocalUsageMeta} onWasteApi={(api) => { wasteApiRef.current = api; }} onWasteMeta={setWasteMeta} /> : <>
+        {selectedAccount ? <HistoryView key={selectedAccount.id} account={selectedAccount} provider={selectedProvider} onBack={() => setSelectedAccountId(null)} settings={localCliSettings} setSettings={setLocalCliSettings} onToast={setToast} readOnly wasteWindowsOverride={selectedAccount.wasteWindows} /> : inUsageView ? <StatisticsView mode={inWasteView ? 'waste' : 'local-usage'} showNavigation={false} accounts={accounts} providers={providers} settings={localCliSettings} setSettings={setLocalCliSettings} Logo={Logo} api={bridge} onLocalApi={(api) => { localUsageApiRef.current = api; }} onLocalMeta={setLocalUsageMeta} onWasteApi={(api) => { wasteApiRef.current = api; }} onWasteMeta={setWasteMeta} /> : <>
           <StatusView accounts={accounts} providers={providers} mode={mode} readOnly onOpenHistory={(account) => setSelectedAccountId(account.id)} lastSync={lastSync} reminderRules={snapshot.settings?.alerts === false ? [] : snapshot.settings?.reminderRules || []} testResults={{}} />
         </>}
       </> : !loading && <div className="remote-empty"><WifiOff size={23} /><strong>暂时无法读取额度</strong><span>请确认电脑正在运行并可通过配对地址访问</span></div>}

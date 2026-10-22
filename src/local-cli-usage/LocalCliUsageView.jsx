@@ -134,8 +134,7 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
 
   // 标题栏刷新按钮与"最后扫描"时间
   const refreshAll = useCallback(async () => {
-    if (!enabled) { refreshSources(); return; }
-    await scan();
+    if (enabled) await scan();
     refreshSources();
     loadSummary(selectedAgent);
     if (activeView === 'models') loadRangeModels(selectedAgent, modelRangeDays, mergeSameModels);
@@ -143,6 +142,12 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
   }, [enabled, scan, refreshSources, loadSummary, loadRangeModels, loadDayModels, activeView, selectedAgent, selectedDate, modelRangeDays, mergeSameModels]);
 
   useEffect(() => { onApi?.({ refresh: refreshAll }); }, [onApi, refreshAll]);
+  useEffect(() => bridge?.onUsageArchivesChanged?.(() => {
+    refreshSources();
+    loadSummary(selectedAgent);
+    if (activeView === 'models') loadRangeModels(selectedAgent, modelRangeDays, mergeSameModels);
+    else loadDayModels(selectedAgent, selectedDate, mergeSameModels);
+  }), [bridge, refreshSources, loadSummary, loadRangeModels, loadDayModels, activeView, selectedAgent, selectedDate, modelRangeDays, mergeSameModels]);
   useEffect(() => { onMetaChange?.({ scanning, lastScannedAt: sources.find((source) => source.lastScannedAt)?.lastScannedAt || null }); }, [onMetaChange, scanning, sources]);
 
   const startFirstScan = async () => {
@@ -161,7 +166,7 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
     </section>;
   }
 
-  if (!enabled) {
+  if (!enabled && !sources.some((source) => Number(source.records) > 0)) {
     return <section className={`${embedded ? '' : 'surface-section '}local-cli-page${embedded ? ' embedded' : ''}`}>
       <div className="local-cli-intro-card">
         <span className="local-cli-state-icon"><ShieldCheck size={18} /></span>
@@ -229,7 +234,7 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
     <div className="local-cli-page-head">
       {embedded ? <RelatedModels models={scopeMeta.matchedModels} loading={summaryBlock.loading} /> : <div className="local-cli-page-title">
         <b>本机用量</b>
-        <small>{lastScanned ? `最后扫描 ${formatLocalDateTime(lastScanned)}` : '尚未完成扫描'}{agentNames[selectedAgent] && selectedAgent !== 'all' ? ` · ${agentNames[selectedAgent]}` : ''}</small>
+        <small>{summaryBlock.data?.archiveScope?.importedSources > 0 ? `本机 + ${summaryBlock.data.archiveScope.importedSources} 个导入来源 · ` : ''}{lastScanned ? `最后扫描 ${formatLocalDateTime(lastScanned)}` : '尚未完成扫描'}{agentNames[selectedAgent] && selectedAgent !== 'all' ? ` · ${agentNames[selectedAgent]}` : ''}</small>
       </div>}
       <div className="local-cli-page-actions">
         <div className="seg-control local-cli-view-switch" role="tablist" aria-label="本机用量视图">

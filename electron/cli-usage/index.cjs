@@ -94,6 +94,13 @@ class CliUsageService {
     return this.request('sources', null, QUERY_TIMEOUT_MS);
   }
 
+  getArchiveInfo() { return this.request('archiveInfo', null, SCAN_TIMEOUT_MS); }
+  exportArchives(scope) { return this.request('archiveExport', { scope }, SCAN_TIMEOUT_MS); }
+  previewArchiveImport(payload) { return this.request('archivePreview', payload, SCAN_TIMEOUT_MS); }
+  importArchives(payload, fileName) { return this.request('archiveImport', { payload, fileName }, SCAN_TIMEOUT_MS); }
+  updateArchiveSource(query) { return this.request('archiveUpdate', query, QUERY_TIMEOUT_MS); }
+  deleteArchiveSource(sourceId) { return this.request('archiveDelete', { sourceId }, SCAN_TIMEOUT_MS); }
+
   // v1 API 专用聚合:参数由 api-v1 层校验,这里只透传
   getV1Aggregate(query) {
     return this.request('v1Aggregate', query, QUERY_TIMEOUT_MS);

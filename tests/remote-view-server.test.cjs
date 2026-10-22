@@ -52,7 +52,7 @@ const requestJson = (port, pathname, { method = 'GET', body, token, host } = {})
   request.end();
 });
 
-async function bootServer() {
+async function bootServer(options = {}) {
   const store = new DesktopStore();
   store.saveRemoteAccess({ enabled: true, pairingKey: PAIRING_KEY, devices: [], port: 43187 });
   const server = await createRemoteViewServer({
@@ -63,11 +63,66 @@ async function bootServer() {
     pairLocalPreview: () => store.pairLocalPreview(),
     port: 0,
     allowedHosts: ['192.168.1.5', '[fd00::1]'],
+    ...options,
   });
   const port = server.address().port;
   const call = (pathname, options) => requestJson(port, pathname, options);
   return { store, call, close: () => new Promise((resolve) => server.close(resolve)) };
 }
+
+test('手机刷新：认证后轮询账号并返回脱敏快照，保留设置只读限制', async () => {
+  let calls = 0;
+  const session = await bootServer({ refreshAccounts: () => {
+    calls++;
+    const state = session.store.loadState();
+    session.store.saveState({ ...state, lastSync: '2026-10-18T08:00:00.000Z', accounts: [{ id: 'phone-test', name: '手机测试', providerId: 'test', variables: { apiKey: 'private-secret' }, windows: [] }] });
+  } });
+  try {
+    assert.equal((await session.call('/api/refresh', { method: 'POST' })).status, 401);
+    assert.equal(calls, 0);
+    const pair = await session.call('/api/pair', { method: 'POST', body: { pairingKey: PAIRING_KEY, id: 'refresh-phone', name: '手机' } });
+    const token = pair.body.token;
+    assert.equal((await session.call('/api/refresh', { token })).status, 405);
+    const refreshed = await session.call('/api/refresh', { token, method: 'POST' });
+    assert.equal(refreshed.status, 200);
+    assert.equal(calls, 1);
+    assert.equal(refreshed.body.lastSync, '2026-10-18T08:00:00.000Z');
+    assert.equal(refreshed.body.accounts[0].id, 'phone-test');
+    assert.equal(refreshed.body.readOnly, true);
+    assert.doesNotMatch(JSON.stringify(refreshed.body), /private-secret|apiKey/);
+    assert.equal((await session.call('/api/settings', { token, method: 'PATCH', body: { pollMinutes: 10 } })).status, 403);
+  } finally { await session.close(); }
+});
+
+test('手机刷新：多设备并发共用一次轮询，失败后可以重试', async () => {
+  let calls = 0;
+  let finish;
+  let fail = true;
+  const session = await bootServer({ refreshAccounts: () => {
+    calls++;
+    return new Promise((resolve, reject) => { finish = () => fail ? reject(new Error('private backend details')) : resolve(); });
+  } });
+  try {
+    const pair = await session.call('/api/pair', { method: 'POST', body: { pairingKey: PAIRING_KEY, id: 'refresh-concurrent', name: '手机' } });
+    const token = pair.body.token;
+    const first = session.call('/api/refresh', { token, method: 'POST' });
+    const second = session.call('/api/refresh', { token, method: 'POST' });
+    // A snapshot requested after both POSTs ensures the server has accepted them.
+    await session.call('/api/snapshot', { token });
+    assert.equal(calls, 1);
+    finish();
+    for (const result of await Promise.all([first, second])) {
+      assert.equal(result.status, 502);
+      assert.deepEqual(result.body, { error: 'refresh_failed' });
+    }
+    fail = false;
+    const retry = session.call('/api/refresh', { token, method: 'POST' });
+    await session.call('/api/snapshot', { token });
+    assert.equal(calls, 2);
+    finish();
+    assert.equal((await retry).status, 200);
+  } finally { finish?.(); await session.close(); }
+});
 
 test('本机预览：回环换票免配对码，不写配对设备，令牌仅回环连接可用', async () => {
   const session = await bootServer();

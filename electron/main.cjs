@@ -12,8 +12,9 @@ const { builtinConfigs } = require('./builtin-configs.cjs');
 const { scanCcswitch } = require('./ccswitch.cjs');
 const { mergeMainOwnedUsageConnections } = require('./provider-usage-state.cjs');
 const { createCliUsageService } = require('./cli-usage/index.cjs');
+const { UsageSyncService } = require('./usage-sync/index.cjs');
 const { buildExportPackage, validateExportPackage, mergeImportPackage } = require('./import-export.cjs');
-const { CLI_KINDS, SNAPSHOT_KEY, readLiveAuth, cliIdentity, resolveCliAuth, authVersionMatches, writeLiveIfCurrent, fetchWithCliAuth, COPILOT_CLIENT_ID, COPILOT_DEVICE_CODE_URL, COPILOT_TOKEN_URL, COPILOT_SCOPE } = require('./cli-auth.cjs');
+const { CLI_KINDS, SNAPSHOT_KEY, readLiveAuth, cliIdentity, resolveCliAuth, authVersionMatches, writeLiveIfCurrent, fetchWithCliAuth, refreshTokenOf, claudeProfileOf, claudeProfileMatches, CLAUDE_PROFILE_KEY, COPILOT_CLIENT_ID, COPILOT_DEVICE_CODE_URL, COPILOT_TOKEN_URL, COPILOT_SCOPE } = require('./cli-auth.cjs');
 const {
   fetchDeepSeekUsage,
   fetchDeepSeekSummary,
@@ -82,6 +83,7 @@ let widgetWindow;
 let tray;
 let store;
 let cliUsage;
+let usageSync;
 let pollTimer;
 let quitting = false;
 let nextPollAt = null;
@@ -203,6 +205,7 @@ async function startRemoteView() {
       getCycles: (accountId) => store.getCycles(accountId),
       getUsage: (accountId) => queryProviderUsage(accountId, { days: 365 }),
       queryUsage: (accountId, options) => queryProviderUsage(accountId, options),
+      refreshAccounts: () => pollState(),
       appVersion: app.getVersion(),
       cliUsage,
     });
@@ -391,6 +394,19 @@ const persistCliAuthUpdate = (accountId, { kind, next, previous, source }) => {
       } else if (!authVersionMatches(kind, current, next)) {
         return;
       }
+    } else if (kind === 'claude' && source === 'live') {
+      // Claude 跟随分支（resolveCliAuth 同账号跟随 live）：本应用续期轮换的新凭据也要
+      // 同步回快照，账号离开本机后快照仍是可用的一版（magpie syncClaudeDir 同策略）。
+      // 仅当快照确属同一账号（oauthAccount 一致）且仍是刷新前那版时才写，防并发互踩。
+      const stored = store.getSecrets(accountId);
+      const raw = stored.variables?.[SNAPSHOT_KEY];
+      let current = null;
+      try { current = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch {}
+      if (current && claudeProfileMatches(claudeProfileOf(current), claudeProfileOf(next))
+        && authVersionMatches(kind, current, previous)
+        && !authVersionMatches(kind, current, next)) {
+        store.saveCredential(accountId, '', { [SNAPSHOT_KEY]: JSON.stringify(next) });
+      }
     }
     writeLiveIfCurrent(kind, previous, next);
     refreshLiveIdentities();
@@ -404,10 +420,34 @@ const persistCliAuthUpdate = (accountId, { kind, next, previous, source }) => {
 const cliIdentityPatch = (account, kind, secrets) => {
   if (!CLI_KINDS.includes(kind)) return null;
   const resolved = resolveCliAuth(kind, secrets.variables);
-  const identity = resolved && cliIdentity(kind, resolved.auth);
+  let identity = resolved && cliIdentity(kind, resolved.auth);
   if (!identity) return null;
+  if (kind === 'claude' && resolved.source === 'live' && account.cliAuthSource === 'snapshot') {
+    // Claude 跟随分支：本机 Claude Code 自己轮换了凭据（未经本应用续期）时，把 live 的
+    // 新凭据同步进快照——否则快照留着已作废的 refresh token，账号一旦离开本机就会报失效。
+    const raw = secrets.variables?.[SNAPSHOT_KEY];
+    let current = null;
+    try { current = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch {}
+    if (current && claudeProfileMatches(claudeProfileOf(current), claudeProfileOf(resolved.auth))
+      && !authVersionMatches('claude', current, resolved.auth)) {
+      store.saveCredential(account.id, '', { [SNAPSHOT_KEY]: JSON.stringify(resolved.auth) });
+    }
+  } else if (kind === 'claude' && resolved.source === 'snapshot' && !claudeProfileOf(resolved.auth)) {
+    // 旧快照升级：无身份 Profile 的 Claude 快照，若 refresh token 与本机 live 完全一致
+    //（同一登录会话的铁证），就地补录 oauthAccount 身份——后续去重 / 「本机激活」比对 /
+    // 跟随逻辑即可用上稳定指纹，无需用户手动重新导入。
+    const live = readLiveAuth('claude');
+    const liveProfile = live && claudeProfileOf(live);
+    const liveRefresh = live && refreshTokenOf('claude', live);
+    if (liveProfile && liveRefresh && liveRefresh === refreshTokenOf('claude', resolved.auth)) {
+      const upgraded = { ...resolved.auth, [CLAUDE_PROFILE_KEY]: liveProfile };
+      store.saveCredential(account.id, '', { [SNAPSHOT_KEY]: JSON.stringify(upgraded) });
+      identity = cliIdentity('claude', upgraded) || identity;
+    }
+  }
   return {
-    cliAuthSource: resolved.source,
+    // 跟随 live 的快照账号仍标记为 snapshot：导入去重 / 升级逻辑按「有无快照」语义判断
+    cliAuthSource: (resolved.source === 'live' && account.cliAuthSource === 'snapshot') ? 'snapshot' : resolved.source,
     cliFingerprint: identity.fingerprint,
     identity: (resolved.source === 'snapshot' && account.identity) ? account.identity : (identity.display || account.identity || ''),
   };
@@ -1416,16 +1456,16 @@ async function pollState(accountIds = null) {
   pollInProgress = true;
   sendState(current);
   const ids = accountIds ? new Set(accountIds) : null;
-  const polled = [];
-  for (const account of current.accounts || []) {
+  // 各账号独立并发查询；等待全部完成后统一合并，单个账号失败不影响其他账号。
+  const polled = await Promise.all((current.accounts || []).filter((account) => {
     // 定时巡检跳过停用账号（数据冻结、不产生新历史点与提醒）；点名轮询不受限，
     // 「测试连接」与启用后的立即补拉都靠它验证停用中的账号
-    if (account.disabled && !ids) continue;
-    if (ids && !ids.has(account.id)) continue;
+    if (account.disabled && !ids) return false;
+    return !ids || ids.has(account.id);
+  }).map(async (account) => {
     const provider = (current.providers || []).find((item) => item.id === account.providerId);
     if (!provider) {
-      polled.push({ ...account, status: 'warning', lastError: '找不到厂商配置', lastChecked: new Date().toISOString() });
-      continue;
+      return { ...account, status: 'warning', lastError: '找不到厂商配置', lastChecked: new Date().toISOString() };
     }
     try {
       const windows = await queryAccountWithSilentRenewal(account, provider);
@@ -1433,16 +1473,16 @@ async function pollState(accountIds = null) {
       // 查询成功后刷新身份信息（续期后的最新凭据重新解析一次）
       const identityPatch = cliIdentityPatch(account, provider.requestConfig?.adapterMode, store.getSecrets(account.id));
       const updated = { ...account, ...(identityPatch || {}), windows, status: 'active', authStatus: null, lastError: null, lastChecked: checkedAt, lastTestAt: checkedAt };
-      polled.push(updated);
       store.appendHistory(account.id, windows, historyRetentionDays());
       // 周期浪费归档：从该账号历史中提取已结束的周期（周/月等厂商预设窗口），永久保存
       store.archiveCycles(account.id, resolveWasteWindows(provider.requestConfig));
       notifyWaste(current, updated, provider);
+      return updated;
     } catch (error) {
       const checkedAt = new Date().toISOString();
-      polled.push({ ...account, status: 'warning', authStatus: authStatusForPollError(error), lastError: error.message, lastChecked: checkedAt, lastTestAt: checkedAt });
+      return { ...account, status: 'warning', authStatus: authStatusForPollError(error), lastError: error.message, lastChecked: checkedAt, lastTestAt: checkedAt };
     }
-  }
+  }));
   const latest = migrateState(store.loadState()) || current;
   const next = cleanState({
     ...latest,
@@ -1837,6 +1877,82 @@ function registerIpc() {
     store.removeRemoteDevice(deviceId);
     return remoteViewStatus();
   });
+  const archivesChanged = () => mainWindow?.webContents.send('archives:changed');
+  ipcMain.handle('usage-sync:status', () => usageSync.status());
+  ipcMain.handle('usage-sync:save', (_event, config) => usageSync.saveConfig(config));
+  ipcMain.handle('usage-sync:test', (_event, config) => usageSync.testConnection(config));
+  ipcMain.handle('usage-sync:run', async () => { await usageSync.run({ manual: true }); return usageSync.status(); });
+  ipcMain.handle('usage-sync:restore', (_event, sourceId) => usageSync.restoreSource(sourceId));
+  ipcMain.handle('archives:info', () => cliUsage.getArchiveInfo());
+  ipcMain.handle('archives:update', async (_event, options) => {
+    const info = await cliUsage.updateArchiveSource(options);
+    archivesChanged();
+    return info;
+  });
+  ipcMain.handle('archives:delete', async (_event, sourceId) => {
+    const current = await cliUsage.getArchiveInfo();
+    const source = current.imported.find((item) => item.sourceId === sourceId);
+    if (!source) throw new Error('导入来源不存在，不能删除本机档案');
+    const choice = await dialog.showMessageBox(dataDialogOwner(), {
+      type: 'warning', title: '删除导入档案', message: `删除“${source.label}”的导入档案？`,
+      detail: '该来源将从用量汇总中移除，并暂停从 WebDAV 接收。本机采集记录和导入历史会保留；可手动重新导入，或在云同步设置中恢复接收。云端文件不会被删除。',
+      buttons: ['取消', '删除档案'], defaultId: 0, cancelId: 0, noLink: true,
+    });
+    if (choice.response !== 1) return { canceled: true };
+    usageSync.ignoreSource(sourceId, source.label);
+    const info = await cliUsage.deleteArchiveSource(sourceId);
+    archivesChanged();
+    return { info };
+  });
+  ipcMain.handle('archives:export', async (_event, options = {}) => {
+    const scope = options?.scope || 'local';
+    if (!['local', 'all'].includes(scope)) throw new Error('未知的档案导出范围');
+    const choice = await dialog.showSaveDialog(dataDialogOwner(), {
+      title: scope === 'all' ? '导出全部来源档案' : '导出本机用量档案',
+      defaultPath: path.join(app.getPath('documents'), `Quota-Desk-Usage-${exportFileStamp()}.json`),
+      filters: [{ name: '用量档案', extensions: ['json'] }],
+    });
+    if (choice.canceled || !choice.filePath) return { canceled: true };
+    const payload = await cliUsage.exportArchives(scope);
+    const temporary = `${choice.filePath}.${crypto.randomUUID()}.tmp`;
+    let fd;
+    try {
+      fd = fs.openSync(temporary, 'wx');
+      fs.writeFileSync(fd, JSON.stringify(payload));
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+      fd = undefined;
+      fs.renameSync(temporary, choice.filePath);
+    } catch (error) {
+      if (fd !== undefined) { try { fs.closeSync(fd); } catch {} }
+      try { fs.rmSync(temporary, { force: true }); } catch {}
+      throw new Error(`用量档案导出失败：${error.message}`);
+    }
+    return { sources: payload.archives.length, records: payload.archives.reduce((total, source) => total + source.records.length, 0) };
+  });
+  ipcMain.handle('archives:import', async () => {
+    const choice = await dialog.showOpenDialog(dataDialogOwner(), {
+      title: '导入用量档案', properties: ['openFile'], filters: [{ name: '用量档案', extensions: ['json'] }],
+    });
+    if (choice.canceled || !choice.filePaths?.length) return { canceled: true };
+    const filePath = choice.filePaths[0];
+    if (fs.statSync(filePath).size > 256 * 1024 * 1024) throw new Error('档案文件超过 256 MB，请按来源分别导出');
+    let payload;
+    try { payload = JSON.parse(fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '')); }
+    catch { throw new Error('无法读取用量档案，请选择完整的 JSON 档案文件'); }
+    const preview = await cliUsage.previewArchiveImport(payload);
+    const applicable = preview.filter((source) => ['added', 'updated'].includes(source.status));
+    const summary = `新增 ${preview.filter((s) => s.status === 'added').length} 个来源，更新 ${preview.filter((s) => s.status === 'updated').length} 个来源，跳过 ${preview.length - applicable.length} 个来源`;
+    const confirmed = await dialog.showMessageBox(dataDialogOwner(), {
+      type: 'info', title: '用量档案导入预览', message: summary,
+      detail: `${preview.slice(0, 20).map((source) => `${source.label} · v${source.revision} · ${source.records.toLocaleString()} 条：${source.message}`).join('\n')}${preview.length > 20 ? '\n其余结果可在导入历史中查看。' : ''}\n\n新版会替换对应来源的完整档案，来源名称和计入汇总的选择保留。本机来源始终跳过。`,
+      buttons: applicable.length ? ['取消', '导入档案'] : ['完成'], defaultId: applicable.length ? 1 : 0, cancelId: 0, noLink: true,
+    });
+    if (applicable.length && confirmed.response !== 1) return { canceled: true };
+    const result = await cliUsage.importArchives(payload, path.basename(filePath));
+    archivesChanged();
+    return result;
+  });
   ipcMain.handle('data:export', async (_event, options = {}) => {
     const state = migrateState(store.loadState());
     if (!state) throw new Error('桌面状态尚未初始化');
@@ -2010,7 +2126,10 @@ function registerIpc() {
     return true;
   });
   // 测试版在版本号上带 -test 后缀,设置页里肉眼就能分清当前跑的是哪个构建
-  ipcMain.handle('app:get-version', () => (IS_TEST_BUILD ? `${app.getVersion()}-test` : app.getVersion()));
+  ipcMain.handle('app:get-version', () => {
+    const label = require('../package.json').qdTestBuildLabel;
+    return IS_TEST_BUILD ? `${app.getVersion()}-test${label ? ` (${label})` : ''}` : app.getVersion();
+  });
   ipcMain.handle('devtools:toggle', () => toggleDevTools(mainWindow));
   ipcMain.handle('app:get-auto-launch', () => getAutoLaunch());
   ipcMain.handle('app:set-auto-launch', (_event, enabled) => { const result = setAutoLaunch(enabled); refreshTray(); return result; });
@@ -2609,6 +2728,11 @@ if (!app.requestSingleInstanceLock()) {
     startupLog('ready: 初始化开始');
     store = new DesktopStore();
     cliUsage = createCliUsageService({ dbPath: path.join(app.getPath('userData'), 'cli-usage.sqlite') });
+    usageSync = new UsageSyncService({
+      storage: store, archives: cliUsage, fetcher: (...args) => net.fetch(...args),
+      onStatus: (status) => mainWindow?.webContents.send('usage-sync:changed', status),
+      onArchivesChanged: () => mainWindow?.webContents.send('archives:changed'),
+    });
     store.purgeAllCycles();
     await scrubLegacyProviderUsagePartitions();
     applyProxySetting();
@@ -2635,6 +2759,7 @@ if (!app.requestSingleInstanceLock()) {
     const state = store.loadState();
     for (const notice of store.consumeRecoveryNotices()) console.warn(`[storage] ${notice}`);
     cliUsage?.applySettings(state?.settings);
+    usageSync.start();
     if (state?.settings?.widget !== false) createWidgetWindow();
     createTray();
     schedulePolling();
@@ -2654,6 +2779,7 @@ app.on('before-quit', () => {
   remoteViewServer?.close();
   if (pollTimer) clearInterval(pollTimer);
   if (updateCheckTimer) clearInterval(updateCheckTimer);
+  usageSync?.dispose();
   cliUsage?.dispose();
   const usageAccountIds = new Set([
     ...providerUsageWindows.keys(),
