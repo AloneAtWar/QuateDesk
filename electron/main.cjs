@@ -12,6 +12,7 @@ const { builtinConfigs } = require('./builtin-configs.cjs');
 const { scanCcswitch } = require('./ccswitch.cjs');
 const { mergeMainOwnedUsageConnections } = require('./provider-usage-state.cjs');
 const { createCliUsageService } = require('./cli-usage/index.cjs');
+const { UsageSyncService } = require('./usage-sync/index.cjs');
 const { buildExportPackage, validateExportPackage, mergeImportPackage } = require('./import-export.cjs');
 const { CLI_KINDS, SNAPSHOT_KEY, readLiveAuth, cliIdentity, resolveCliAuth, authVersionMatches, writeLiveIfCurrent, fetchWithCliAuth, refreshTokenOf, claudeProfileOf, claudeProfileMatches, CLAUDE_PROFILE_KEY, COPILOT_CLIENT_ID, COPILOT_DEVICE_CODE_URL, COPILOT_TOKEN_URL, COPILOT_SCOPE } = require('./cli-auth.cjs');
 const {
@@ -82,6 +83,7 @@ let widgetWindow;
 let tray;
 let store;
 let cliUsage;
+let usageSync;
 let pollTimer;
 let quitting = false;
 let nextPollAt = null;
@@ -1876,6 +1878,11 @@ function registerIpc() {
     return remoteViewStatus();
   });
   const archivesChanged = () => mainWindow?.webContents.send('archives:changed');
+  ipcMain.handle('usage-sync:status', () => usageSync.status());
+  ipcMain.handle('usage-sync:save', (_event, config) => usageSync.saveConfig(config));
+  ipcMain.handle('usage-sync:test', (_event, config) => usageSync.testConnection(config));
+  ipcMain.handle('usage-sync:run', async () => { await usageSync.run({ manual: true }); return usageSync.status(); });
+  ipcMain.handle('usage-sync:restore', (_event, sourceId) => usageSync.restoreSource(sourceId));
   ipcMain.handle('archives:info', () => cliUsage.getArchiveInfo());
   ipcMain.handle('archives:update', async (_event, options) => {
     const info = await cliUsage.updateArchiveSource(options);
@@ -1888,10 +1895,11 @@ function registerIpc() {
     if (!source) throw new Error('导入来源不存在，不能删除本机档案');
     const choice = await dialog.showMessageBox(dataDialogOwner(), {
       type: 'warning', title: '删除导入档案', message: `删除“${source.label}”的导入档案？`,
-      detail: '该来源将从用量汇总中移除。本机采集记录和导入历史会保留，之后可重新导入该来源。',
+      detail: '该来源将从用量汇总中移除，并暂停从 WebDAV 接收。本机采集记录和导入历史会保留；可手动重新导入，或在云同步设置中恢复接收。云端文件不会被删除。',
       buttons: ['取消', '删除档案'], defaultId: 0, cancelId: 0, noLink: true,
     });
     if (choice.response !== 1) return { canceled: true };
+    usageSync.ignoreSource(sourceId, source.label);
     const info = await cliUsage.deleteArchiveSource(sourceId);
     archivesChanged();
     return { info };
@@ -2118,7 +2126,10 @@ function registerIpc() {
     return true;
   });
   // 测试版在版本号上带 -test 后缀,设置页里肉眼就能分清当前跑的是哪个构建
-  ipcMain.handle('app:get-version', () => (IS_TEST_BUILD ? `${app.getVersion()}-test` : app.getVersion()));
+  ipcMain.handle('app:get-version', () => {
+    const label = require('../package.json').qdTestBuildLabel;
+    return IS_TEST_BUILD ? `${app.getVersion()}-test${label ? ` (${label})` : ''}` : app.getVersion();
+  });
   ipcMain.handle('devtools:toggle', () => toggleDevTools(mainWindow));
   ipcMain.handle('app:get-auto-launch', () => getAutoLaunch());
   ipcMain.handle('app:set-auto-launch', (_event, enabled) => { const result = setAutoLaunch(enabled); refreshTray(); return result; });
@@ -2717,6 +2728,11 @@ if (!app.requestSingleInstanceLock()) {
     startupLog('ready: 初始化开始');
     store = new DesktopStore();
     cliUsage = createCliUsageService({ dbPath: path.join(app.getPath('userData'), 'cli-usage.sqlite') });
+    usageSync = new UsageSyncService({
+      storage: store, archives: cliUsage, fetcher: (...args) => net.fetch(...args),
+      onStatus: (status) => mainWindow?.webContents.send('usage-sync:changed', status),
+      onArchivesChanged: () => mainWindow?.webContents.send('archives:changed'),
+    });
     store.purgeAllCycles();
     await scrubLegacyProviderUsagePartitions();
     applyProxySetting();
@@ -2743,6 +2759,7 @@ if (!app.requestSingleInstanceLock()) {
     const state = store.loadState();
     for (const notice of store.consumeRecoveryNotices()) console.warn(`[storage] ${notice}`);
     cliUsage?.applySettings(state?.settings);
+    usageSync.start();
     if (state?.settings?.widget !== false) createWidgetWindow();
     createTray();
     schedulePolling();
@@ -2762,6 +2779,7 @@ app.on('before-quit', () => {
   remoteViewServer?.close();
   if (pollTimer) clearInterval(pollTimer);
   if (updateCheckTimer) clearInterval(updateCheckTimer);
+  usageSync?.dispose();
   cliUsage?.dispose();
   const usageAccountIds = new Set([
     ...providerUsageWindows.keys(),

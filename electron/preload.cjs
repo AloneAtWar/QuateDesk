@@ -27,6 +27,16 @@ contextBridge.exposeInMainWorld('quotaDesk', {
   importUsageArchives: () => ipcRenderer.invoke('archives:import'),
   updateUsageArchive: (options) => ipcRenderer.invoke('archives:update', options),
   deleteUsageArchive: (sourceId) => ipcRenderer.invoke('archives:delete', sourceId),
+  getUsageSyncStatus: () => ipcRenderer.invoke('usage-sync:status'),
+  saveUsageSyncConfig: (config) => ipcRenderer.invoke('usage-sync:save', config),
+  testUsageSyncConnection: (config) => ipcRenderer.invoke('usage-sync:test', config),
+  syncUsageArchives: () => ipcRenderer.invoke('usage-sync:run'),
+  restoreUsageSyncSource: (sourceId) => ipcRenderer.invoke('usage-sync:restore', sourceId),
+  onUsageSyncChanged: (callback) => {
+    const listener = (_event, status) => callback(status);
+    ipcRenderer.on('usage-sync:changed', listener);
+    return () => ipcRenderer.removeListener('usage-sync:changed', listener);
+  },
   onUsageArchivesChanged: (callback) => {
     const listener = () => callback();
     ipcRenderer.on('archives:changed', listener);

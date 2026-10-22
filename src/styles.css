@@ -1030,6 +1030,31 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .usage-archive-history li small { display: block; padding-top: 4px; font-size: 10px; }
 .usage-archive-history li p { margin: 5px 0 0; overflow-wrap: anywhere; font-size: 10px; }
 
+.usage-sync-settings .drawer-section-title { flex-wrap: wrap; }
+.usage-sync-fields { display: grid; gap: 11px; margin-top: 12px; }
+.usage-sync-fields label { display: grid; gap: 6px; color: var(--ink-soft); font-size: 11px; }
+.usage-sync-fields label > span { display: flex; align-items: center; gap: 4px; }
+.usage-sync-fields input { box-sizing: border-box; width: 100%; min-width: 0; padding: 9px; border: 1px solid var(--line-strong); border-radius: 6px; color: var(--ink); background: var(--control); font-family: inherit; font-size: 12px; }
+.usage-sync-fields input:focus-visible { outline: 2px solid var(--focus-border); outline-offset: 1px; }
+.usage-sync-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
+.usage-sync-actions .outline-button { flex: 1 1 auto; padding: 8px; font-size: 11px; }
+.usage-sync-build { margin: -3px 0 8px; color: var(--ink-soft); font-size: 10px; overflow-wrap: anywhere; }
+.usage-sync-hint { color: var(--ink-soft); font-size: 10px; line-height: 1.6; }
+.usage-sync-feedback { display: flex; align-items: flex-start; gap: 7px; margin-top: 10px; padding: 10px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--control); color: var(--ink); font-size: 11px; line-height: 1.65; overflow-wrap: anywhere; scroll-margin: 12px; }
+.usage-sync-feedback > svg { flex: 0 0 auto; margin-top: 2px; }
+.usage-sync-feedback.is-success { color: var(--green-deep); background: var(--green-bg); border-color: var(--hover-border); }
+.usage-sync-feedback.is-error { color: var(--coral-deep); background: var(--coral-bg); }
+.usage-sync-feedback.is-pending > svg { animation: usage-sync-spin 1s linear infinite; }
+@keyframes usage-sync-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .usage-sync-feedback.is-pending > svg { animation: none; } }
+.usage-sync-status { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px 12px; margin: 14px 0 8px; color: var(--ink-soft); font-size: 11px; line-height: 1.6; }
+.usage-sync-status dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+.usage-sync-ignored { color: var(--ink-soft); font-size: 11px; }
+.usage-sync-ignored summary { cursor: pointer; padding: 7px 0; }
+.usage-sync-ignored > div { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); }
+.usage-sync-ignored > div > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.usage-sync-ignored .outline-button { padding: 5px 7px; font-size: 10px; }
+
 .widget-setting-preview { display: none; }
 .widget-setting-preview + .outline-button { margin-top: 12px; }
 

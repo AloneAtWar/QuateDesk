@@ -19,6 +19,8 @@ class DesktopStore {
     this.cyclesPath = path.join(root, 'cycles.json');
     this.remoteAccessPath = path.join(root, 'remote-access.json');
     this.windowStatePath = path.join(root, 'window-state.json');
+    this.usageSyncConfigPath = path.join(root, 'usage-sync-config.json');
+    this.usageSyncStatePath = path.join(root, 'usage-sync-state.json');
     this.localPreviewTokenHashes = [];
     this.recoveryNotices = [];
   }
@@ -48,6 +50,25 @@ class DesktopStore {
 
   loadState() { return this.readJson(this.statePath, null); }
   saveState(state) { writeJsonDurable(this.statePath, state); return state; }
+
+  // Sync credentials are main-process-only and excluded from ordinary data exports.
+  loadUsageSyncConfig() {
+    const saved = this.readJson(this.usageSyncConfigPath, {});
+    const { enabled, endpoint, username, folder } = saved;
+    if (!saved.secrets) return { enabled, endpoint, username, folder };
+    if (!safeStorage.isEncryptionAvailable() || (process.platform === 'linux' && safeStorage.getSelectedStorageBackend?.() === 'basic_text')) throw new Error('系统凭据加密不可用');
+    const secrets = JSON.parse(safeStorage.decryptString(Buffer.from(saved.secrets, 'base64')));
+    return { enabled, endpoint, username, folder, password: secrets.password, passphrase: secrets.passphrase };
+  }
+
+  saveUsageSyncConfig({ enabled, endpoint, username, folder, password, passphrase }) {
+    if (!safeStorage.isEncryptionAvailable() || (process.platform === 'linux' && safeStorage.getSelectedStorageBackend?.() === 'basic_text')) throw new Error('系统凭据加密不可用，无法保存同步密码');
+    const secrets = safeStorage.encryptString(JSON.stringify({ password, passphrase })).toString('base64');
+    writeJsonDurable(this.usageSyncConfigPath, { version: 1, enabled, endpoint, username, folder, secrets });
+  }
+
+  loadUsageSyncState() { return this.readJson(this.usageSyncStatePath, null); }
+  saveUsageSyncState(state) { writeJsonDurable(this.usageSyncStatePath, state); }
 
   // 额度历史：{ accountId: [{ at, windows: { key: { remaining, amount, unit } } }] }
   loadHistory() { return this.readJson(this.historyPath, {}); }
