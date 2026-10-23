@@ -1,6 +1,6 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>主题设计说明与自定义规范</title><style>body{margin:0;background:#e8eae5;color:#26382d;font:14px/1.7 'Segoe UI','Microsoft YaHei',sans-serif}main{max-width:1120px;margin:auto;padding:28px 35px}h1{font-size:25px;margin:0 0 5px}p{margin:0 0 20px;color:#506455}details{margin:15px 0;border:1px solid #b9c9bd;border-radius:8px;background:#fff}summary{padding:14px 18px;cursor:pointer;font-weight:700}pre{margin:0;padding:18px 22px;border-top:1px solid #d8e1d9;white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.7 Consolas,'Microsoft YaHei',monospace}</style></head><body><main><h1>当前界面主题设计说明</h1><p>本轮迁移、主题入口、安卓明暗与自定义包内容。点击标题可折叠。</p><details open><summary>本轮设计说明</summary><pre># 主题探索第六轮：适配当前界面
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>主题设计说明与自定义规范</title><style>body{margin:0;background:#e8eae5;color:#26382d;font:14px/1.7 'Segoe UI','Microsoft YaHei',sans-serif}main{max-width:1120px;margin:auto;padding:28px 35px}h1{font-size:25px;margin:0 0 5px}p{margin:0 0 20px;color:#506455}details{margin:15px 0;border:1px solid #b9c9bd;border-radius:8px;background:#fff}summary{padding:14px 18px;cursor:pointer;font-weight:700}pre{margin:0;padding:18px 22px;border-top:1px solid #d8e1d9;white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.7 Consolas,'Microsoft YaHei',monospace}</style></head><body><main><h1>当前界面主题设计说明</h1><p>当前结论以第一节为准；下方为历轮提案与字段样例，点击可展开查阅。</p><details open><summary>本轮设计说明</summary><pre># 主题探索第六轮：适配当前界面
 
-阶段：设计稿，尚未接入正式应用。分支 `codex/theme-design-explorations` 已合并 2026-10-23 的主分支。入口 `style-explorer.html` 是离线单文件画廊；同一批匿名演示账号用于新旧比较。
+阶段：设计稿，尚未接入正式应用。分支 `codex/theme-design-explorations` 已合并 2026-10-23 的主分支。入口 `style-explorer.html` 是离线单文件画廊；各主题使用同一批匿名演示账号。此轮已按实际桌面看板校正：四列账号卡、无额外页面主标题、刷新队列默认收起。
 
 ## 当前产品改变了什么
 
@@ -14,17 +14,17 @@
 | 等高线 | 地形图 | 卡片成为地图切片，圆环像等高标尺，队列是地图图例 |
 | 赤色坐标 | 印刷信息图 | 六个账号有明确编号，紧密网格与红色标尺把扫读变成坐标定位 |
 
-原来的 16 套皮肤均保留原始 HTML，并另生成 `legacy-*.html` 适配当前组件树。它们仍使用各自的主色、字体、材质和圆环处理，新增了刷新队列、展开把手与五组设置要遵守的通用规则。第一轮四套偏配色的方向适合作为默认亮暗的衍生；第二至第五轮的完整皮肤仍可作为独立主题。此处是视觉适配验证，不能视为已经实现运行时主题系统。
+原来的 16 套皮肤均保留原始 HTML，并另生成 `legacy-*.html` 适配当前组件树。第六轮画廊只展示校正后的现版适配稿；历史原稿仍在各轮目录，不再和当前界面混排。每套主题保留账号同心圆、全部周期、四列顺序和默认收起的刷新队列，仅调整各自的主色、字体、材质与组件形态。第一轮四套偏配色的方向适合作为默认亮暗的衍生；第二至第五轮的完整皮肤仍可作为独立主题。此处是视觉适配验证，尚未实现运行时主题系统。
 
 ## 主题入口与明暗
 
 桌面保留右上角「设置」入口，外观页由明暗下拉改成可预览的主题库。主题选择是一个决定；“固定主题 / 跟随系统”是另一个决定。固定时主题作者声明亮或暗的有效模式，不能强行反色；跟随系统时用户分别选择亮色主题与暗色主题，没有选择时回退至默认亮色/暗色。桌面浮窗继承桌面已解析的主题，必要时用主题的轻量浮窗变体。
 
-远程页面、安卓应用保留**当前设备**的主题偏好，但不再在看板右上角放亮暗切换。连接前配对页先按手机系统明暗使用默认主题；连接后从「设置 → 当前设备显示」选「跟随电脑」或「本机选择」。若电脑主题未提供可用的移动版，回退至相同明暗的默认主题，并明确提示。手机的默认视图仍是独立设置。
+Android 原生外壳负责设备列表、扫码和连接错误，可保持系统／亮色／暗色三种克制外观。额度看板是电脑提供的 WebView 页面，由网页独立选择完整设计主题。两层不相互改写主题偏好；桌面与 WebView 可以共享主题定义和账号组件，但是否选同一款是另一项明确的偏好。这样新增主题无需在 Java 原生页和网页各实现一次。
 
-之前安卓的「外部明暗和内部一致」无需作为用户开关。应用每次解析出最终主题后，自动把其 `mode`（light/dark）映射给状态栏、导航栏和启动底色；主题身份与系统栏明暗是两个不同数据。桌面传给 WebView 的明暗提示只能解决首帧闪烁，不能替代主题 ID。若以后支持“跟随电脑主题”，协议应传受支持的主题 ID 与回退模式；不自动加载电脑上的任意 CSS 到手机。
+状态栏和导航栏在原生页依据外壳明暗显示，进入 WebView 时只依据当前网页底色调整图标可见性，返回时恢复外壳设置；这不需要「外部明暗和内部一致」开关。现有 Android 定时把 `lightTheme` 与 `data-theme` 双向校正的逻辑不适合作为未来多主题协议，后续实现需分离为系统栏适配与独立的主题存储。
 
-现有设置从 `theme: 'light' | 'dark'` 迁移到提案中的 `themeId`、`appearancePolicy`（fixed/system）、`lightThemeId`、`darkThemeId`。旧值无损映射为默认亮色/默认暗色。默认两款沿用现在的克制视觉，历史配置与同步包依然可读。
+桌面主题设置可以从 `theme: 'light' | 'dark'` 迁移为 `themeId` 与 `appearancePolicy`（fixed/system），跟随系统时再分别保存亮色和暗色主题 ID。WebView 另存自己的 `themeId`；旧明暗值无损映射为默认亮色/默认暗色。默认两款沿用现在的克制视觉，历史配置与同步包依然可读。
 
 ## 自定义主题需要包含什么
 
@@ -37,15 +37,15 @@
 | 数据图形 | 圆环、轨道、中心读数、周期圆点、告警状态，均须保留文字辅助 |
 | 当前新增区域 | 混合刷新条、三周期队列、展开把手、可滚动条目与空队列回退 |
 | 设置与弹层 | 五组设置页签、主题卡片、输入框、预览草稿、弹层与通知 |
-| 多端 | 桌面浮窗主题；远程/安卓移动版主题或安全回退；Android 系统栏依据 `mode` 自动推导 |
+| 多端 | 桌面浮窗与 WebView 响应式变体；Android 原生外壳独立维持克制亮暗，系统栏在网页显示期间适配当前页面 |
 | 素材 | 可选背景、纹理、字体、SVG 装饰；所有路径相对主题包，缺失时回退纯色 |
 
 导入后先预览真实数据和四种关键状态（正常、告警、不可用、聚焦），以及当前的刷新队列、设置抽屉和手机窄屏。保存后才应用；取消或导入失败恢复原主题。对比度和缩小视口时的字号应作为导入检查的一部分。主题 CSS 只能覆盖公开插槽及装饰，不能隐藏额度、账号名称、队列或警告信息。
 
 ## 本轮文件与局限
 
-`departure.html`、`contour.html`、`coordinates.html` 是新方向；`legacy-*.html` 是旧皮肤的当前界面适配；`appearance-flow.html` 展示桌面外观设置和安卓当前设备设置；`baseline-shots/` 是合并后演示界面截图。`build.mjs` 从本轮快照与旧稿重建全部 HTML。所有账号与读数来自浏览器 demo，设计页内的账户按钮不连接真实数据。安卓原生工程不在此仓库，本轮只依据 `src/remote.jsx`、`src/remote.css` 和主界面的设置代码做体验提案，未修改安卓实现。
-</pre></details><details open><summary>完整皮肤与自定义主题规范</summary><pre># Quota Desk：完整视觉主题提案 · 第二轮
+`departure.html`、`contour.html`、`coordinates.html` 是新方向；`legacy-*.html` 是旧皮肤的当前界面适配；`appearance-flow.html` 展示桌面主题库与独立的 Android 原生设备页；`baseline-shots/` 是实际演示界面截图。`build.mjs` 从本轮快照与旧稿重建全部 HTML。所有账号与读数来自浏览器 demo。账号卡、同心圆和底部队列沿用真实组件的内容与布局；设计页只有队列把手可切换展开状态，其余按钮不连接真实数据。Android 原生页依据 `D:\devlopment\QuotaDesk-Android` 的源码绘制示意，没有修改安卓实现。
+</pre></details><details><summary>完整皮肤与自定义主题规范（历史参考）</summary><pre># Quota Desk：完整视觉主题提案 · 第二轮
 
 阶段：主题首屏效果探索；未接入正式应用。第一轮配色稿已被本轮方向取代，第一轮 JSON 格式也不作为最终约束。
 
@@ -142,7 +142,7 @@ my-theme.qdtheme
 主 Agent 自查三套截图，修正金额裁切与首屏空隙；没有独立评审。首屏探索阶段不做业务交互、动效、响应式、生产构建或全量测试。截图工具未报页面横向溢出、控制台错误或图片加载失败。原有账号副标题、时间和底栏仍采用高密度工具的小字，未扩大本次范围去改默认产品字号。界面只补充「账号看板 / 6 个账号」作为共同阅读上下文，没有宣传口号或重复解释；没有额外需要删减的营销文案。
 
 未更改业务源文件、路由、入口或根目录 DESIGN.md。额外主题、作者接口与动效均待用户选定方向后落地。第一轮设置稿仅保留入口位置参考，其「只改颜色」的编辑范围由本说明取代。
-</pre></details><details open><summary>第三轮风格设计说明</summary><pre># Quota Desk 主题探索 · 第三轮
+</pre></details><details><summary>第三轮风格设计说明</summary><pre># Quota Desk 主题探索 · 第三轮
 
 用户要求在第二轮之外继续比较其他风格。本轮交付四套静态首屏，未选定正式主题，未改业务代码或根目录 DESIGN.md。
 
@@ -184,7 +184,7 @@ my-theme.qdtheme
 - 本轮没有营销段落，界面仅保留共同上下文「账号看板」「6 个账号」，无需删减重复说明。
 
 入口：`style-explorer.html`。原始图：`shots/&lt;候选&gt;/page.png`。四宫格：`shots/comparison/stitch.png`。单张原尺寸适合检查字形与细节，四宫格只用于比较整体风格。
-</pre></details><details open><summary>第四轮大胆主题设计说明</summary><pre># 大胆主题探索 · 第四轮
+</pre></details><details><summary>第四轮大胆主题设计说明</summary><pre># 大胆主题探索 · 第四轮
 
 范围：继续探索额外内置主题，强化视觉冲击；不改正式业务代码、入口、默认亮暗主题或 DESIGN.md。
 
@@ -224,7 +224,7 @@ my-theme.qdtheme
 保留的强荧光、斜纹、硬阴影、大背景几何是本轮用户要求的大胆风格，不推广到默认主题；主数据使用稳定实色表面。后续选定后需验证窄窗、长名称、告警、不可用、键盘焦点、浮窗与弹层。
 
 入口：`style-explorer.html`。四套独立稿：`acid.html`、`collage.html`、`memphis.html`、`orbital.html`。截图：`shots/&lt;方向&gt;/page.png`；四宫格：`shots/comparison/stitch.png`。
-</pre></details><details open><summary>街区信号设计说明</summary><pre># 街区信号 · 绝区零风格主题探索
+</pre></details><details><summary>街区信号设计说明</summary><pre># 街区信号 · 绝区零风格主题探索
 
 范围：用户指定绝区零类似风格，方向已经明确，本轮只做一套主题首屏。未修改生产源码、默认主题、入口或根目录 DESIGN.md。
 
@@ -285,7 +285,7 @@ my-theme.qdtheme
 - 工具提示「卡片里套卡片」保留：这里的内层是同一设备上的身份铭牌，负责亮暗分区与高亮状态，不是重复的信息容器。外壳与铭牌的深度差是本方向的主要造型。
 - 未独立评审，未实现交互、响应式、保存和主题切换；未运行生产构建和业务测试。此次没有业务源码更改。
 - 当前高密度副标题、时间和底栏仍采用较小字级。正式实现需继续验收窄窗、长名称、告警、不可用、抽屉、键盘焦点及桌面浮窗。
-</pre></details><details open><summary>自定义主题包 JSON 样例</summary><pre>{
+</pre></details><details><summary>自定义主题包 JSON 样例</summary><pre>{
   "schemaVersion": 2,
   "id": "custom-letterpress",
   "name": "我的纸本",
@@ -331,7 +331,7 @@ my-theme.qdtheme
   "assets": {},
   "capabilities": ["paper-texture", "offset-shadow"]
 }
-</pre></details><details open><summary>高级主题样式插槽样例</summary><pre>/* 公开主题接口提案，当前项目尚未提供这些 hooks。
+</pre></details><details><summary>高级主题样式插槽样例</summary><pre>/* 公开主题接口提案，当前项目尚未提供这些 hooks。
    放入完整包并在 manifest 中声明 stylesheet: "theme.css" 后才加载。
    此文件不覆盖布局、业务对象与交互命中范围。 */
 [data-qd-theme="custom-letterpress"] [data-theme-part="surface-account"] {
@@ -348,7 +348,7 @@ my-theme.qdtheme
   border: 1px solid var(--qd-border-strong);
   box-shadow: inset 0 0 0 3px var(--qd-surface);
 }
-</pre></details><details open><summary>第一轮主题 Schema（历史提案）</summary><pre>{
+</pre></details><details><summary>第一轮主题 Schema（历史提案）</summary><pre>{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Quota Desk theme proposal v1",
   "description": "设计阶段的主题格式提案，尚未接入应用。只允许数据与颜色，不允许 CSS、脚本或远程资源。",
@@ -425,7 +425,7 @@ my-theme.qdtheme
   },
   "$defs": {"color": {"type": "string", "pattern": "^#[0-9a-fA-F]{6}$"}}
 }
-</pre></details><details open><summary>第一轮主题样例（历史提案）</summary><pre>{
+</pre></details><details><summary>第一轮主题样例（历史提案）</summary><pre>{
   "schemaVersion": 1,
   "id": "my-ocean",
   "name": "我的深海",
@@ -442,7 +442,7 @@ my-theme.qdtheme
     "onAccent": "#14233A"
   }
 }
-</pre></details><details open><summary>第一轮 pine 颜色变量</summary><pre>{
+</pre></details><details><summary>第一轮 pine 颜色变量</summary><pre>{
   "bg": "#141d1f",
   "bg-grad": "#1b2629",
   "surface": "#1a2527",
@@ -510,7 +510,7 @@ my-theme.qdtheme
   "onboard-dash": "#444",
   "onboard-dash-hover": "#6d7a7c"
 }
-</pre></details><details open><summary>第一轮 porcelain 颜色变量</summary><pre>{
+</pre></details><details><summary>第一轮 porcelain 颜色变量</summary><pre>{
   "bg": "#eef1f5",
   "bg-grad": "#f8fafd",
   "surface": "#ffffff",
@@ -578,7 +578,7 @@ my-theme.qdtheme
   "onboard-dash": "#c9d2ca",
   "onboard-dash-hover": "#9ba69f"
 }
-</pre></details><details open><summary>第一轮 ocean 颜色变量</summary><pre>{
+</pre></details><details><summary>第一轮 ocean 颜色变量</summary><pre>{
   "bg": "#0e1627",
   "bg-grad": "#16253c",
   "surface": "#172238",
@@ -646,7 +646,7 @@ my-theme.qdtheme
   "onboard-dash": "#444",
   "onboard-dash-hover": "#6d7a7c"
 }
-</pre></details><details open><summary>第一轮 sand 颜色变量</summary><pre>{
+</pre></details><details><summary>第一轮 sand 颜色变量</summary><pre>{
   "bg": "#eee8dd",
   "bg-grad": "#f8f4ec",
   "surface": "#fbf8f1",

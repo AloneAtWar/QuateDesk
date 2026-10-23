@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "project": "Quota Desk · 当前界面主题探索",
-  "brief": "三套新方向、十六套旧稿原版与适配版、桌面和安卓主题入口及自定义主题说明；所有内容可在单个离线 HTML 中查看。",
-  "round": "06 · 主分支更新后的主题探索",
+  "brief": "三套新方向、十六套旧主题在真实四列看板上的适配、桌面主题入口及自定义主题说明；所有内容可在单个离线 HTML 中查看。",
+  "round": "06 · 当前结构校正版",
   "nativeViewport": "1200x820",
   "candidates": [
     {
@@ -61,8 +61,8 @@
     },
     {
       "id": "appearance-flow",
-      "name": "主题入口 · 桌面与安卓",
-      "concept": "五组设置结构内选择主题；安卓当前设备主题与系统栏明暗由最终主题推导。",
+      "name": "主题入口 · 桌面与安卓外壳",
+      "concept": "桌面看板使用完整主题；安卓原生设备管理保持独立、克制的外观。",
       "typography": "Segoe UI / 微软雅黑 / Consolas",
       "palette": [
         "#f7f8f4",
@@ -70,32 +70,12 @@
         "#36805c"
       ],
       "traits": [
-        "主题库",
+        "桌面主题库",
         "跟随系统策略",
-        "安卓当前设备"
+        "安卓原生外壳独立"
       ],
       "interactive": true,
       "source": "appearance-flow.html"
-    },
-    {
-      "id": "original-pine",
-      "name": "松墨 · 原稿",
-      "concept": "01 轮原始效果稿，保留合并前的看板结构，以便和下一张适配版比较。",
-      "typography": "沿用项目 Manrope / Noto Sans SC；字体不可用时使用系统无衬线字体",
-      "palette": [
-        "#141d1f",
-        "#1a2527",
-        "#e8efeb",
-        "#dfeae5"
-      ],
-      "traits": [
-        "原稿 01 轮",
-        "深色主题",
-        "原有深色的延续 · 低调青绿",
-        "现有布局与圆环原色"
-      ],
-      "nativeViewport": "1080x760",
-      "source": "../pine.html"
     },
     {
       "id": "legacy-pine",
@@ -117,26 +97,6 @@
       "source": "legacy-pine.html"
     },
     {
-      "id": "original-porcelain",
-      "name": "瓷白 · 原稿",
-      "concept": "01 轮原始效果稿，保留合并前的看板结构，以便和下一张适配版比较。",
-      "typography": "沿用项目 Manrope / Noto Sans SC；字体不可用时使用系统无衬线字体",
-      "palette": [
-        "#eef1f5",
-        "#ffffff",
-        "#202c3c",
-        "#284f80"
-      ],
-      "traits": [
-        "原稿 01 轮",
-        "浅色主题",
-        "中性冷白 · 清晰利落",
-        "现有布局与圆环原色"
-      ],
-      "nativeViewport": "1080x760",
-      "source": "../porcelain.html"
-    },
-    {
       "id": "legacy-porcelain",
       "name": "瓷白 · 现版适配",
       "concept": "01 轮旧主题的材质与配色，重新覆盖当前账号卡、顶部栏和可展开刷新队列。",
@@ -154,26 +114,6 @@
         "现有布局与圆环原色"
       ],
       "source": "legacy-porcelain.html"
-    },
-    {
-      "id": "original-ocean",
-      "name": "深海 · 原稿",
-      "concept": "01 轮原始效果稿，保留合并前的看板结构，以便和下一张适配版比较。",
-      "typography": "沿用项目 Manrope / Noto Sans SC；字体不可用时使用系统无衬线字体",
-      "palette": [
-        "#0e1627",
-        "#172238",
-        "#e8eef9",
-        "#b9d4ff"
-      ],
-      "traits": [
-        "原稿 01 轮",
-        "深色主题",
-        "海军蓝底 · 冷静专注",
-        "现有布局与圆环原色"
-      ],
-      "nativeViewport": "1080x760",
-      "source": "../ocean.html"
     },
     {
       "id": "legacy-ocean",
@@ -195,26 +135,6 @@
       "source": "legacy-ocean.html"
     },
     {
-      "id": "original-sand",
-      "name": "暖砂 · 原稿",
-      "concept": "01 轮原始效果稿，保留合并前的看板结构，以便和下一张适配版比较。",
-      "typography": "沿用项目 Manrope / Noto Sans SC；字体不可用时使用系统无衬线字体",
-      "palette": [
-        "#eee8dd",
-        "#fbf8f1",
-        "#382f28",
-        "#70553c"
-      ],
-      "traits": [
-        "原稿 01 轮",
-        "浅色主题",
-        "暖纸底色 · 柔和耐看",
-        "现有布局与圆环原色"
-      ],
-      "nativeViewport": "1080x760",
-      "source": "../sand.html"
-    },
-    {
       "id": "legacy-sand",
       "name": "暖砂 · 现版适配",
       "concept": "01 轮旧主题的材质与配色，重新覆盖当前账号卡、顶部栏和可展开刷新队列。",
@@ -232,26 +152,6 @@
         "现有布局与圆环原色"
       ],
       "source": "legacy-sand.html"
-    },
-    {
-      "id": "original-blueprint",
-      "name": "工程蓝图 · 原稿",
-      "concept": "02 轮原始效果稿，保留合并前的看板结构，以便和下一张适配版比较。",
-      "typography": "Consolas 等宽数字 / Segoe UI / 微软雅黑；标题紧凑，计量信息对齐。",
-      "palette": [
-        "#071c32",
-        "#14334c",
-        "#78d7ef",
-        "#e7f4fc"
-      ],
-      "traits": [
-        "原稿 02 轮",
-        "工程网格与制图角标",
-        "硬边面板与刻度圆环",
-        "等宽数字"
-      ],
-      "nativeViewport": "1200x820",
-      "source": "../round-02/blueprint.html"
     },
     {
       "id": "legacy-blueprint",
@@ -273,26 +173,6 @@
       "source": "legacy-blueprint.html"
     },
     {
-      "id": "original-letterpress",
-      "name": "纸本编辑 · 原稿",
-      "concept": "02 轮原始效果稿，保留合并前的看板结构，以便和下一张适配版比较。",
-      "typography": "Georgia / 宋体用于账号标题和额度数字；Segoe UI / 微软雅黑用于操作和辅助信息。",
-      "palette": [
-        "#e8e2d6",
-        "#faf6ec",
-        "#302b26",
-        "#9b3f36"
-      ],
-      "traits": [
-        "原稿 02 轮",
-        "纸张颗粒与印刷墨线",
-        "衬线标题及账簿排版",
-        "低饱和印刷色圆环"
-      ],
-      "nativeViewport": "1200x820",
-      "source": "../round-02/letterpress.html"
-    },
-    {
       "id": "legacy-letterpress",
       "name": "纸本编辑 · 现版适配",
       "concept": "02 轮旧主题的材质与配色，重新覆盖当前账号卡、顶部栏和可展开刷新队列。",
@@ -310,26 +190,6 @@
         "低饱和印刷色圆环"
       ],
       "source": "legacy-letterpress.html"
-    },
-    {
-      "id": "original-aurora",
-      "name": "极光玻璃 · 原稿",
-      "concept": "02 轮原始效果稿，保留合并前的看板结构，以便和下一张适配版比较。",
-      "typography": "Segoe UI / 微软雅黑；轻字重数字与圆润控件；标题 15px、主额度 21px。",
-      "palette": [
-        "#111223",
-        "#203b46",
-        "#aeece1",
-        "#c5b3ff"
-      ],
-      "traits": [
-        "原稿 02 轮",
-        "弧形极光与磨砂玻璃",
-        "柔光边缘与悬浮表面",
-        "透亮圆环及胶囊控件"
-      ],
-      "nativeViewport": "1200x820",
-      "source": "../round-02/aurora.html"
     },
     {
       "id": "legacy-aurora",
@@ -351,26 +211,6 @@
       "source": "legacy-aurora.html"
     },
     {
-      "id": "original-terminal",
-      "name": "像素终端 · 原稿",
-      "concept": "03 轮原始效果稿，保留合并前的看板结构，以便和下一张适配版比较。",
-      "typography": "Consolas / 微软雅黑；等宽额度，方形标签，终端反白标题。",
-      "palette": [
-        "#101811",
-        "#1c2b1b",
-        "#c9ef82",
-        "#ffbd69"
-      ],
-      "traits": [
-        "原稿 03 轮",
-        "阶梯边角与像素点阵",
-        "终端反白标题",
-        "荧光数字与方形控件"
-      ],
-      "nativeViewport": "1200x820",
-      "source": "../round-03/terminal.html"
-    },
-    {
       "id": "legacy-terminal",
       "name": "像素终端 · 现版适配",
       "concept": "03 轮旧主题的材质与配色，重新覆盖当前账号卡、顶部栏和可展开刷新队列。",
@@ -388,28 +228,6 @@
         "荧光数字与方形控件"
       ],
       "source": "legacy-terminal.html"
-    },
-    {
-      "id": "original-bauhaus",
-      "name": "几何构成 · 原稿",
-      "concept": "03 轮原始效果稿，保留合并前的看板结构，以便和下一张适配版比较。",
-      "typography": "Bahnschrift / 微软雅黑；几何无衬线标题，粗额度数字，平直控件。",
-      "palette": [
-        "#efece4",
-        "#fffdf7",
-        "#20221e",
-        "#c34633",
-        "#e1b547",
-        "#3566a2"
-      ],
-      "traits": [
-        "原稿 03 轮",
-        "几何原色与构成背景",
-        "黑色硬边与结构线",
-        "几何无衬线数字"
-      ],
-      "nativeViewport": "1200x820",
-      "source": "../round-03/bauhaus.html"
     },
     {
       "id": "legacy-bauhaus",
@@ -433,28 +251,6 @@
       "source": "legacy-bauhaus.html"
     },
     {
-      "id": "original-pop",
-      "name": "漫画波普 · 原稿",
-      "concept": "03 轮原始效果稿，保留合并前的看板结构，以便和下一张适配版比较。",
-      "typography": "Bahnschrift / 微软雅黑；厚标题、粗额度、漫画气泡式标签。",
-      "palette": [
-        "#f7e6ec",
-        "#fffaf0",
-        "#292339",
-        "#e9bd3b",
-        "#b04c83",
-        "#4084a1"
-      ],
-      "traits": [
-        "原稿 03 轮",
-        "漫画网点与粗墨线",
-        "贴纸卡片和硬阴影",
-        "气泡标签与明亮圆环"
-      ],
-      "nativeViewport": "1200x820",
-      "source": "../round-03/pop.html"
-    },
-    {
       "id": "legacy-pop",
       "name": "漫画波普 · 现版适配",
       "concept": "03 轮旧主题的材质与配色，重新覆盖当前账号卡、顶部栏和可展开刷新队列。",
@@ -474,27 +270,6 @@
         "气泡标签与明亮圆环"
       ],
       "source": "legacy-pop.html"
-    },
-    {
-      "id": "original-ink",
-      "name": "静谧水墨 · 原稿",
-      "concept": "03 轮原始效果稿，保留合并前的看板结构，以便和下一张适配版比较。",
-      "typography": "楷体标题 / 微软雅黑正文 / Georgia 数字；素面控件与朱砂标签。",
-      "palette": [
-        "#e6ebe5",
-        "#f7f9f3",
-        "#2c3933",
-        "#67816f",
-        "#9d4b3d"
-      ],
-      "traits": [
-        "原稿 03 轮",
-        "雾白留空与墨色晕染",
-        "楷体标题及朱砂小印",
-        "极细轮廓和柔边面板"
-      ],
-      "nativeViewport": "1200x820",
-      "source": "../round-03/ink.html"
     },
     {
       "id": "legacy-ink",
@@ -517,26 +292,6 @@
       "source": "legacy-ink.html"
     },
     {
-      "id": "original-acid",
-      "name": "酸性铬金 · 原稿",
-      "concept": "04 轮原始效果稿，保留合并前的看板结构，以便和下一张适配版比较。",
-      "typography": "Bahnschrift 重标题 / Consolas 额度；银色铭牌使用黑字，暗区使用荧光与白字。",
-      "palette": [
-        "#c5f326",
-        "#161919",
-        "#d7dce0",
-        "#e5ff98"
-      ],
-      "traits": [
-        "原稿 04 轮",
-        "荧光整面背景",
-        "液态铬金铭牌",
-        "切角黑面板与强对比数字"
-      ],
-      "nativeViewport": "1200x820",
-      "source": "../round-04/acid.html"
-    },
-    {
       "id": "legacy-acid",
       "name": "酸性铬金 · 现版适配",
       "concept": "04 轮旧主题的材质与配色，重新覆盖当前账号卡、顶部栏和可展开刷新队列。",
@@ -556,26 +311,6 @@
       "source": "legacy-acid.html"
     },
     {
-      "id": "original-collage",
-      "name": "街头拼贴 · 原稿",
-      "concept": "04 轮原始效果稿，保留合并前的看板结构，以便和下一张适配版比较。",
-      "typography": "Bahnschrift 粗标题 / Segoe UI / 微软雅黑；账户名称粗黑，数字像醒目印刷。",
-      "palette": [
-        "#ff7448",
-        "#17181b",
-        "#fff9e9",
-        "#d7f15b"
-      ],
-      "traits": [
-        "原稿 04 轮",
-        "橙色海报墙与斜纹",
-        "撕边纸片和胶带",
-        "黑白强对比与错位叠层"
-      ],
-      "nativeViewport": "1200x820",
-      "source": "../round-04/collage.html"
-    },
-    {
       "id": "legacy-collage",
       "name": "街头拼贴 · 现版适配",
       "concept": "04 轮旧主题的材质与配色，重新覆盖当前账号卡、顶部栏和可展开刷新队列。",
@@ -593,27 +328,6 @@
         "黑白强对比与错位叠层"
       ],
       "source": "legacy-collage.html"
-    },
-    {
-      "id": "original-memphis",
-      "name": "孟菲斯玩具 · 原稿",
-      "concept": "04 轮原始效果稿，保留合并前的看板结构，以便和下一张适配版比较。",
-      "typography": "Segoe UI / 微软雅黑；粗圆润标题，Bahnschrift 数字；胶囊形状态和按钮。",
-      "palette": [
-        "#3e38b5",
-        "#f0d7ef",
-        "#2e225e",
-        "#ffb75a",
-        "#5ed3c4"
-      ],
-      "traits": [
-        "原稿 04 轮",
-        "紫蓝舞台和大尺度几何",
-        "厚边玩具面板",
-        "柔韧曲线与胶囊按钮"
-      ],
-      "nativeViewport": "1200x820",
-      "source": "../round-04/memphis.html"
     },
     {
       "id": "legacy-memphis",
@@ -636,27 +350,6 @@
       "source": "legacy-memphis.html"
     },
     {
-      "id": "original-orbital",
-      "name": "太空舱仪表 · 原稿",
-      "concept": "04 轮原始效果稿，保留合并前的看板结构，以便和下一张适配版比较。",
-      "typography": "Bahnschrift 设备标题 / Consolas 仪表数字 / 微软雅黑；单色数据芯与橙色标签。",
-      "palette": [
-        "#1c2932",
-        "#dce4e4",
-        "#f7f8f0",
-        "#ec6f36",
-        "#233640"
-      ],
-      "traits": [
-        "原稿 04 轮",
-        "瓷白设备壳与深色舞台",
-        "螺钉和凹槽细节",
-        "黑色仪表芯与橙色标识"
-      ],
-      "nativeViewport": "1200x820",
-      "source": "../round-04/orbital.html"
-    },
-    {
       "id": "legacy-orbital",
       "name": "太空舱仪表 · 现版适配",
       "concept": "04 轮旧主题的材质与配色，重新覆盖当前账号卡、顶部栏和可展开刷新队列。",
@@ -677,26 +370,6 @@
       "source": "legacy-orbital.html"
     },
     {
-      "id": "original-street-signal",
-      "name": "街区信号 · 原稿",
-      "concept": "05 轮原始效果稿，保留合并前的看板结构，以便和下一张适配版比较。",
-      "typography": "Bahnschrift 压缩粗体及斜体数字 / Segoe UI / 微软雅黑，中文优先保证可读。",
-      "palette": [
-        "#171916",
-        "#2b2d2a",
-        "#d7f84a",
-        "#dfe3d7"
-      ],
-      "traits": [
-        "原稿 05 轮",
-        "厚设备边框与圆角铭牌",
-        "荧光黄选中态",
-        "唱片仪表和电视菜单式控件"
-      ],
-      "nativeViewport": "1200x820",
-      "source": "../round-05-zenless/street-signal.html"
-    },
-    {
       "id": "legacy-street-signal",
       "name": "街区信号 · 现版适配",
       "concept": "05 轮旧主题的材质与配色，重新覆盖当前账号卡、顶部栏和可展开刷新队列。",
@@ -714,38 +387,6 @@
         "唱片仪表和电视菜单式控件"
       ],
       "source": "legacy-street-signal.html"
-    },
-    {
-      "id": "previous-theme-picker",
-      "name": "原主题选择稿",
-      "concept": "早期设置入口，供和本轮主题库及五组设置结构比较。",
-      "typography": "沿用项目字体",
-      "palette": [
-        "#141d1f",
-        "#1a2527",
-        "#e8efeb"
-      ],
-      "traits": [
-        "历史设置稿"
-      ],
-      "source": "../theme-picker.html",
-      "nativeViewport": "1080x760"
-    },
-    {
-      "id": "previous-theme-custom",
-      "name": "原自定义编辑稿",
-      "concept": "早期自定义主题编辑界面，完整皮肤能力以新说明为准。",
-      "typography": "沿用项目字体",
-      "palette": [
-        "#141d1f",
-        "#1a2527",
-        "#e8efeb"
-      ],
-      "traits": [
-        "历史编辑稿"
-      ],
-      "source": "../theme-custom.html",
-      "nativeViewport": "1080x760"
     },
     {
       "id": "design-notes",
