@@ -1,0 +1,13 @@
+{
+  "version": "0.6.16-test (themes-direct)",
+  "directSelection": true,
+  "simplifiedControls": true,
+  "persistedAfterReload": true,
+  "widgetSynchronized": true,
+  "widget": {
+    "id": "contour",
+    "background": "#e9eadb",
+    "width": 284,
+    "height": 47
+  }
+}

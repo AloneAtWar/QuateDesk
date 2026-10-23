@@ -16,27 +16,30 @@ async function connect(target){
 async function until(read,message){for(let i=0;i<80;i++){const value=await read();if(value)return value;await delay(100);}throw Error(message);}
 (async()=>{
   const mainTarget=await until(async()=>{try{return(await targets()).find(t=>t.type==='page'&&/index\.html/.test(t.url)&&!/[?&]widget=1/.test(t.url));}catch{return null;}},'Test window not found');
-  const main=await connect(mainTarget);let widget;let original;
+  const main=await connect(mainTarget);let widget;let original;let testBuild=false;
   try{
     await until(()=>main.evaluate('Boolean(window.quotaDesk&&document.querySelector("[aria-label=\\"打开设置\\"]"))'),'Application did not load');
     original=await main.evaluate('(async()=>{const state=await window.quotaDesk.loadState();return {settings:state.settings||{},selection:document.documentElement.dataset.themeSelection,version:await window.quotaDesk.getVersion()};})()');
     if(!original.version.includes('-test'))throw Error('Refusing to exercise a production build');
+    testBuild=true;
     await main.evaluate('document.querySelector("[aria-label=\\"打开设置\\"]").click()');
     await until(()=>main.evaluate('Boolean(document.querySelector(".settings-drawer [data-theme-choice=contour]"))'),'Theme library missing');
-    await main.evaluate('document.querySelector(".settings-drawer [data-theme-choice=contour]").click()');
-    await until(()=>main.evaluate('Boolean(document.querySelector(".settings-drawer .theme-preview-actions .primary-button"))'),'Preview missing');
-    await main.evaluate('document.querySelector(".settings-drawer .theme-preview-actions .primary-button").click()');
-    await until(()=>main.evaluate('(async()=>{const state=await window.quotaDesk.loadState();return state.settings.themeId==="contour"&&!document.querySelector(".theme-preview-actions");})()'),'Theme was not saved');
+    const simplified=await main.evaluate(`!document.querySelector('.theme-policy,.theme-system-pair,[aria-label="主题分类"],.theme-preview-actions')&&document.querySelector('[aria-label="主题选择"]')!==null`);
+    if(!simplified)throw Error('Theme library still exposes policy, category or preview controls');
+    for(const theme of ['street-signal','contour']){
+      await main.evaluate(`document.querySelector('.settings-drawer [data-theme-choice="${theme}"]').click()`);
+      await until(()=>main.evaluate(`(async()=>{const state=await window.quotaDesk.loadState();return state.settings.themeId==="${theme}"&&state.settings.appearancePolicy==="fixed"&&document.documentElement.dataset.themeSelection==="${theme}"&&!document.querySelector('.theme-preview-actions')&&!document.querySelector('[data-theme-choice="${theme}"]').disabled;})()`),'Click did not directly apply and save the theme');
+    }
     await main.evaluate('window.quotaDesk.setWidgetVisible(true)');
     const widgetTarget=await until(async()=>(await targets()).find(t=>/[?&]widget=1/.test(t.url)),'Widget window missing');widget=await connect(widgetTarget);
     await until(()=>widget.evaluate('document.documentElement.dataset.themeSelection==="contour"'),'Widget theme is out of sync');
     const widgetState=await widget.evaluate('({id:document.documentElement.dataset.themeSelection,background:getComputedStyle(document.documentElement).getPropertyValue("--widget-bg").trim(),width:innerWidth,height:innerHeight})');
     await main.call('Page.reload');
     await until(()=>main.evaluate('document.documentElement.dataset.themeSelection==="contour"'),'Theme did not survive renderer reload');
-    const report={version:original.version,persistedAfterReload:true,widgetSynchronized:true,widget:widgetState};
-    fs.writeFileSync(path.resolve(__dirname,'../docs/testing/themes-2026-10-23/native-results.json'),JSON.stringify(report,null,2));console.log(report);
+    const report={version:original.version,directSelection:true,simplifiedControls:true,persistedAfterReload:true,widgetSynchronized:true,widget:widgetState};
+    fs.writeFileSync(path.resolve(__dirname,'../docs/testing/themes-2026-10-23/direct-selection-results.json'),JSON.stringify(report,null,2));console.log(report);
   }finally{
-    if(original){
+    if(testBuild&&original){
       const keys=['theme','themeId','appearancePolicy','lightThemeId','darkThemeId','customThemes'];
       await main.evaluate(`(async()=>{const original=${JSON.stringify(original.settings)};const state=await window.quotaDesk.loadState();for(const key of ${JSON.stringify(keys)}){delete state.settings[key];if(original[key]!==undefined)state.settings[key]=original[key];}await window.quotaDesk.saveState(state);await window.quotaDesk.setWidgetVisible(original.widget!==false);})()`);
       await main.call('Page.reload');

@@ -6,7 +6,6 @@ import './themes.css';
 const ThemeContext = createContext(null);
 export function ThemeProvider({children}) {
   const [preferences,setPreferences] = useState({});
-  const [preview,setPreview] = useState(null);
   const commitRef=useRef(null);
   const [systemDark,setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches);
   useEffect(() => {
@@ -15,7 +14,7 @@ export function ThemeProvider({children}) {
     media.addEventListener('change',update);
     return () => media.removeEventListener('change',update);
   },[]);
-  const theme = useMemo(() => resolveTheme(preview || preferences,systemDark),[preferences,preview,systemDark]);
+  const theme = useMemo(() => resolveTheme(preferences,systemDark),[preferences,systemDark]);
   useLayoutEffect(() => {
     const root = document.documentElement;
     root.dataset.theme = theme.mode;
@@ -38,7 +37,7 @@ export function ThemeProvider({children}) {
     window.dispatchEvent(new CustomEvent('qd-theme-changed',{detail:{id:theme.id,mode:theme.mode,background:theme.background}}));
     return () => { for (const key of applied) root.style.removeProperty(key); };
   },[theme]);
-  const value = useMemo(() => ({theme,preferences,setPreferences,preview,setPreview,systemDark,commitRef}),[theme,preferences,preview,systemDark]);
+  const value = useMemo(() => ({theme,preferences,setPreferences,systemDark,commitRef}),[theme,preferences,systemDark]);
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }
 export const useTheme = () => useContext(ThemeContext);
