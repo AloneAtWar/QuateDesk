@@ -1,4 +1,5 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, Notification, screen, session, shell, Tray } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, Notification, screen, session, shell, Tray } = require('electron');
+const { resolveWindowTheme, windowColors:themeColors } = require('./themes.cjs');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -137,10 +138,7 @@ let widgetLength = 1;
 // 额度历史保留天数：默认 7 天，最长 3 个月（90 天）
 const historyRetentionDays = () => clampRetentionDays(store?.loadState()?.settings?.historyDays);
 // 界面主题：默认暗色，主窗口与浮窗的底色保持一致避免闪白/闪黑
-const themeColors = (theme) => (theme === 'light'
-  ? { main: '#f3f5f1', widget: '#eef1ec' }
-  : { main: '#141d1f', widget: '#202c2e' });
-const savedTheme = () => (store?.loadState()?.settings?.theme === 'light' ? 'light' : 'dark');
+const savedTheme = () => resolveWindowTheme(store?.loadState()?.settings || {},nativeTheme.shouldUseDarkColors);
 const RELEASES_URL = 'https://github.com/AloneAtWar/QuateDesk/releases';
 const distPath = path.join(__dirname, '..', 'dist', 'index.html');
 // dev:desktop 开发模式由 build/dev-desktop.cjs 注入 QD_DEV_URL，渲染页改吃 Vite 开发
@@ -1693,11 +1691,12 @@ function applyWidgetSize(scale, length) {
 }
 
 function applyTheme(theme) {
-  const colors = themeColors(theme === 'light' ? 'light' : 'dark');
+  const colors = themeColors(theme);
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setBackgroundColor(colors.main);
   if (widgetWindow && !widgetWindow.isDestroyed()) widgetWindow.setBackgroundColor(colors.widget);
   return true;
 }
+nativeTheme.on('updated', () => applyTheme(savedTheme()));
 
 function setWidgetVisible(visible) {
   if (!widgetWindow || widgetWindow.isDestroyed()) { if (visible) createWidgetWindow(); return visible; }
@@ -1798,6 +1797,7 @@ function registerIpc() {
     const previous = migrateState(store.loadState());
     const autoUpdateWasDisabled = previous?.settings?.autoUpdate === false;
     const saved = store.saveState(cleanState(mergeMainOwnedUsageConnections(state, previous)));
+    applyTheme(savedTheme());
     // 本机用量后台增量跟随设置开关启停
     cliUsage?.applySettings(saved?.settings);
     const savedIds = new Set((saved.accounts || []).map((account) => account.id));

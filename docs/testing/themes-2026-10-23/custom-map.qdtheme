@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 2,
+  "id": "custom-test-map",
+  "name": "测试地图主题",
+  "extends": "contour",
+  "mode": "light",
+  "tokens": {"bg":"#f6eed9","surface":"#fff9e8","ink":"#183b32","widget-bg":"#e4d9ba","widget-chip-value":"#214e42","ring-0":"#327968"},
+  "shape": {"cardRadius":12,"controlRadius":5},
+  "material": {"preset":"grid","shadowPreset":"soft"},
+  "typography": {"numeric":"Consolas,monospace"}
+}

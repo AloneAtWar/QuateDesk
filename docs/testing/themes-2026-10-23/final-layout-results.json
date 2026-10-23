@@ -1,0 +1,422 @@
+[
+  {
+    "id": "default-dark",
+    "width": 1200,
+    "columns": 4,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "default-light",
+    "width": 1200,
+    "columns": 4,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "departure",
+    "width": 1200,
+    "columns": 4,
+    "cards": 4,
+    "rings": 6,
+    "overflow": true,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "contour",
+    "width": 1200,
+    "columns": 4,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "coordinates",
+    "width": 1200,
+    "columns": 4,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "pine",
+    "width": 1200,
+    "columns": 4,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "porcelain",
+    "width": 1200,
+    "columns": 4,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "ocean",
+    "width": 1200,
+    "columns": 4,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "sand",
+    "width": 1200,
+    "columns": 4,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "blueprint",
+    "width": 1200,
+    "columns": 4,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "letterpress",
+    "width": 1200,
+    "columns": 4,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "aurora",
+    "width": 1200,
+    "columns": 4,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "terminal",
+    "width": 1200,
+    "columns": 4,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "bauhaus",
+    "width": 1200,
+    "columns": 4,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "pop",
+    "width": 1200,
+    "columns": 4,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "ink",
+    "width": 1200,
+    "columns": 4,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "acid",
+    "width": 1200,
+    "columns": 4,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "collage",
+    "width": 1200,
+    "columns": 4,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "memphis",
+    "width": 1200,
+    "columns": 4,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "orbital",
+    "width": 1200,
+    "columns": 4,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "street-signal",
+    "width": 1200,
+    "columns": 4,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "default-dark",
+    "width": 390,
+    "columns": 2,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "default-light",
+    "width": 390,
+    "columns": 2,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "departure",
+    "width": 390,
+    "columns": 2,
+    "cards": 4,
+    "rings": 6,
+    "overflow": true,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "contour",
+    "width": 390,
+    "columns": 2,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "coordinates",
+    "width": 390,
+    "columns": 2,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "pine",
+    "width": 390,
+    "columns": 2,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "porcelain",
+    "width": 390,
+    "columns": 2,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "ocean",
+    "width": 390,
+    "columns": 2,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "sand",
+    "width": 390,
+    "columns": 2,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "blueprint",
+    "width": 390,
+    "columns": 2,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "letterpress",
+    "width": 390,
+    "columns": 2,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "aurora",
+    "width": 390,
+    "columns": 2,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "terminal",
+    "width": 390,
+    "columns": 2,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "bauhaus",
+    "width": 390,
+    "columns": 2,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "pop",
+    "width": 390,
+    "columns": 2,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "ink",
+    "width": 390,
+    "columns": 2,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "acid",
+    "width": 390,
+    "columns": 2,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "collage",
+    "width": 390,
+    "columns": 2,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "memphis",
+    "width": 390,
+    "columns": 2,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "orbital",
+    "width": 390,
+    "columns": 2,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  },
+  {
+    "id": "street-signal",
+    "width": 390,
+    "columns": 2,
+    "cards": 4,
+    "rings": 6,
+    "overflow": false,
+    "cardOverflow": 0,
+    "roundRings": true
+  }
+]

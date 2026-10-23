@@ -1,0 +1,116 @@
+[
+  {
+    "id": "departure",
+    "mode": "dark",
+    "background": "#101312",
+    "widgetBackground": "#101312"
+  },
+  {
+    "id": "contour",
+    "mode": "light",
+    "background": "#e9eadb",
+    "widgetBackground": "#e9eadb"
+  },
+  {
+    "id": "coordinates",
+    "mode": "light",
+    "background": "#f1efe9",
+    "widgetBackground": "#f1efe9"
+  },
+  {
+    "id": "pine",
+    "mode": "dark",
+    "background": "#141d1f",
+    "widgetBackground": "#141d1f"
+  },
+  {
+    "id": "porcelain",
+    "mode": "light",
+    "background": "#eef1f5",
+    "widgetBackground": "#eef1f5"
+  },
+  {
+    "id": "ocean",
+    "mode": "dark",
+    "background": "#0e1627",
+    "widgetBackground": "#0e1627"
+  },
+  {
+    "id": "sand",
+    "mode": "light",
+    "background": "#eee8dd",
+    "widgetBackground": "#eee8dd"
+  },
+  {
+    "id": "blueprint",
+    "mode": "dark",
+    "background": "#071c32",
+    "widgetBackground": "#071c32"
+  },
+  {
+    "id": "letterpress",
+    "mode": "light",
+    "background": "#e8e2d6",
+    "widgetBackground": "#e8e2d6"
+  },
+  {
+    "id": "aurora",
+    "mode": "dark",
+    "background": "#101220",
+    "widgetBackground": "#111223"
+  },
+  {
+    "id": "terminal",
+    "mode": "dark",
+    "background": "#101811",
+    "widgetBackground": "#101811"
+  },
+  {
+    "id": "bauhaus",
+    "mode": "light",
+    "background": "#eeeae2",
+    "widgetBackground": "#efece4"
+  },
+  {
+    "id": "pop",
+    "mode": "light",
+    "background": "#f7e6ec",
+    "widgetBackground": "#f7e6ec"
+  },
+  {
+    "id": "ink",
+    "mode": "light",
+    "background": "#e6ebe5",
+    "widgetBackground": "#e6ebe5"
+  },
+  {
+    "id": "acid",
+    "mode": "dark",
+    "background": "#c5f326",
+    "widgetBackground": "#c5f326"
+  },
+  {
+    "id": "collage",
+    "mode": "light",
+    "background": "#ff7448",
+    "widgetBackground": "#ff7448"
+  },
+  {
+    "id": "memphis",
+    "mode": "light",
+    "background": "#3e38b5",
+    "widgetBackground": "#3e38b5"
+  },
+  {
+    "id": "orbital",
+    "mode": "light",
+    "background": "#1c2932",
+    "widgetBackground": "#1c2932"
+  },
+  {
+    "id": "street-signal",
+    "mode": "dark",
+    "background": "#2b2d2a",
+    "widgetBackground": "#171916"
+  }
+]

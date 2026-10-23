@@ -26,6 +26,9 @@ import { BoardPullRefreshIndicator } from './board-pull-refresh-indicator';
 import { accountRefreshFeedback, TransientToast, useTransientToast } from './transient-toast';
 import { buildRefreshQueues, getUpcomingRefreshItems } from './upcoming-refresh';
 import './styles.css';
+import { normalizeAppearance } from './themes/model.js';
+import { ThemeProvider, useThemeSource } from './themes/runtime.jsx';
+import ThemeLibrary from './themes/ThemeLibrary.jsx';
 
 const formatReset = (resetAt) => {
   if (!resetAt) return '不刷新';
@@ -236,6 +239,7 @@ const normalizeSettings = (value = {}) => {
     // 首次引导完成标记：默认未完成，老用户因已有账号在 App 启动时自动补记
     onboarded: false,
     ...value,
+    ...normalizeAppearance(value),
     // 轮询间隔只提供 5–30 分钟；旧配置里更大的值收敛到 30，缺失或非法时回到默认 5
     pollMinutes: [5, 10, 15, 30].includes(pollNumber) ? String(pollNumber) : (pollNumber > 30 ? '30' : '5'),
     reminderRules: Array.isArray(value.reminderRules) ? value.reminderRules : defaultReminderRules,
@@ -2156,7 +2160,7 @@ function SharedSettingsPanel({ variant = 'desktop', desktopSection = 'all', show
     </>}
     {(desktopSection === 'all' || desktopSection === 'display') && <>
     <section className="drawer-section">{showHeading && <div className="drawer-section-title"><SunMoon size={16} /><span>外观显示</span></div>}
-      <div className="setting-select"><span><b>界面主题</b><small>主窗口与桌面浮窗同步应用</small></span><select value={values.theme === 'light' ? 'light' : 'dark'} onChange={(event) => update((old) => ({ ...old, theme: event.target.value }))}><option value="dark">暗色</option><option value="light">亮色</option></select></div>
+      <ThemeLibrary preferences={values} onChange={update} />
       <Toggle checked={values.showUpcomingRefresh !== false} onChange={(value) => update((old) => ({ ...old, showUpcomingRefresh: value }))} label="显示即将刷新" description="在电脑和手机看板底部显示各周期的刷新队列" />
     </section>
     </>}
@@ -2418,7 +2422,7 @@ function WidgetRow({ account, provider, compact = false, tagLimit = 2, length = 
   // 完整展示且有富余空间时名称保留跑马灯滚动；有任何收起或长度变短时切换为省略号截断
   const pristine = fit.smallHidden === 0 && fit.drop === 0 && fit.tagMode === fullFit.tagMode;
   const marquee = pristine && length >= 0.98;
-  const classes = ['widget-row', compact && 'compact', fit.tagMode === 1 && 'tag-dot', fit.squeeze && 'squeeze', !marquee && 'ellipsis'].filter(Boolean).join(' ');
+  const classes = ['widget-row', compact && 'compact', account?.status === 'warning' && 'warning', fit.tagMode === 1 && 'tag-dot', fit.squeeze && 'squeeze', !marquee && 'ellipsis'].filter(Boolean).join(' ');
   return <div className={classes} ref={rowRef} title={account.lastError || account.name} onDoubleClick={onDoubleClick}><Logo provider={provider} size="sm" interactive={false} /><div className="widget-account-block" style={{ minWidth: fit.squeeze ? 0 : blockFloor.name + blockFloor.tag }}><span className="widget-account-marquee" ref={marqueeRef}><span className="widget-account" ref={nameRef}>{account.name}</span></span>{fit.tagMode > 0 && <span className="widget-tags" ref={tagsRef}>{(account.tags || []).slice(0, 1).map((tag) => <em key={tag} title={tag}>{tag}</em>)}</span>}</div><div className="widget-meters" ref={metersRef}>{visibleMeters.length ? visibleMeters.map((meter) => <span className={`widget-meter ${meter.available === false ? 'off' : ''} ${smallHiddenKeys.has(meter.key) ? 'hide-reset' : ''}`} key={meter.key}><b>{windowCatalog[meter.key]?.short}</b><em>{formatAmount(meter)}</em><small title={formatResetAbsolute(meter.resetAt)}>{formatResetCompact(meter.resetAt)}</small></span>) : <span className="widget-empty">等待同步</span>}</div><span className={`widget-live ${account.status === 'warning' ? 'warning' : ''}`}><i /></span></div>;
 }
 
@@ -2860,7 +2864,7 @@ function WidgetApp() {
   const [accounts, setAccounts] = useState(window.quotaDesk ? null : initialAccounts);
   const [providers, setProviders] = useState(providerCatalog);
   const [settings, setSettings] = useState({ widgetTagLimit: '2' });
-  useEffect(() => { document.documentElement.dataset.theme = settings.theme === 'light' ? 'light' : 'dark'; }, [settings.theme]);
+  useThemeSource(settings);
   const [index, setIndex] = useState(0);
   const dragRef = useRef({ active: false, moved: false, x: 0, y: 0 });
   useEffect(() => {
@@ -3748,8 +3752,6 @@ const ONBOARD_CCSWITCH_MOCK = {
 function OnboardingWizard({ settings, setSettings, accounts, providers, ccswitchAvailable, onOpenImport, onApplyCcswitch, onDeleteAccount, onFinish }) {
   const [step, setStep] = useState(0);
   const accountsCount = accounts.length;
-  const theme = settings.theme === 'light' ? 'light' : 'dark';
-  const pickTheme = (value) => setSettings((old) => ({ ...old, theme: value }));
   // cc-switch 不可用时（纯网页模式）整步省略，进度点与前后导航都跟着少一个
   const steps = ccswitchAvailable ? ONBOARD_STEPS : ONBOARD_STEPS.filter((item) => item.key !== 'ccswitch');
   const stepKey = steps[step]?.key;
@@ -3845,18 +3847,7 @@ function OnboardingWizard({ settings, setSettings, accounts, providers, ccswitch
             </>}
           </div>
           <div className={`onboard-body${stepKey === 'connect' ? ' is-connect' : ''}${stepKey === 'ccswitch' ? ' is-ccswitch' : ''}`}>
-            {stepKey === 'theme' && <div className="onboard-theme-grid" role="radiogroup" aria-label="界面主题">
-              <button type="button" role="radio" aria-checked={theme === 'dark'} className={`onboard-theme-card ${theme === 'dark' ? 'selected' : ''}`} onClick={() => pickTheme('dark')}>
-                <span className="onboard-theme-preview preview-dark"><i /><i /><i /></span>
-                <b>暗色</b><small>夜间编码，柔和护眼</small>
-                {theme === 'dark' && <span className="onboard-theme-check"><Check size={13} /></span>}
-              </button>
-              <button type="button" role="radio" aria-checked={theme === 'light'} className={`onboard-theme-card ${theme === 'light' ? 'selected' : ''}`} onClick={() => pickTheme('light')}>
-                <span className="onboard-theme-preview preview-light"><i /><i /><i /></span>
-                <b>亮色</b><small>白天使用，清爽通透</small>
-                {theme === 'light' && <span className="onboard-theme-check"><Check size={13} /></span>}
-              </button>
-            </div>}
+            {stepKey === 'theme' && <ThemeLibrary preferences={settings} onChange={setSettings} compact />}
             {stepKey === 'connect' && <>
               {/* 展示区：右上角是手动添加入口，下面是账号网格（或空态占位）；
                   网格最高 140px，账号更多时在网格内部滚动 */}
@@ -4048,6 +4039,9 @@ function App() {
     settings: { ...(next.settings || settings), widgetPreview: false },
     lastSync: next.lastSync || lastSync,
   });
+  const appliedTheme=useThemeSource(settings, async appearance=>{
+    if(bridge){const current=serializableState();await bridge.saveState({...current,settings:{...current.settings,...appearance}});}
+  });
 
   useEffect(() => {
     if (!bridge) return undefined;
@@ -4091,8 +4085,7 @@ function App() {
   useEffect(() => { const timer = setInterval(() => setWidgetIndex((index) => (index + 1) % Math.max(accounts.length, 1)), 6000); return () => clearInterval(timer); }, [accounts.length]);
   useEffect(() => { const timer = setInterval(() => setTick((value) => value + 1), 60_000); return () => clearInterval(timer); }, []);
   useEffect(() => { if (bridge && hydrated.current) bridge.setWidgetVisible(Boolean(settings.widget)).catch((error) => setDesktopError(error.message)); }, [settings.widget]);
-  useEffect(() => { document.documentElement.dataset.theme = settings.theme === 'light' ? 'light' : 'dark'; }, [settings.theme]);
-  useEffect(() => { if (bridge && hydrated.current) bridge.setTheme?.(settings.theme === 'light' ? 'light' : 'dark').catch(() => {}); }, [settings.theme]);
+  useEffect(() => { if (bridge && hydrated.current) bridge.setTheme?.({mode:appliedTheme.mode,background:appliedTheme.background,widgetBackground:appliedTheme.widgetBackground}).catch(() => {}); }, [appliedTheme.mode,appliedTheme.background,appliedTheme.widgetBackground]);
   useEffect(() => { if (bridge && hydrated.current) bridge.setWidgetSize?.({ scale: clampWidgetScale(settings.widgetScale), length: clampWidgetLength(settings.widgetLength) }).catch(() => {}); }, [settings.widgetScale, settings.widgetLength]);
 
   // 浮窗预览跟随浮窗口径：只展示未停用的账号
@@ -4444,6 +4437,6 @@ async function mountApp() {
     const { installBrowserDemo } = await import('./demo/install.js');
     installBrowserDemo();
   }
-  createRoot(rootElement).render(widgetMode ? <WidgetApp /> : <App />);
+  createRoot(rootElement).render(<ThemeProvider>{widgetMode ? <WidgetApp /> : <App />}</ThemeProvider>);
 }
 if (rootElement) mountApp();

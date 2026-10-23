@@ -175,6 +175,8 @@ body.remote-usage-bounded .remote-app { height: 100dvh; }
   .remote-titlebar .last-checked { display: none; }
   .remote-titlebar .titlebar-drag { min-width: 18px; flex: 0 0 18px; }
   .remote-titlebar .titlebar-drag b { display: none; }
+}
+@media (max-width: 359px) {
   #remote-root .remote-main .overview-grid { gap: 8px; }
   /* 单列布局下所有卡片全宽，撤销上面的孤卡半宽收敛 */
   #remote-root .remote-main .overview-grid > .overview-card,

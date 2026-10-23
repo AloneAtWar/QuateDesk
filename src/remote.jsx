@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AlertCircle, ArrowUpRight, Clock3, KeyRound, LockKeyhole, Moon, RefreshCw, ShieldCheck, Sun, WifiOff } from 'lucide-react';
+import { AlertCircle, ArrowUpRight, Clock3, KeyRound, LockKeyhole, Palette, RefreshCw, ShieldCheck, WifiOff } from 'lucide-react';
 import { formatChecked, HistoryView, Logo, StatusView, UpcomingRefreshBar } from './main.jsx';
 import StatisticsView from './statistics/StatisticsView';
 import { AppShell } from './app-shell';
@@ -11,6 +11,10 @@ import { MAIN_VIEW_ITEMS, ViewMenu } from './view-menu';
 import { initialAccounts, providerCatalog } from './data';
 import './styles.css';
 import './remote.css';
+import { ThemeProvider, useThemeSource } from './themes/runtime.jsx';
+import { normalizeAppearance } from './themes/model.js';
+import ThemeLibrary from './themes/ThemeLibrary.jsx';
+import { SettingsWindow } from './settings-window';
 
 document.documentElement.classList.add('remote-page');
 document.body.classList.add('remote-page');
@@ -19,6 +23,7 @@ const TOKEN_KEY = 'quota-desk-remote-token-v1';
 const DEVICE_ID_KEY = 'quota-desk-remote-device-id-v1';
 const DEVICE_NAME_KEY = 'quota-desk-remote-device-name-v1';
 const THEME_KEY = 'quota-desk-remote-theme-v1';
+const APPEARANCE_KEY = 'quota-desk-remote-appearance-v2';
 const MODE_KEY = 'quota-desk-remote-mode-v1';
 const SNAPSHOT_REFRESH_MS = 15_000;
 // 电脑本机打开远程页(设置 → 远程查看 → 预览):免配对码、免设备信息
@@ -141,12 +146,12 @@ const demoLocalCliSummary = () => {
   return { days, summary: { totalTokens: days.reduce((sum, day) => sum + day.totalTokens, 0), peakTokens: Math.max(...days.map((day) => day.totalTokens)), currentStreakDays: 5, longestStreakDays: 42, activeDays: days.filter((day) => day.totalTokens > 0).length }, matchedModels: [], recordsByAgent: null };
 };
 
-function Pairing({ onConnect, pairingKey, message, theme, setTheme }) {
+function Pairing({ onConnect, pairingKey, message, onOpenThemes }) {
   const [input, setInput] = useState('');
   const [deviceName, setDeviceName] = useState(() => localStorage.getItem(DEVICE_NAME_KEY) || defaultDeviceName());
   return <main className="remote-pair-page">
     <div className="remote-pair-card">
-      <div className="remote-pair-top"><div className="remote-pair-icon"><LockKeyhole size={26} strokeWidth={1.7} /></div><button type="button" className="remote-pair-theme" onClick={() => setTheme((old) => old === 'dark' ? 'light' : 'dark')} aria-label={theme === 'dark' ? '切换亮色主题' : '切换暗色主题'}>{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</button></div>
+      <div className="remote-pair-top"><div className="remote-pair-icon"><LockKeyhole size={26} strokeWidth={1.7} /></div><button type="button" className="remote-pair-theme" onClick={onOpenThemes} aria-label="打开主题库"><Palette size={16}/></button></div>
       <div className="remote-eyebrow">QUOTA DESK · 额度查看</div>
       <h1>在这里查看你的额度</h1>
       <p>{pairingKey ? '已读取电脑端配对信息。给这台设备起个名称，然后完成配对。' : '在电脑端打开「设置 → 远程查看 → 配对信息」，扫描二维码；也可以粘贴配对信息。'}</p>
@@ -186,7 +191,18 @@ function App() {
   const reloadSnapshotRef = useRef(null);
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
-  const [theme, setTheme] = useState(() => initialConnection.theme || localStorage.getItem(THEME_KEY) || 'dark');
+  const [themePreferences, setThemePreferences] = useState(() => {
+    try { return normalizeAppearance(JSON.parse(localStorage.getItem(APPEARANCE_KEY)) || {theme:initialConnection.theme || localStorage.getItem(THEME_KEY)}); }
+    catch { return normalizeAppearance({}); }
+  });
+  const [themesOpen,setThemesOpen] = useState(false);
+  const [themeError,setThemeError] = useState('');
+  useThemeSource(themePreferences);
+  const changeThemePreferences = updater => {
+    const next=normalizeAppearance(typeof updater === 'function' ? updater(themePreferences) : updater);
+    try { localStorage.setItem(APPEARANCE_KEY,JSON.stringify(next));setThemePreferences(next);setThemeError(''); }
+    catch { throw Error('无法保存外观，请检查浏览器可用存储空间'); }
+  };
   // 本机用量在远程页是只读会话:设置不落库,仅本页生效(合并同名模型开关等)
   const [localCliSettings, setLocalCliSettings] = useState({ localCliUsage: { enabled: true, mergeSameModels: true } });
   const snapshotRef = useRef(snapshot);
@@ -216,11 +232,10 @@ function App() {
     return () => { active = false; };
   }, [previewConnecting]);
 
-  useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem(THEME_KEY, theme); }, [theme]);
-  // 安卓 App 的主题监听器在发现页面与 App 不一致时通过它直接校正主题(走 React 状态,
-  // localStorage 与 data-theme 随上面的 effect 一并更新);旧版 App 仍回退到点击切换按钮
+  // Older native shells call this bridge. Acknowledge without changing this
+  // webpage's independent theme or opening the new appearance dialog.
   useEffect(() => {
-    window.__qdSetTheme = (value) => { if (value === 'light' || value === 'dark') setTheme(value); };
+    window.__qdSetTheme = () => {};
     return () => { delete window.__qdSetTheme; };
   }, []);
   useEffect(() => { localStorage.setItem(MODE_KEY, mode); }, [mode]);
@@ -378,7 +393,8 @@ function App() {
       <div className="remote-loading"><RefreshCw size={23} className="spinning" /><span>正在连接本机预览…</span></div>
     </main>
   </AppShell>;
-  if (!token || pairingKey) return <Pairing pairingKey={pairingKey} onConnect={connect} message={pairError} theme={theme} setTheme={setTheme} />;
+  const themeDialog=themesOpen&&<SettingsWindow title="当前设备主题" icon={Palette} onClose={()=>setThemesOpen(false)}><p className="remote-theme-note">仅应用于当前网页看板，电脑和 Android 设备列表保留各自的外观。</p><ThemeLibrary preferences={themePreferences} onChange={changeThemePreferences}/>{themeError&&<p className="theme-error" role="alert">{themeError}</p>}</SettingsWindow>;
+  if (!token || pairingKey) return <><Pairing pairingKey={pairingKey} onConnect={connect} message={pairError} onOpenThemes={()=>setThemesOpen(true)} />{themeDialog}</>;
   const refreshStatistics = async () => {
     setStatisticsLoading(true);
     const api = inLocalUsageView ? localUsageApiRef.current : wasteApiRef.current;
@@ -393,10 +409,11 @@ function App() {
     <span className="last-checked" title={inLocalUsageView ? '最后一次本机用量扫描时间' : inWasteView ? '最后一次历史周期读取时间' : '最后一次额度检查时间'}><Clock3 size={11} />{inLocalUsageView ? (localUsageMeta?.lastScannedAt ? formatChecked(localUsageMeta.lastScannedAt) : '未扫描') : inWasteView ? (wasteMeta?.loadedAt ? formatChecked(wasteMeta.loadedAt) : '未读取') : lastSync ? formatChecked(lastSync) : '尚未检查'}</span>
     <button type="button" className="control-solo" onClick={inUsageView ? refreshStatistics : refreshAccounts} disabled={boardRefreshing || statisticsLoading || (inWasteView && wasteMeta?.loading)} title={inLocalUsageView ? '重新扫描本机用量' : inWasteView ? '重新读取历史浪费' : '立即刷新全部账号'} aria-label={inLocalUsageView ? '重新扫描本机用量' : inWasteView ? '重新读取历史浪费' : '立即刷新全部账号'}><RefreshCw size={13} className={boardRefreshing || statisticsLoading || (inLocalUsageView && localUsageMeta?.scanning) || (inWasteView && wasteMeta?.loading) ? 'spinning' : ''} /></button>
     <ViewMenu current={mode} open={viewMenuOpen} onOpenChange={setViewMenuOpen} onChange={(key) => { setSelectedAccountId(null); setMode(key); }} />
-    <button type="button" className="remote-title-theme" onClick={() => setTheme((old) => old === 'dark' ? 'light' : 'dark')} aria-label={theme === 'dark' ? '切换亮色主题' : '切换暗色主题'}>{theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}</button>
+    <button type="button" className="remote-title-theme" onClick={() => setThemesOpen(true)} aria-label="打开主题库"><Palette size={14}/></button>
   </>;
   return <AppShell variant="remote" controls={shellControls}>
     <TransientToast toast={toast} />
+    {themeDialog}
     <main ref={boardPull.ref} className={`main-shell content-area remote-main${inUsageView ? ' local-usage-mode' : ''}`}>
       <BoardPullRefreshIndicator pull={boardPull} hint="继续下拉刷新" />
       {loading && !snapshot ? <div className="remote-loading"><RefreshCw size={23} className="spinning" /><span>正在读取电脑上的额度</span></div> : snapshot ? <>
@@ -410,4 +427,4 @@ function App() {
 }
 
 const root = document.getElementById('remote-root');
-if (root) createRoot(root).render(<App />);
+if (root) createRoot(root).render(<ThemeProvider><App /></ThemeProvider>);
