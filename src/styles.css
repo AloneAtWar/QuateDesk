@@ -144,21 +144,7 @@ button { cursor: pointer; }
 .settings-disclosure-tools > span { display: inline-flex; align-items: center; gap: 6px; }
 .settings-disclosure-tools .mini-add { margin-left: auto; }
 .settings-disclosure-tools .title-help { margin: 0; }
-@media (prefers-reduced-motion: reduce) { .settings-disclosure-content { animation: none; } .settings-disclosure > .settings-entry > svg:last-child { transition: none; } }
-.settings-window-backdrop { z-index: 40; padding: 16px; }
-.modal.settings-window { display: flex; flex-direction: column; width: min(480px, 100%); max-height: calc(100dvh - 32px); padding: 0; overflow: hidden; }
-.settings-window:focus { outline: 0; }
-.settings-window-header { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 16px; border-bottom: 1px solid var(--line); }
-.settings-window-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.settings-window-heading > svg { flex-shrink: 0; color: var(--ink-soft); }
-.settings-window-heading h2 { margin: 0; font-size: 15px; line-height: 1.5; letter-spacing: -.02em; }
-.settings-window-heading > .title-help { flex-shrink: 0; margin: 0; }
-.settings-window-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.settings-window-actions .mini-add { margin-left: 0; white-space: nowrap; }
-.settings-window-content { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 16px 16px; scrollbar-gutter: stable; }
-.settings-window-content > .drawer-section:last-child { padding-bottom: 0; }
-.settings-window button:focus-visible, .settings-window select:focus-visible, .settings-window input:focus-visible { outline: 2px solid var(--focus-border); outline-offset: 2px; }
-@media (prefers-reduced-motion: reduce) { .settings-entry { transition: none; } .settings-window, .settings-window-backdrop { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .settings-entry { transition: none; } .settings-disclosure-content { animation: none; } .settings-disclosure > .settings-entry > svg:last-child { transition: none; } }
 
 .rule-editor { display: grid; grid-template-columns: 1fr 1fr 26px; align-items: end; gap: 8px; margin: 9px 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
 .rule-editor label { display: grid; gap: 5px; min-width: 0; }

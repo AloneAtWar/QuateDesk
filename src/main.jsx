@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import {
@@ -17,7 +17,6 @@ import { computeHeatmapCells, useHeatmapPan } from './heatmap-pan';
 import StatisticsView from './statistics/StatisticsView';
 import qrcode from 'qrcode-generator';
 import { AppShell } from './app-shell';
-import { SettingsWindow } from './settings-window';
 import { SettingsDisclosure } from './settings-disclosure';
 import { ViewMenu } from './view-menu';
 import { EmptyWorkspace } from './empty-workspace';
@@ -2204,7 +2203,6 @@ function AccountRow({ account, provider, testing, onEdit, onTest, onToggleDisabl
 
 function SettingsDrawer({ variant = 'desktop', accounts, providers, settings, setSettings, onClose, openModal, onDeleteAccount, onToggleAccountDisabled, onTestAccount, testingAccountId, onEditProvider, autoLaunch, onToggleAutoLaunch, appVersion, update, onOpenUpdate, onCheckUpdate, onClearHistory, runtime, onReopenOnboarding, onOpenDevTools, onExportData, onImportData, dataBusy, onSaveRemoteSettings, theme, setTheme, mode, setMode }) {
   const [category, setCategory] = useState('appearance');
-  const [page, setPage] = useState(null);
   const drawerRef = useRef(null);
   const scrollRef = useRef(null);
   const categoryNavRef = useRef(null);
@@ -2256,51 +2254,55 @@ function SettingsDrawer({ variant = 'desktop', accounts, providers, settings, se
       if (previousFocus?.isConnected) previousFocus.focus();
     };
   }, [variant]);
-  const selectCategory = (key) => { setCategory(key); setPage(null); scrollRef.current?.scrollTo({ top: 0 }); };
+  const selectCategory = (key) => { setCategory(key); scrollRef.current?.scrollTo({ top: 0 }); };
   if (variant === 'remote') return <SharedSettingsPanel variant="remote" settings={settings} onSave={onSaveRemoteSettings} theme={theme} setTheme={setTheme} mode={mode} setMode={setMode} />;
   const proxyMode = ['direct', 'system', 'manual'].includes(settings.proxyMode) ? settings.proxyMode : 'system';
   const categories = [['appearance', '外观'], ['accounts', '账号'], ['monitoring', '监控'], ['data', '数据'], ['system', '系统']];
-  const pages = [
+  const groups = [
     {
-      id: 'display', category: 'appearance', title: '外观与窗口', icon: SunMoon, inline: true,
+      id: 'display', category: 'appearance', title: '外观与窗口', icon: SunMoon,
+      summary: `${settings.theme === 'light' ? '亮色' : '暗色'}主题 · ${settings.showUpcomingRefresh !== false ? '显示' : '隐藏'}刷新队列`,
       content: <>
-        <SharedSettingsPanel desktopSection="display" settings={settings} setSettings={setSettings} />
+        <SharedSettingsPanel desktopSection="display" showHeading={false} settings={settings} setSettings={setSettings} />
         {window.quotaDesk?.resetWindowSize && <section className="drawer-section"><div className="drawer-section-title"><AppWindow size={16} /><span>主窗口</span></div><div className="setting-select"><span><b>窗口大小</b><small>拖动窗口边缘自由调整（最小 520 × 470），内容自动多列铺开；大小会被记住</small></span><button className="outline-button" onClick={() => window.quotaDesk.resetWindowSize()}>恢复默认大小</button></div></section>}
       </>,
     },
     {
-      id: 'widget', category: 'appearance', title: '浮窗样式与轮换', icon: Monitor, disclosure: true,
-      summary: `大小 ${Math.round(clampWidgetScale(settings.widgetScale) * 100)}% · 长度 ${Math.round(clampWidgetLength(settings.widgetLength) * 100)}%`,
-      overview: <section className="drawer-section"><Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" description="固定在桌面顶层，双击展开主窗口" /></section>,
+      id: 'widget', category: 'appearance', title: '浮窗样式与轮换', icon: Monitor,
+      summary: `${settings.widget ? '已开启' : '已关闭'} · 大小 ${Math.round(clampWidgetScale(settings.widgetScale) * 100)}% · 长度 ${Math.round(clampWidgetLength(settings.widgetLength) * 100)}%`,
       help: <TitleHelp>长度只调整横向宽度（60%–150%）。浮窗会展示账号的全部额度窗口（含 1M）；空间不足时会逐级收起：标签先缩成小圆点再隐藏，倒计时按周期从长到短逐个隐藏，最后才收起最长周期的额度。只有一个额度窗口的账号通常不用收起任何内容；名称放不下时会显示省略号，悬停可查看完整内容。</TitleHelp>,
-      content: <section className="drawer-section"><Toggle checked={settings.widgetAutoScroll !== false} onChange={(value) => setSettings((old) => ({ ...old, widgetAutoScroll: value }))} label="自动轮换账号" description="多个账号时每隔几秒切换展示；关闭后固定当前账号，滚轮仍可手动切换" /><label className="size-slider"><span>大小</span><input type="range" min={80} max={300} step={5} value={Math.round(clampWidgetScale(settings.widgetScale) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetScale: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetScale(settings.widgetScale) * 100)}%</b></label><label className="size-slider"><span>长度</span><input type="range" min={Math.round(WIDGET_MIN_LENGTH * 100)} max={Math.round(WIDGET_MAX_LENGTH * 100)} step={5} value={Math.round(clampWidgetLength(settings.widgetLength) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetLength: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetLength(settings.widgetLength) * 100)}%</b></label><button type="button" className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetScale: 0.9, widgetLength: 0.9 }))}>恢复默认大小与长度</button><div className="widget-setting-preview"><div style={{ width: Math.round(WIDGET_BASE_SIZE.width * clampWidgetLength(settings.widgetLength)), maxWidth: '100%', margin: '0 auto' }}>{(() => { const previewAccount = accounts.find((item) => !item.disabled) ?? accounts[0]; return <WidgetRow account={previewAccount} provider={providers.find((item) => item.id === previewAccount?.providerId)} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} />; })()}</div></div><button className="outline-button full" onClick={() => { setPage(null); setSettings((old) => ({ ...old, widgetPreview: true })); }}><Eye size={15} /> 预览并调整</button></section>,
+      content: <section className="drawer-section"><Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" description="固定在桌面顶层，双击展开主窗口" /><Toggle checked={settings.widgetAutoScroll !== false} onChange={(value) => setSettings((old) => ({ ...old, widgetAutoScroll: value }))} label="自动轮换账号" description="多个账号时每隔几秒切换展示；关闭后固定当前账号，滚轮仍可手动切换" /><label className="size-slider"><span>大小</span><input type="range" min={80} max={300} step={5} value={Math.round(clampWidgetScale(settings.widgetScale) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetScale: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetScale(settings.widgetScale) * 100)}%</b></label><label className="size-slider"><span>长度</span><input type="range" min={Math.round(WIDGET_MIN_LENGTH * 100)} max={Math.round(WIDGET_MAX_LENGTH * 100)} step={5} value={Math.round(clampWidgetLength(settings.widgetLength) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetLength: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetLength(settings.widgetLength) * 100)}%</b></label><button type="button" className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetScale: 0.9, widgetLength: 0.9 }))}>恢复默认大小与长度</button><div className="widget-setting-preview"><div style={{ width: Math.round(WIDGET_BASE_SIZE.width * clampWidgetLength(settings.widgetLength)), maxWidth: '100%', margin: '0 auto' }}>{(() => { const previewAccount = accounts.find((item) => !item.disabled) ?? accounts[0]; return <WidgetRow account={previewAccount} provider={providers.find((item) => item.id === previewAccount?.providerId)} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} />; })()}</div></div><button className="outline-button full" onClick={() => setSettings((old) => ({ ...old, widgetPreview: true }))}><Eye size={15} /> 预览并调整</button></section>,
     },
     {
-      id: 'accounts', category: 'accounts', title: '账号与凭据', icon: ShieldCheck, inline: true,
-      content: <section className="drawer-section"><div className="drawer-section-title"><ShieldCheck size={16} /><span>账号与凭据</span><button type="button" className="mini-add" onClick={() => openModal('account')}><Plus size={14} /> 添加账号</button></div><div className="settings-list settings-accounts-list">{accounts.length === 0 && <div className="settings-empty">还没有账号</div>}{accounts.map((account) => <AccountRow key={account.id} account={account} provider={providers.find((item) => item.id === account.providerId)} testing={testingAccountId === account.id} onEdit={(item) => openModal({ type: 'account-edit', account: item })} onTest={onTestAccount} onToggleDisabled={onToggleAccountDisabled} onDelete={onDeleteAccount} />)}</div>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button full drawer-import-button" onClick={() => openModal('import-ccswitch')}><Download size={14} /> 从 cc-switch 导入账号</button>}</section>,
+      id: 'accounts', category: 'accounts', title: '账号与凭据', icon: ShieldCheck,
+      summary: `${accounts.length} 个账号 · ${accounts.filter((account) => !account.disabled).length} 个启用`,
+      actions: <button type="button" className="mini-add" onClick={() => openModal('account')}><Plus size={14} /> 添加账号</button>,
+      content: <section className="drawer-section"><div className="settings-list settings-accounts-list">{accounts.length === 0 && <div className="settings-empty">还没有账号</div>}{accounts.map((account) => <AccountRow key={account.id} account={account} provider={providers.find((item) => item.id === account.providerId)} testing={testingAccountId === account.id} onEdit={(item) => openModal({ type: 'account-edit', account: item })} onTest={onTestAccount} onToggleDisabled={onToggleAccountDisabled} onDelete={onDeleteAccount} />)}</div>{window.quotaDesk?.scanCcswitchImport && <button className="outline-button full drawer-import-button" onClick={() => openModal('import-ccswitch')}><Download size={14} /> 从 cc-switch 导入账号</button>}</section>,
     },
     {
-      id: 'providers', category: 'accounts', title: '厂商适配', icon: LayoutGrid, disclosure: true,
+      id: 'providers', category: 'accounts', title: '厂商适配', icon: LayoutGrid,
       summary: `${providers.length} 个厂商 · 查询接口与额度映射`,
       actions: <button type="button" className="mini-add" onClick={() => openModal('provider')}><Plus size={14} /> 新增厂商</button>,
       content: <section className="drawer-section"><div className="settings-list providers-list">{providers.map((provider) => <div className="settings-account" key={provider.id}><Logo provider={provider} size="sm" /><div><b title={provider.name}>{provider.name}</b><small>{provider.requestConfig?.adapterMode === 'script' ? '脚本适配' : ['grok', 'grokbot'].includes(provider.requestConfig?.adapterMode) ? '专属适配' : '标准映射'}</small></div><button className="row-icon-button" title="编辑厂商" aria-label={`编辑 ${provider.name}`} onClick={() => onEditProvider(provider)}><Pencil size={13} /></button><span className="adapter-state"><Check size={13} /></span></div>)}</div></section>,
     },
     {
-      id: 'reminders', category: 'monitoring', title: '提醒规则', icon: Bell, disclosure: true,
-      summary: `${(settings.reminderRules || []).length} 条规则 · 重置时间与剩余额度`,
-      overview: <SharedSettingsPanel desktopSection="monitoring" settings={settings} setSettings={setSettings} />,
-      content: <SharedSettingsPanel desktopSection="rules" showHeading={false} settings={settings} setSettings={setSettings} />,
+      id: 'reminders', category: 'monitoring', title: '刷新与提醒', icon: Bell,
+      summary: `每 ${settings.pollMinutes} 分钟检查 · ${settings.alerts !== false ? `${(settings.reminderRules || []).length} 条提醒规则` : '提醒已关闭'}`,
+      content: <SharedSettingsPanel desktopSection="general" showHeading={false} settings={settings} setSettings={setSettings} />,
     },
     {
-      id: 'local-usage', category: 'monitoring', title: '本机用量', icon: SquareTerminal, inline: true,
-      content: <section className="drawer-section"><div className="drawer-section-title"><SquareTerminal size={16} /><span>本机用量</span></div><Toggle checked={settings.localCliUsage?.scanWsl !== false} onChange={(value) => setSettings((old) => ({ ...old, localCliUsage: { ...(old.localCliUsage || {}), scanWsl: value } }))} label="统计 WSL 用量" description="统计运行中 WSL 发行版的 CLI 用量，未安装时自动忽略" /></section>,
+      id: 'local-usage', category: 'monitoring', title: '本机用量', icon: SquareTerminal,
+      summary: settings.localCliUsage?.scanWsl !== false ? '包含 WSL 用量' : '不含 WSL 用量',
+      content: <section className="drawer-section"><Toggle checked={settings.localCliUsage?.scanWsl !== false} onChange={(value) => setSettings((old) => ({ ...old, localCliUsage: { ...(old.localCliUsage || {}), scanWsl: value } }))} label="统计 WSL 用量" description="统计运行中 WSL 发行版的 CLI 用量，未安装时自动忽略" /></section>,
     },
     {
-      id: 'history', category: 'data', title: '历史与备份', icon: History, inline: true,
-      content: <section className="drawer-section"><div className="drawer-section-title"><History size={16} /><span>历史与备份</span><TitleHelp><span>额度历史：每次成功刷新后记录一条；超过保留时长的记录会自动清理；选择“永久”时，超过 30 天的记录会自动降采样为每小时一条，删除账号也会一并删除该账号的历史。</span><br /><span>数据导入与导出：导出包含账号信息、账号凭据、自定义厂商、额度历史和周期档案；导入会合并数据并跳过重复账号与厂商。导出文件含敏感凭据，请妥善保管。</span></TitleHelp></div><div className="setting-select"><span><b>保留时长</b><small>每次成功刷新后记录，用于账号趋势图</small></span><select value={settings.historyDays} onChange={(event) => setSettings((old) => ({ ...old, historyDays: Number(event.target.value) }))}><option value={3}>3 天</option><option value={7}>7 天（默认）</option><option value={15}>15 天</option><option value={30}>30 天</option><option value={60}>60 天</option><option value={90}>3 个月（最长）</option><option value={0}>永久</option></select></div><button className="outline-button full" onClick={onClearHistory}><Trash2 size={14} /> 清除全部历史记录</button><div className="data-transfer-actions"><button type="button" className="outline-button" disabled={Boolean(dataBusy)} onClick={onExportData}><Download size={14} /> {dataBusy === 'export' ? '正在导出…' : '导出数据'}</button><button type="button" className="outline-button" disabled={Boolean(dataBusy)} onClick={onImportData}><UploadCloud size={14} /> {dataBusy === 'import' ? '正在导入…' : '导入数据'}</button></div></section>,
+      id: 'history', category: 'data', title: '历史与备份', icon: History,
+      summary: `历史${Number(settings.historyDays) === 0 ? '永久保留' : `保留 ${settings.historyDays} 天`} · 数据备份`,
+      help: <TitleHelp><span>额度历史：每次成功刷新后记录一条；超过保留时长的记录会自动清理；选择“永久”时，超过 30 天的记录会自动降采样为每小时一条，删除账号也会一并删除该账号的历史。</span><br /><span>数据导入与导出：导出包含账号信息、账号凭据、自定义厂商、额度历史和周期档案；导入会合并数据并跳过重复账号与厂商。导出文件含敏感凭据，请妥善保管。</span></TitleHelp>,
+      content: <section className="drawer-section"><div className="setting-select"><span><b>保留时长</b><small>每次成功刷新后记录，用于账号趋势图</small></span><select value={settings.historyDays} onChange={(event) => setSettings((old) => ({ ...old, historyDays: Number(event.target.value) }))}><option value={3}>3 天</option><option value={7}>7 天（默认）</option><option value={15}>15 天</option><option value={30}>30 天</option><option value={60}>60 天</option><option value={90}>3 个月（最长）</option><option value={0}>永久</option></select></div><button className="outline-button full" onClick={onClearHistory}><Trash2 size={14} /> 清除全部历史记录</button><div className="data-transfer-actions"><button type="button" className="outline-button" disabled={Boolean(dataBusy)} onClick={onExportData}><Download size={14} /> {dataBusy === 'export' ? '正在导出…' : '导出数据'}</button><button type="button" className="outline-button" disabled={Boolean(dataBusy)} onClick={onImportData}><UploadCloud size={14} /> {dataBusy === 'import' ? '正在导入…' : '导入数据'}</button></div></section>,
     },
     {
-      id: 'archives', category: 'data', title: '用量档案', icon: Database, disclosure: true,
+      id: 'archives', category: 'data', title: '用量档案', icon: Database,
       summary: '本机与导入来源 · 用量档案导入、导出',
       content: <UsageArchivesSettings showHeading={false} />,
     },
@@ -2311,21 +2313,23 @@ function SettingsDrawer({ variant = 'desktop', accounts, providers, settings, se
       available: Boolean(window.quotaDesk?.getUsageSyncStatus),
     },
     {
-      id: 'proxy', category: 'system', title: '网络代理', icon: Globe, inline: true,
-      content: <section className="drawer-section"><div className="drawer-section-title"><Globe size={16} /><span>网络代理</span><TitleHelp>访问 Claude、Codex、Gemini、Grok 等境外厂商时直连常被中断，建议配置可用代理。地址以代理工具实际监听的端口为准（Clash Verge Rev 默认 mixed-port 7897）；只填写 host:port 时按 HTTP 代理处理。切换代理模式后，建议点击账号行的“刷新”验证效果。</TitleHelp></div><div className="setting-select"><span><b>代理模式</b><small>所有账号的额度请求共用，保存后立即生效</small></span><select value={proxyMode} onChange={(event) => setSettings((old) => ({ ...old, proxyMode: event.target.value }))}><option value="system">跟随系统（默认）</option><option value="manual">手动输入</option><option value="direct">不使用代理</option></select></div>{proxyMode === 'manual' && <label className="field drawer-proxy-field"><span>代理地址 <small>留空时退回跟随系统</small></span><input value={settings.proxyUrl ?? ''} onChange={(event) => setSettings((old) => ({ ...old, proxyUrl: event.target.value }))} placeholder="http://127.0.0.1:7897 或 socks5://127.0.0.1:7898" spellCheck="false" autoComplete="off" /></label>}</section>,
+      id: 'proxy', category: 'system', title: '网络代理', icon: Globe,
+      summary: { system: '跟随系统代理', manual: '手动代理', direct: '不使用代理' }[proxyMode],
+      help: <TitleHelp>访问 Claude、Codex、Gemini、Grok 等境外厂商时直连常被中断，建议配置可用代理。地址以代理工具实际监听的端口为准（Clash Verge Rev 默认 mixed-port 7897）；只填写 host:port 时按 HTTP 代理处理。切换代理模式后，建议点击账号行的“刷新”验证效果。</TitleHelp>,
+      content: <section className="drawer-section"><div className="setting-select"><span><b>代理模式</b><small>所有账号的额度请求共用，保存后立即生效</small></span><select value={proxyMode} onChange={(event) => setSettings((old) => ({ ...old, proxyMode: event.target.value }))}><option value="system">跟随系统（默认）</option><option value="manual">手动输入</option><option value="direct">不使用代理</option></select></div>{proxyMode === 'manual' && <label className="field drawer-proxy-field"><span>代理地址 <small>留空时退回跟随系统</small></span><input value={settings.proxyUrl ?? ''} onChange={(event) => setSettings((old) => ({ ...old, proxyUrl: event.target.value }))} placeholder="http://127.0.0.1:7897 或 socks5://127.0.0.1:7898" spellCheck="false" autoComplete="off" /></label>}</section>,
     },
     {
-      id: 'remote', category: 'system', title: '远程查看', icon: Monitor, disclosure: true,
+      id: 'remote', category: 'system', title: '远程查看', icon: Monitor,
       summary: '局域网访问、端口与配对设备',
       content: <section className="drawer-section"><RemoteViewSettings /></section>,
     },
     {
-      id: 'startup', category: 'system', title: '启动与更新', icon: Power, inline: true,
-      content: <section className="drawer-section"><div className="drawer-section-title"><Power size={16} /><span>启动与更新</span></div><Toggle checked={autoLaunch} onChange={onToggleAutoLaunch} label="开机自启" description="登录 Windows 后自动启动 Quota Desk" /><Toggle checked={settings.autoUpdate !== false} onChange={(value) => setSettings((old) => ({ ...old, autoUpdate: value }))} label="自动检查更新" description="启动时及每小时自动检查 GitHub 上是否有新版本" /><div className="setting-select"><span><b>版本更新</b><small>当前版本 v{appVersion || '-'}</small></span>{update && ['available', 'downloading', 'downloaded'].includes(update.status) ? <button className="outline-button" onClick={onOpenUpdate}>v{update.version} 可用</button> : <button className="outline-button" disabled={update?.status === 'checking'} onClick={onCheckUpdate}>{update?.status === 'checking' ? '正在检查…' : '检查更新'}</button>}</div>{settings.ignoredUpdateVersion && <div className="setting-select"><span><b>已忽略 v{settings.ignoredUpdateVersion}</b><small>该版本的更新不再主动提醒，进入设置的检查更新仍可用</small></span><button className="outline-button" onClick={() => setSettings((old) => ({ ...old, ignoredUpdateVersion: null }))}>恢复提醒</button></div>}<button type="button" className="outline-button full" onClick={onReopenOnboarding}><Sparkles size={14} /> 重新打开新手指引</button>{onOpenDevTools && <button type="button" className="outline-button full" onClick={onOpenDevTools}><Bug size={14} /> 打开调试面板（F12）</button>}</section>,
+      id: 'startup', category: 'system', title: '启动与更新', icon: Power,
+      summary: `${autoLaunch ? '开机自启' : '手动启动'} · ${settings.autoUpdate !== false ? '自动检查更新' : '手动检查更新'}`,
+      content: <section className="drawer-section"><Toggle checked={autoLaunch} onChange={onToggleAutoLaunch} label="开机自启" description="登录 Windows 后自动启动 Quota Desk" /><Toggle checked={settings.autoUpdate !== false} onChange={(value) => setSettings((old) => ({ ...old, autoUpdate: value }))} label="自动检查更新" description="启动时及每小时自动检查 GitHub 上是否有新版本" /><div className="setting-select"><span><b>版本更新</b><small>当前版本 v{appVersion || '-'}</small></span>{update && ['available', 'downloading', 'downloaded'].includes(update.status) ? <button className="outline-button" onClick={onOpenUpdate}>v{update.version} 可用</button> : <button className="outline-button" disabled={update?.status === 'checking'} onClick={onCheckUpdate}>{update?.status === 'checking' ? '正在检查…' : '检查更新'}</button>}</div>{settings.ignoredUpdateVersion && <div className="setting-select"><span><b>已忽略 v{settings.ignoredUpdateVersion}</b><small>该版本的更新不再主动提醒，进入设置的检查更新仍可用</small></span><button className="outline-button" onClick={() => setSettings((old) => ({ ...old, ignoredUpdateVersion: null }))}>恢复提醒</button></div>}<button type="button" className="outline-button full" onClick={onReopenOnboarding}><Sparkles size={14} /> 重新打开新手指引</button>{onOpenDevTools && <button type="button" className="outline-button full" onClick={onOpenDevTools}><Bug size={14} /> 打开调试面板（F12）</button>}</section>,
     },
   ].filter((item) => item.available !== false);
-  const activePage = pages.find((item) => item.id === page && !item.inline && !item.disclosure);
-  return <><div className="drawer-shade" onClick={onClose} /><aside className="settings-drawer" role="dialog" aria-modal={activePage ? undefined : true} aria-labelledby="settings-title" tabIndex={-1} ref={drawerRef} inert={Boolean(activePage)}>
+  return <><div className="drawer-shade" onClick={onClose} /><aside className="settings-drawer" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabIndex={-1} ref={drawerRef}>
     <div className="drawer-header"><h2 id="settings-title">设置</h2><button type="button" className="icon-button" onClick={onClose} title="关闭（Esc）" aria-label="关闭设置"><X size={17} /></button></div>
     <div className="settings-nav-strip">
       <button type="button" className="settings-nav-arrow" hidden={!categoryScroll.left && !categoryScroll.right} aria-label="向左滚动设置分类" disabled={!categoryScroll.left} onClick={() => categoryNavRef.current?.scrollBy({ left: -220 })}><ChevronLeft size={15} /></button>
@@ -2339,16 +2343,10 @@ function SettingsDrawer({ variant = 'desktop', accounts, providers, settings, se
     </div>
     <div className="drawer-scroll" id="settings-content" ref={scrollRef}>
       <div className="settings-directory" key={category}>
-        {pages.filter((item) => item.category === category).map(({ id, title, icon: Icon, summary, inline, disclosure, help, actions, overview, content }) => <Fragment key={id}>
-          {overview}
-          {inline ? content : disclosure ? <SettingsDisclosure id={id} title={title} icon={Icon} summary={summary} help={help} actions={actions}>{content}</SettingsDisclosure> : <button type="button" className="settings-entry" id={`settings-entry-${id}`} aria-label={`打开${title}`} aria-describedby={`settings-summary-${id}`} aria-haspopup="dialog" onClick={() => setPage(id)}>
-            <Icon size={18} /><span className="settings-entry-copy"><b>{title}</b><small id={`settings-summary-${id}`}>{summary}</small></span><ChevronRight size={15} />
-          </button>}
-        </Fragment>)}
+        {groups.filter((item) => item.category === category).map(({ id, title, icon, summary, help, actions, content }) => <SettingsDisclosure key={id} id={id} title={title} icon={icon} summary={summary} help={help} actions={actions}>{content}</SettingsDisclosure>)}
       </div>
     </div>
   </aside>
-    {activePage && <SettingsWindow title={activePage.title} icon={activePage.icon} help={activePage.help} actions={activePage.actions} onClose={() => setPage(null)}>{activePage.content}</SettingsWindow>}
   </>;
 }
 
