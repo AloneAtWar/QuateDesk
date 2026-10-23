@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "project": "Quota Desk · 当前界面主题探索",
-  "brief": "三套新方向、十六套旧主题在真实四列看板上的适配、桌面主题入口及自定义主题说明；所有内容可在单个离线 HTML 中查看。",
+  "brief": "三套新方向、十六套旧主题在真实四列看板上的适配、对应的桌面浮窗、桌面主题入口及自定义主题说明；所有内容可在单个离线 HTML 中查看。",
   "round": "06 · 当前结构校正版",
   "nativeViewport": "1200x820",
   "candidates": [
@@ -58,6 +58,25 @@
         "排版驱动的硬边结构"
       ],
       "source": "coordinates.html"
+    },
+    {
+      "id": "widget-companions",
+      "name": "桌面浮窗 · 全主题适配",
+      "concept": "同一主题从四列账号看板延续到 350×52 基准浮窗；轮换账号、多个额度周期和告警状态仍按现有浮窗的信息顺序呈现。",
+      "typography": "与所选看板主题一致，读数保持紧凑可辨",
+      "palette": [
+        "#171916",
+        "#d7f84a",
+        "#f7f5e9",
+        "#d54032"
+      ],
+      "traits": [
+        "十九套主题成对预览",
+        "默认与加长尺寸",
+        "正常、告警、不可用"
+      ],
+      "interactive": true,
+      "source": "widget-companions.html"
     },
     {
       "id": "appearance-flow",
