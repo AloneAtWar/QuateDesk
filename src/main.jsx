@@ -3643,7 +3643,7 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
                     <span className={`kimi-qr-done-icon ${info.ok ? '' : 'duplicate'}`}>{info.ok ? <Check size={18} /> : <AlertCircle size={18} />}</span>
                     <div><b>{info.ok ? '已检测到本机登录' : '未检测到本机登录'}</b><small>{info.ok ? `标识：${info.display || '已登录'}` : `请先完成${channel.hint}（${channel.path}），再回来导入`}</small></div>
                   </div>}
-                {channel.kind === 'claude' && <div className="adapter-note"><AlertCircle size={15} /><span>Claude 官方登录不支持多设备同时保活：续期凭据每次刷新都会轮换，在其它设备登录同一账号会使这里失效（届时重新导入即可）。本机 Claude Code 登录同一账号时，此处会自动跟随其凭据并代为保活。</span></div>}
+                {channel.kind === 'claude' && !reloginChannel && <div className="adapter-note"><AlertCircle size={15} /><span>Claude 官方登录不支持多设备同时保活：续期凭据每次刷新都会轮换，在其它设备登录同一账号会使这里失效（届时重新导入即可）。本机 Claude Code 登录同一账号时，此处会自动跟随其凭据并代为保活。</span></div>}
                 {error && <div className="adapter-note update-error"><AlertCircle size={15} /><span>{error}</span></div>}
                 {busy && <div className="adapter-note"><RefreshCw size={15} className="spinning" /><span>正在导入，请稍候…</span></div>}
                 <div className="form-grid">
@@ -3652,7 +3652,7 @@ function ImportCliLoginModal({ accounts, providers, reloginAccount = null, onClo
                 </div>
               </div>
               <div className="modal-actions">
-                <button type="button" className="outline-button" disabled={busy} onClick={() => { setError(''); setSelectedKind(null); }}>返回</button>
+                <button type="button" className="outline-button" disabled={busy} onClick={() => { setError(''); if (reloginChannel) onClose(); else setSelectedKind(null); }}>{reloginChannel ? '取消' : '返回'}</button>
                 <button type="button" className="primary-button" disabled={detecting || !info.ok || busy} onClick={() => importOne(channel, draft)}>{busy ? '正在导入…' : (reloginChannel ? '重新导入' : '完成导入')}</button>
               </div>
             </>;
