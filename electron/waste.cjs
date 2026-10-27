@@ -7,6 +7,8 @@ const { realQuotaPair } = require('./history.cjs');
 const RESET_JITTER_MS = 5 * 60_000; // resetAt 抖动容差：差值 5 分钟内视为同一周期
 const RELIABLE_FACTOR = 2;          // 最后观测距重置 ≤ 2×轮询中位间隔 → 记录可信
 const FALLBACK_POLL_MS = 5 * 60_000;
+const REFILL_EPS = 5;               // 剩余率回升 ≥5 个百分点视为额度回补（重置的必要证据）
+const MERGE_TOL_MS = 6 * 60 * 60_000; // 归档合并时「同一周期」的结束时间容差：不同批次扫描的锚点会差几分钟
 
 // 兼容数值/纯数字字符串的 epoch 时间戳（如 Z.ai 直接返回毫秒数）：≥1e12 按毫秒，否则按秒
 const ts = (value) => {
@@ -26,11 +28,13 @@ const medianGapMs = (points) => {
 };
 
 // 相邻两个快照间该窗口是否结束了旧周期；返回 null（同周期）或 { kind, end }
-// 判据只看 resetAt 的改期，以及旧 resetAt 是否落在两次轮询之间：
-// - natural：旧 resetAt 已被两次轮询跨过（含电脑关机断档期间跨过的）→ 旧周期自然到期，end = 旧 resetAt
-// - early：旧 resetAt 还没到期就被改期（无论改早还是改晚）→ 厂商提前重置；
+// 判据看 resetAt 的改期 + 剩余率是否回补（重置必然伴随回补）：
+// - natural：旧 resetAt 已被两次轮询跨过（含电脑关机断档期间跨过的）且剩余率有回补（或旧值已接近满格，回补不可见）→ 旧周期自然到期，end = 旧 resetAt
+// - early：旧 resetAt 还没到期就被改期且剩余率明显回升 → 厂商提前重置；
 //   真实清零时刻发生在两次轮询之间、观测不到，end ≈ 最后观测时间
 // - resetAt 没变（抖动容差内）、或随轮询同步后移（滑动窗口，步长≈轮询间隔）→ 同一周期
+// - 改期但剩余率没有回升：旧时刻已过 → 厂商推迟了重置；旧时刻未到 → 滑动窗口重新锚定。
+//   两种情况都没有发生重置，同一周期（如整周没用、resetAt=now+7d 一直滑动的窗口）
 // - resetAt 缺失 → 单点无法判定；由 extractCycles 记住最后一个带 resetAt 的快照，恢复后再比对
 const detectCycleClose = (prev, curr, prevAt, currAt) => {
   if (!prev || !curr) return null;
@@ -39,8 +43,17 @@ const detectCycleClose = (prev, curr, prevAt, currAt) => {
   if (!prevReset || !currReset) return null;
   const delta = currReset - prevReset;
   if (Math.abs(delta) <= RESET_JITTER_MS) return null;
-  if (prevReset <= currAt + RESET_JITTER_MS) return { kind: 'natural', end: prevReset };
+  const prevRemaining = Number(prev.remaining);
+  const currRemaining = Number(curr.remaining);
+  // 剩余率不可得时无法判回补，退回只看 resetAt 的旧行为
+  const refilled = Number.isFinite(prevRemaining) && Number.isFinite(currRemaining)
+    ? currRemaining - prevRemaining >= REFILL_EPS : null;
+  if (prevReset <= currAt + RESET_JITTER_MS) {
+    if (refilled === false && prevRemaining < 100 - REFILL_EPS) return null;
+    return { kind: 'natural', end: prevReset };
+  }
   if (delta > 0 && delta <= (currAt - prevAt) + RESET_JITTER_MS) return null;
+  if (refilled === false) return null;
   return { kind: 'early', end: prevAt };
 };
 
@@ -61,7 +74,18 @@ const buildCycleRecord = (windowKey, prev, fromMs, close, medianMs) => {
   };
 };
 
-const cycleKey = (record) => `${record.window}:${record.kind}:${record.end}`;
+// 自然到期周期的起点：按窗口标称周期从结束时刻倒推（周=7天，月=一个日历月）。
+// 不用链式推算（上个周期的 end / 首次观测时间）：首条记录、观测跨过整个周期的跳跃
+// 都会让链式起点偏早，出现「21 天的周周期」这类错误区间
+const naturalCycleStartMs = (windowKey, endMs) => {
+  if (windowKey === 'weekly') return endMs - 7 * 86_400_000;
+  if (windowKey === 'monthly') {
+    const date = new Date(endMs);
+    date.setUTCMonth(date.getUTCMonth() - 1);
+    return date.getTime();
+  }
+  return null;
+};
 
 // 从历史快照提取某账号的周期档案（回填与增量共用：每次全量扫描，靠 mergeCycles 去重）
 // resetAt 暂时缺失的处理：记住最后一个带 resetAt 的快照，等恢复后拿新值与它比较（相同=同周期）；
@@ -83,7 +107,9 @@ const extractCycles = (points, windowKeys) => {
       if (!prev) { prev = { sample, atMs }; cycleFromMs = atMs; continue; }
       const close = detectCycleClose(prev.sample, sample, prev.atMs, atMs);
       if (close) {
-        records.push(buildCycleRecord(key, prev, cycleFromMs ?? prev.atMs, close, median));
+        const fallbackFromMs = cycleFromMs ?? prev.atMs;
+        const startMs = close.kind === 'natural' ? (naturalCycleStartMs(key, close.end) ?? fallbackFromMs) : fallbackFromMs;
+        records.push(buildCycleRecord(key, prev, startMs, close, median));
         // 新周期的起点：自然到期 = 旧周期结束时刻；提前重置 ≈ 当前观测时间
         cycleFromMs = close.kind === 'natural' ? close.end : atMs;
       }
@@ -102,12 +128,55 @@ const extractCycles = (points, windowKeys) => {
   return records.sort((a, b) => a.end.localeCompare(b.end));
 };
 
-// 合并已有档案与新提取的记录（按 窗口:类型:结束时间 去重），按结束时间排序
-const mergeCycles = (existing, extracted) => {
-  const seen = new Set((existing || []).map(cycleKey));
-  const added = (extracted || []).filter((record) => !seen.has(cycleKey(record)));
-  if (!added.length) return existing || [];
-  return [...(existing || []), ...added].sort((a, b) => a.end.localeCompare(b.end));
+// 合并已有档案与新提取的记录（每次全量扫描调用）：
+// - 旧记录按 窗口+类型+相近结束时间 匹配新记录，匹配到就用新记录覆盖——
+//   全量历史算出的 from/reliable 更准，且不同批次扫描的 end 锚点会差几分钟，按精确值去重会留下重复
+// - 落在本次历史覆盖范围内的旧记录若新链条里没有对应 → 旧算法的误报，丢弃；
+//   覆盖范围之前的历史已裁剪或来自导入，无法重算，原样保留
+const mergeCycles = (existing, extracted, coveredFromMs = null) => {
+  const fresh = extracted || [];
+  const nearMatch = (record) => {
+    const end = Date.parse(record.end);
+    if (!Number.isFinite(end)) return null;
+    return fresh.find((item) => item.window === record.window && item.kind === record.kind
+      && Math.abs(Date.parse(item.end) - end) <= MERGE_TOL_MS) || null;
+  };
+  const kept = (existing || []).filter((record) => {
+    if (nearMatch(record)) return false;
+    const observed = Date.parse(record.observedAt);
+    return !(coveredFromMs != null && Number.isFinite(observed) && observed >= coveredFromMs);
+  });
+  return [...kept, ...fresh].sort((a, b) => a.end.localeCompare(b.end));
+};
+
+// 读取档案时清洗：同一 窗口+类型 结束时间相近的重复记录（早期只增不覆盖的合并留下的）
+// 合并为一条，保留更可信的（reliable 优先，观测点更晚的 end 锚点更准），
+// 并按标称周期修正 natural 记录的起点
+const dedupeCycles = (cycles) => {
+  const list = (cycles || []).slice().sort((a, b) => a.end.localeCompare(b.end) || a.kind.localeCompare(b.kind));
+  const out = [];
+  for (const record of list) {
+    const end = Date.parse(record.end);
+    const last = out[out.length - 1];
+    if (last && last.window === record.window && last.kind === record.kind && Number.isFinite(end)
+      && Math.abs(end - Date.parse(last.end)) <= MERGE_TOL_MS) {
+      if (preferCycle(record, last)) out[out.length - 1] = record;
+      continue;
+    }
+    out.push(record);
+  }
+  return out.map((record) => {
+    if (record.kind !== 'natural') return record;
+    const end = Date.parse(record.end);
+    const start = Number.isFinite(end) ? naturalCycleStartMs(record.window, end) : null;
+    return start != null ? { ...record, from: new Date(start).toISOString() } : record;
+  });
+};
+
+const preferCycle = (candidate, current) => {
+  if (candidate.reliable === true && current.reliable !== true) return true;
+  if (current.reliable === true && candidate.reliable !== true) return false;
+  return (Date.parse(candidate.observedAt || '') || 0) >= (Date.parse(current.observedAt || '') || 0);
 };
 
 // 幽灵档案清理：旧版算法的「剩余率突升兜底」给同一次重置重复归档 early+natural 两条记录，
@@ -140,4 +209,4 @@ const resolveWasteWindows = (requestConfig) => {
   return (requestConfig?.windows || []).filter((key) => ['weekly', 'monthly'].includes(key));
 };
 
-module.exports = { medianGapMs, detectCycleClose, extractCycles, mergeCycles, purgeGhostCycles, computeWasteStats, resolveWasteWindows, RESET_JITTER_MS, RELIABLE_FACTOR };
+module.exports = { medianGapMs, detectCycleClose, extractCycles, mergeCycles, dedupeCycles, purgeGhostCycles, computeWasteStats, resolveWasteWindows, naturalCycleStartMs, RESET_JITTER_MS, RELIABLE_FACTOR, REFILL_EPS, MERGE_TOL_MS };

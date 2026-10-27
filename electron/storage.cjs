@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const { app, safeStorage } = require('electron');
 const { readJsonSafe, writeJsonDurable } = require('./json-file.cjs');
 const { appendHistoryPoint, pruneHistory } = require('./history.cjs');
-const { extractCycles, mergeCycles, purgeGhostCycles } = require('./waste.cjs');
+const { extractCycles, mergeCycles, dedupeCycles, purgeGhostCycles } = require('./waste.cjs');
 const { REMOTE_PORT } = require('./remote-view.cjs');
 
 // 本机预览允许同时存活的会话令牌数:多个预览标签页并存,超出后最旧的先失效
@@ -196,21 +196,23 @@ class DesktopStore {
     const points = this.loadHistory()[accountId] || [];
     if (points.length < 2) return;
     const all = this.loadCycles();
-    // 合并前先清掉旧版算法可能留下的幽灵档案（early+natural 重复归档），有变化就回写
+    // 合并前先清掉旧版算法可能留下的幽灵档案（early+natural 重复归档），有变化就回写。
+    // coveredFrom 传入历史覆盖范围：范围内的旧记录以全量重扫的新链条为准，误报会被丢弃
     const previous = all[accountId] || [];
-    const merged = mergeCycles(purgeGhostCycles(previous), extractCycles(points, windowKeys));
+    const coveredFrom = Date.parse(points[0]?.at);
+    const merged = mergeCycles(purgeGhostCycles(previous), extractCycles(points, windowKeys), Number.isFinite(coveredFrom) ? coveredFrom : null);
     if (JSON.stringify(merged) !== JSON.stringify(previous)) {
       all[accountId] = merged;
       writeJsonDurable(this.cyclesPath, all);
     }
   }
 
-  getCycles(accountId) { return purgeGhostCycles(this.loadCycles()[accountId] || []); }
+  getCycles(accountId) { return dedupeCycles(purgeGhostCycles(this.loadCycles()[accountId] || [])); }
 
-  // 启动时全量清洗一次：历史账号（已停更/停用）的幽灵档案也一并清除
+  // 启动时全量清洗一次：历史账号（已停更/停用）的幽灵档案与重复档案也一并清除
   purgeAllCycles() {
     const all = this.loadCycles();
-    const next = Object.fromEntries(Object.entries(all).map(([accountId, cycles]) => [accountId, purgeGhostCycles(cycles)]));
+    const next = Object.fromEntries(Object.entries(all).map(([accountId, cycles]) => [accountId, dedupeCycles(purgeGhostCycles(cycles))]));
     if (JSON.stringify(next) !== JSON.stringify(all)) writeJsonDurable(this.cyclesPath, next);
   }
 
