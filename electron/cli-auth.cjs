@@ -1047,13 +1047,16 @@ const writeLiveIfCurrent = (kind, previousAuth, nextAuth) => {
 // refresh token 都会轮换（Anthropic 与 OpenAI 均有旧 token 复用检测，并发复用会被判
 // invalid_grant），因此相同旧 token 的并发请求必须共享一次刷新结果。业务请求的
 // 401 可能错峰返回，成功结果需保留到一次请求超时窗口结束，避免迟到请求复用旧 token。
-// 429 限流退避：token 端点被 IP 级限流时继续硬撞只会不断续期封禁窗口（实测持续 2 小时
+// 429 限流退避：token 端点被 IP 级限流时继续硬撞只会不断续期封禁窗口（实测持续数小时
 // 不清——每 5 分钟轮询 × 立即重试 2 次，自锁）。同一把 refresh token 被限流后进入冷却期，
-// 期内不再发刷新请求。优先尊重 Retry-After（秒数或 HTTP 日期），缺失时默认 10 分钟，
-// 钳制在 30 秒到 1 小时之间。
+// 期内不再发刷新请求。冷却时长指数退避：连续被限流按 10 分钟 × 2^n 递增、封顶 4 小时，
+// 成功续期即归零；优先尊重 Retry-After（秒数或 HTTP 日期），与退避值取大。退避状态还会
+// 落盘（configureCooldownPersistence）——进程重启若把冷却清零，只会退回 10 分钟一撞的
+// 自锁，IP 限流窗口可能因此永远不过期。
 const refreshCooldown = new Map(); // flightKey → untilMs
+const refreshCooldownStreaks = new Map(); // flightKey → 连续被限流次数（成功续期归零）
 const REFRESH_COOLDOWN_DEFAULT_MS = 10 * 60_000;
-const REFRESH_COOLDOWN_MAX_MS = 60 * 60_000;
+const REFRESH_COOLDOWN_MAX_MS = 4 * 60 * 60_000;
 const clampCooldownMs = (ms) => {
   const value = Number(ms);
   if (!Number.isFinite(value)) return REFRESH_COOLDOWN_DEFAULT_MS;
@@ -1074,18 +1077,68 @@ const cooldownUntilMs = (kind, auth) => {
   const until = refreshCooldown.get(refreshFlightKey(kind, refresh));
   return until && until > Date.now() ? until : 0;
 };
-const rateLimitedError = (kind) => {
+const rateLimitedError = (kind, untilMs = 0) => {
   const label = kind.charAt(0).toUpperCase() + kind.slice(1);
-  return new CliRefreshError(`${label} 登录续期正在限流退避中，稍后自动重试，无需重新登录`, { transient: true });
+  const retryText = untilMs > Date.now()
+    ? `，预计 ${new Date(untilMs).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })} 后自动重试`
+    : '，稍后自动重试';
+  return new CliRefreshError(`${label} 登录续期正在限流退避中${retryText}，无需重新登录`, { transient: true });
+};
+// 退避状态落盘：文件极小且变更低频（进入 / 退出冷却各写一次），同步写足够；未配置
+// 路径（单元测试）时静默降级为纯内存行为
+let cooldownStorePath = null;
+const persistCooldownStore = () => {
+  if (!cooldownStorePath) return;
+  const now = Date.now();
+  const cooldowns = {};
+  for (const [key, until] of refreshCooldown) if (until > now) cooldowns[key] = until;
+  try {
+    writeJsonAtomic(cooldownStorePath, { version: 1, savedAt: now, cooldowns, streaks: Object.fromEntries(refreshCooldownStreaks) });
+  } catch { /* 磁盘异常时保持纯内存行为 */ }
+};
+// 启动时恢复：已过期的冷却直接丢弃；连击计数保留（限流解除前重启不应把退避打回 10 分钟）。
+// 恢复后立即规整化写回一次（清掉过期项，也让「刚启动就崩溃」不留半初始化状态）
+const configureCooldownPersistence = (filePath) => {
+  cooldownStorePath = filePath;
+  const saved = readJsonFile(filePath);
+  if (saved && typeof saved === 'object') {
+    const now = Date.now();
+    for (const [key, until] of Object.entries(saved.cooldowns || {})) {
+      const value = Number(until);
+      if (Number.isFinite(value) && value > now) refreshCooldown.set(key, value);
+    }
+    for (const [key, count] of Object.entries(saved.streaks || {})) {
+      const value = Number(count);
+      if (Number.isInteger(value) && value > 0) refreshCooldownStreaks.set(key, value);
+    }
+  }
+  persistCooldownStore();
 };
 const setRefreshCooldown = (key, ms) => {
-  const waitMs = clampCooldownMs(ms);
+  const streak = (refreshCooldownStreaks.get(key) || 0) + 1;
+  refreshCooldownStreaks.set(key, streak);
+  const backoffMs = Math.max(Number(ms) || 0, REFRESH_COOLDOWN_DEFAULT_MS * 2 ** (streak - 1));
+  const waitMs = clampCooldownMs(backoffMs);
   const until = Date.now() + waitMs;
   refreshCooldown.set(key, until);
+  persistCooldownStore();
   const timer = setTimeout(() => {
-    if (refreshCooldown.get(key) === until) refreshCooldown.delete(key);
+    if (refreshCooldown.get(key) === until) { refreshCooldown.delete(key); persistCooldownStore(); }
   }, waitMs + 1_000);
   timer.unref?.();
+  return until;
+};
+// 冷却与连击计数的清除（成功续期 / 手动强制刷新）；true 表示确有状态被清掉
+const clearCooldown = (key) => {
+  const hadCooldown = refreshCooldown.delete(key);
+  const hadStreak = refreshCooldownStreaks.delete(key);
+  if (hadCooldown || hadStreak) persistCooldownStore();
+  return hadCooldown || hadStreak;
+};
+// 按「账号当前登录」清除冷却：手动测试 / 刷新是用户的明确意愿，应立即真试一次
+const clearCooldownForAuth = (kind, auth) => {
+  const refresh = refreshTokenOf(kind, auth);
+  return refresh ? clearCooldown(refreshFlightKey(kind, refresh)) : false;
 };
 
 const refreshInFlight = new Map();
@@ -1110,7 +1163,7 @@ const refreshForRequest = async (kind, auth, fetcher, timeoutMs) => {
   const entry = { promise, expiresAt: Infinity };
   refreshInFlight.set(key, entry);
   promise.then(
-    () => retainRefreshEntry(key, entry, timeoutMs),
+    () => { clearCooldown(key); retainRefreshEntry(key, entry, timeoutMs); },
     (error) => {
       // A rejected login should not be hammered by every late 401. Permanent failures and
       // rate-limited (429) responses keep the shared rejection for the request window;
@@ -1127,6 +1180,25 @@ const refreshForRequest = async (kind, auth, fetcher, timeoutMs) => {
   return promise;
 };
 
+// 续期被永久拒绝时的采纳重试（对照 cc-switch 的 RejectedManagerToken 策略）：本机其它
+// 客户端（Claude Code / cc-switch）刚轮换过凭据时，手里这把旧 token 会被判复用而遭拒。
+// 重读 live 文件，账号一致（oauthAccount 匹配）且 refresh token 已变化时，以磁盘最新版
+// 为基准重试一次。返回的 previous 采用磁盘版本：live 回写的 CAS 比对以它为准，轮换结果
+// 才能落回 live 文件（快照随后由主进程的 cliIdentityPatch 跟随 live 补齐）。
+const refreshForRequestWithAdoption = async (kind, previous, fetcher, timeoutMs) => {
+  try {
+    return { next: await refreshForRequest(kind, previous, fetcher, timeoutMs), previous };
+  } catch (error) {
+    if (!error?.permanent || kind !== 'claude') throw error;
+    const live = readClaudeLiveAuth();
+    const liveRefresh = refreshTokenOf('claude', live);
+    if (!liveRefresh || liveRefresh === refreshTokenOf('claude', previous)
+      || !claudeProfileMatches(claudeProfileOf(previous), claudeProfileOf(live))) throw error;
+    const adopted = { ...live };
+    return { next: await refreshForRequest('claude', adopted, fetcher, timeoutMs), previous: adopted };
+  }
+};
+
 // 带自动续期的授权请求：临期先刷新；401/403 时刷新一次后重试。
 // buildRequest(auth) 每次尝试都用当时的 token 重新构造请求（刷新后头会变）。
 // onAuthUpdate(kind, nextAuth, previousAuth, source) 供主进程把新 token 落盘/写回 live。
@@ -1137,10 +1209,10 @@ async function fetchWithCliAuth(kind, { auth, source, fetcher, timeoutMs, buildR
     if (onAuthUpdate) await onAuthUpdate(kind, next, previous, source);
   };
   if (shouldRefreshFirst(kind, current)) {
-    if (cooldownUntilMs(kind, current)) throw rateLimitedError(kind);
-    const previous = current;
-    const next = await refreshForRequest(kind, previous, fetcher, timeoutMs);
-    await emit(next, previous);
+    const cooldownUntil = cooldownUntilMs(kind, current);
+    if (cooldownUntil) throw rateLimitedError(kind, cooldownUntil);
+    const refreshed = await refreshForRequestWithAdoption(kind, current, fetcher, timeoutMs);
+    await emit(refreshed.next, refreshed.previous);
   }
   const send = () => {
     const { url, init = {} } = buildRequest(current);
@@ -1157,10 +1229,10 @@ async function fetchWithCliAuth(kind, { auth, source, fetcher, timeoutMs, buildR
     } catch { authFailure = false; }
   }
   if (authFailure && refreshTokenOf(kind, current)) {
-    if (cooldownUntilMs(kind, current)) throw rateLimitedError(kind);
-    const previous = current;
-    const next = await refreshForRequest(kind, previous, fetcher, timeoutMs);
-    await emit(next, previous);
+    const cooldownUntil = cooldownUntilMs(kind, current);
+    if (cooldownUntil) throw rateLimitedError(kind, cooldownUntil);
+    const refreshed = await refreshForRequestWithAdoption(kind, current, fetcher, timeoutMs);
+    await emit(refreshed.next, refreshed.previous);
     response = await send();
   }
   return response;
@@ -1194,8 +1266,19 @@ module.exports = {
   authVersionMatches,
   writeLiveIfCurrent,
   fetchWithCliAuth,
+  configureCooldownPersistence,
+  clearCooldownForAuth,
   __grok: { selectGrokAuthEntry, selectGrokAuthRecord, grokEntryOf, grokScopeOf, grokEndpointIsAllowed, discoverGrokTokenEndpoint },
-  __test: { clearRefreshFlights: () => refreshInFlight.clear(), clearRefreshCooldowns: () => refreshCooldown.clear(), retryAfterMsOf, clampCooldownMs },
+  __test: {
+    clearRefreshFlights: () => refreshInFlight.clear(),
+    clearRefreshCooldowns: () => { refreshCooldown.clear(); refreshCooldownStreaks.clear(); },
+    expireCooldowns: () => { for (const key of [...refreshCooldown.keys()]) refreshCooldown.delete(key); },
+    cooldownStreakOf: (kind, auth) => refreshCooldownStreaks.get(refreshFlightKey(kind, refreshTokenOf(kind, auth))) || 0,
+    cooldownUntilOf: (kind, auth) => cooldownUntilMs(kind, auth),
+    resetCooldownPersistence: () => { cooldownStorePath = null; refreshCooldown.clear(); refreshCooldownStreaks.clear(); },
+    retryAfterMsOf,
+    clampCooldownMs,
+  },
   __claude: { resetClaudeProfileCache: () => { claudeProfileCache = { at: 0, value: undefined }; }, stripClaudeProfileMeta },
   __copilot: { copilotEntryOf },
   __grokbot: { oscryptDecrypt },

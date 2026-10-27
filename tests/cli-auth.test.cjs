@@ -273,6 +273,100 @@ test('Claude 429 限流：提示稍后重试而非重新登录，冷却期内不
   });
 });
 
+// 429 指数退避：连续被限流按 10 分钟 × 2^n 递增（封顶 4 小时），成功续期归零；
+// 退避中的报错带下次重试时间；退避状态落盘后「重启」（内存清空再恢复）不打回起点
+test('Claude 429 退避指数递增、报错带重试时间并落盘恢复', async () => {
+  await withClaudeHome(async () => {
+    const auth = { claudeAiOauth: { accessToken: 'a1', refreshToken: 'r-backoff', expiresAt: Date.now() - 1000 } };
+    const fourTwentyNine = { ok: false, status: 429, headers: new Map(), json: async () => ({ error: { type: 'rate_limit_error' } }) };
+    const fetcher = async (url) => (url === __constants.CLAUDE_TOKEN_URL ? fourTwentyNine : { ok: true, status: 200, json: async () => ({}) });
+    const run = () => fetchWithCliAuth('claude', { auth, source: 'snapshot', fetcher, timeoutMs: 1000, buildRequest: () => ({ url: 'https://example.test/usage' }) }).catch((error) => error);
+    await run();
+    assert.equal(cliAuth.__test.cooldownStreakOf('claude', auth), 1, '第一次限流：连击 1');
+    assert.ok(cliAuth.__test.cooldownUntilOf('claude', auth) - Date.now() >= 9 * 60_000, '第一次限流：约 10 分钟冷却');
+    // 冷却到期（连击保留）后再次被限流：退避翻倍
+    cliAuth.__test.expireCooldowns();
+    cliAuth.__test.clearRefreshFlights();
+    await run();
+    assert.equal(cliAuth.__test.cooldownStreakOf('claude', auth), 2, '连续第二次：连击 2');
+    assert.ok(cliAuth.__test.cooldownUntilOf('claude', auth) - Date.now() >= 19 * 60_000, '连续第二次：约 20 分钟冷却');
+    // 退避中的报错明示下次重试时间
+    const throttled = await run();
+    assert.ok(throttled instanceof CliRefreshError);
+    assert.match(throttled.message, /限流退避中，预计 .+ 后自动重试/);
+    // 落盘与恢复：模拟重启（内存清空后从磁盘恢复）
+    const storeFile = path.join(os.tmpdir(), `refresh-cooldown-${Date.now()}-${crypto.randomUUID()}.json`);
+    try {
+      cliAuth.configureCooldownPersistence(storeFile);
+      assert.ok(fs.existsSync(storeFile), '冷却状态已写盘');
+      cliAuth.__test.clearRefreshCooldowns();
+      assert.equal(cliAuth.__test.cooldownUntilOf('claude', auth), 0, '重启（内存清空）后冷却丢失');
+      cliAuth.configureCooldownPersistence(storeFile);
+      assert.ok(cliAuth.__test.cooldownUntilOf('claude', auth) > Date.now(), '从磁盘恢复冷却');
+      assert.equal(cliAuth.__test.cooldownStreakOf('claude', auth), 2, '连击计数一并恢复，退避不打回 10 分钟');
+    } finally {
+      cliAuth.__test.resetCooldownPersistence();
+      fs.rmSync(storeFile, { force: true });
+    }
+  });
+});
+
+// 续期被拒后的采纳重试（对照 cc-switch 的 RejectedManagerToken 策略）：本机其它客户端
+// 刚轮换过凭据导致旧 token 被判复用时，以磁盘最新版为基准重试一次；磁盘换成了别的账号
+// 则不采纳，错误原样透传
+test('Claude 续期被拒后采纳本机最新凭据重试，换账号不采纳', async () => {
+  await withClaudeHome(async (home) => {
+    writeClaudeLive(home, { refreshToken: 'live-rt', accessToken: 'a1' });
+    const resolved = resolveCliAuth('claude', {});
+    assert.equal(resolved.source, 'live');
+    // resolve 之后本机 CLI 轮换了凭据（并发竞态：磁盘已是新 token，旧 token 被判复用）
+    writeClaudeLive(home, { refreshToken: 'live-rt2', accessToken: 'a1b' });
+    const seen = [];
+    const fetcher = async (url, init) => {
+      if (url === __constants.CLAUDE_TOKEN_URL) {
+        const token = JSON.parse(init.body).refresh_token;
+        seen.push(token);
+        if (token === 'live-rt') return { ok: false, status: 400, headers: new Map(), json: async () => ({ error: 'invalid_grant' }) };
+        return { ok: true, status: 200, json: async () => ({ access_token: 'a2', refresh_token: 'rt-new', expires_in: 3600 }) };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    };
+    const expiredAuth = { ...resolved.auth, claudeAiOauth: { ...resolved.auth.claudeAiOauth, expiresAt: Date.now() - 1000 } };
+    const updates = [];
+    const response = await fetchWithCliAuth('claude', {
+      auth: expiredAuth,
+      source: 'live',
+      fetcher,
+      timeoutMs: 1000,
+      buildRequest: (auth) => ({ url: 'https://example.test/usage', init: { headers: { Authorization: `Bearer ${auth.claudeAiOauth.accessToken}` } } }),
+      onAuthUpdate: (_kind, next, previous) => updates.push({ next, previous }),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(seen, ['live-rt', 'live-rt2'], '旧 token 被拒后以磁盘最新版重试一次');
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].previous.claudeAiOauth.refreshToken, 'live-rt2', 'previous 采用采纳后的磁盘版本（live 回写 CAS 以它为准）');
+    assert.equal(updates[0].next.claudeAiOauth.refreshToken, 'rt-new');
+    assert.equal(writeLiveIfCurrent('claude', updates[0].previous, updates[0].next), true, '轮换结果可落回 live 文件');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home, '.claude', '.credentials.json'), 'utf8')).claudeAiOauth.refreshToken, 'rt-new');
+    // 本机登录换成了别的账号 → 不采纳，只试自己的 token，错误原样透传
+    writeClaudeLive(home, { refreshToken: 'other-rt', uuid: 'uuid-other' });
+    cliAuth.__test.clearRefreshFlights();
+    const seenOther = [];
+    const rejected = await fetchWithCliAuth('claude', {
+      auth: { claudeAiOauth: { accessToken: 'aX', refreshToken: 'rt-x', expiresAt: Date.now() - 1000 }, qdOAuthProfile: { accountUuid: 'uuid-1' } },
+      source: 'snapshot',
+      fetcher: async (url, init) => {
+        if (url === __constants.CLAUDE_TOKEN_URL) { seenOther.push(JSON.parse(init.body).refresh_token); return { ok: false, status: 400, headers: new Map(), json: async () => ({ error: 'invalid_grant' }) }; }
+        return { ok: true, status: 200, json: async () => ({}) };
+      },
+      timeoutMs: 1000,
+      buildRequest: () => ({ url: 'https://example.test/usage' }),
+    }).catch((error) => error);
+    assert.ok(rejected instanceof CliRefreshError && rejected.permanent === true);
+    assert.deepEqual(seenOther, ['rt-x'], '磁盘是另一账号 → 不采纳');
+  });
+});
+
 test('Retry-After 响应头被解析为冷却时长（秒数与 HTTP 日期）', () => {
   const { retryAfterMsOf } = cliAuth.__test;
   assert.equal(retryAfterMsOf({ headers: new Map([['retry-after', '120']]) }), 120_000);

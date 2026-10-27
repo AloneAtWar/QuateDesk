@@ -14,7 +14,7 @@ const { mergeMainOwnedUsageConnections } = require('./provider-usage-state.cjs')
 const { createCliUsageService } = require('./cli-usage/index.cjs');
 const { UsageSyncService } = require('./usage-sync/index.cjs');
 const { buildExportPackage, validateExportPackage, mergeImportPackage } = require('./import-export.cjs');
-const { CLI_KINDS, SNAPSHOT_KEY, readLiveAuth, cliIdentity, resolveCliAuth, authVersionMatches, writeLiveIfCurrent, fetchWithCliAuth, refreshTokenOf, claudeProfileOf, claudeProfileMatches, CLAUDE_PROFILE_KEY, COPILOT_CLIENT_ID, COPILOT_DEVICE_CODE_URL, COPILOT_TOKEN_URL, COPILOT_SCOPE } = require('./cli-auth.cjs');
+const { CLI_KINDS, SNAPSHOT_KEY, readLiveAuth, cliIdentity, resolveCliAuth, authVersionMatches, writeLiveIfCurrent, fetchWithCliAuth, refreshTokenOf, claudeProfileOf, claudeProfileMatches, CLAUDE_PROFILE_KEY, COPILOT_CLIENT_ID, COPILOT_DEVICE_CODE_URL, COPILOT_TOKEN_URL, COPILOT_SCOPE, configureCooldownPersistence, clearCooldownForAuth } = require('./cli-auth.cjs');
 const {
   fetchDeepSeekUsage,
   fetchDeepSeekSummary,
@@ -57,6 +57,9 @@ const userDataDirName = IS_TEST_BUILD ? 'Quota Desk Test' : process.defaultApp ?
 const shareRealData = process.argv.includes('--qd-share-data');
 if (shareRealData) app.setPath('userData', path.join(app.getPath('appData'), 'Quota Desk'));
 else app.setPath('userData', path.join(app.getPath('appData'), userDataDirName));
+// CLI 续期的限流退避状态落盘：Anthropic 的 IP 级限流可持续数小时，重启清零会退回
+// 「每 10 分钟撞一次端点」的自锁（指数退避见 cli-auth.cjs）
+configureCooldownPersistence(path.join(app.getPath('userData'), 'refresh-cooldowns.json'));
 
 // 启动诊断日志:排障用,记录启动路径上的关键节点与渲染进程错误。
 // 追加写 userData/startup-debug.log,超过 512KB 重开;写失败静默降级,绝不影响启动。
@@ -2062,6 +2065,14 @@ function registerIpc() {
   // 周期浪费档案：永久保留，不受历史保留时长影响
   ipcMain.handle('cycles:get', (_event, accountId) => store.getCycles(String(accountId || '')));
   ipcMain.handle('quota:test-account', async (_event, accountId) => {
+    // 手动测试 / 刷新是用户的明确意愿：清掉该账号的限流冷却，立即真试一次
+    const current = migrateState(store.loadState());
+    const currentAccount = (current?.accounts || []).find((item) => item.id === accountId);
+    const currentProvider = currentAccount && (current?.providers || []).find((item) => item.id === currentAccount.providerId);
+    const cliKind = currentAccount && (currentProvider?.requestConfig?.adapterMode || currentProvider?.adapter || currentProvider?.id);
+    if (cliKind && CLI_KINDS.includes(cliKind)) {
+      clearCooldownForAuth(cliKind, resolveCliAuth(cliKind, store.getSecrets(accountId).variables)?.auth);
+    }
     const state = await pollState([accountId]);
     const account = state.accounts.find((item) => item.id === accountId);
     if (!account) throw new Error('找不到要测试的账号');
