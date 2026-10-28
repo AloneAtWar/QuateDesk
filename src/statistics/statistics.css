@@ -97,6 +97,8 @@
 .global-waste-footnote { position: relative; display: flex; align-items: center; gap: 5px; flex: 0 0 auto; color: var(--ink-soft); font-size: 9px; }
 .global-waste-footnote > svg:last-child { margin-left: auto; cursor: help; }
 .statistics-page button:focus-visible, .statistics-page select:focus-visible, .global-waste-accounts-scroll:focus-visible, .global-waste-footnote svg:focus-visible { outline: 2px solid var(--focus-border); outline-offset: 2px; }
+/* 趋势柱按钮不画焦点框：键盘切换时选中态（青色描边+高亮标签）已是明确反馈，整柱描边会被当成多余的“框” */
+.statistics-page .global-waste-bar-button:focus-visible { outline: 0; }
 @media (max-width: 440px) {
   .global-waste-page { padding: 8px; }
   .global-waste-page-head { flex-wrap: wrap; }

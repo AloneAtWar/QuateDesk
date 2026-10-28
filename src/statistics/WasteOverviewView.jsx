@@ -29,7 +29,8 @@ function WasteChart({ buckets, selectedId, onSelect, hasData, plotHeight = null,
       : selectedId != null ? buckets.findIndex((bucket) => bucket.id === selectedId) : buckets.length - 1);
     if (event.key === 'Home') { event.preventDefault(); stepBucket(0); return; }
     if (event.key === 'End') { event.preventDefault(); stepBucket(buckets.length - 1); return; }
-    const delta = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+    // ↑/↓ 与 ←/→ 等效：柱状图只有时间一个维度，四个方向键都能切，向热力图的使用习惯看齐
+    const delta = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[event.key];
     if (delta === undefined) return;
     event.preventDefault();
     stepBucket((base < 0 ? buckets.length - 1 : base) + delta);
@@ -38,7 +39,7 @@ function WasteChart({ buckets, selectedId, onSelect, hasData, plotHeight = null,
     <div className="global-waste-block-head"><b>历史浪费趋势</b><small>份周期额度</small></div>
     <div className="global-waste-plot" ref={plotRef} style={plotHeight !== null ? { '--waste-plot-height': `${plotHeight}px` } : undefined}>
       <div className="global-waste-axis" aria-hidden="true">{[5, 4, 3, 2, 1, 0].map((tick) => <span key={tick}>{formatWasteAmount(step * tick)}</span>)}</div>
-      <div className="global-waste-bars" role="group" aria-label="按时间分段的浪费柱，左右方向键切换" ref={barsRef} onKeyDown={handleBarsKey} style={{ '--waste-columns': buckets.length }}>
+      <div className="global-waste-bars" role="group" aria-label="按时间分段的浪费柱，方向键切换" ref={barsRef} onKeyDown={handleBarsKey} style={{ '--waste-columns': buckets.length }}>
         <div className="global-waste-gridlines" aria-hidden="true">{[0, 1, 2, 3, 4, 5].map((tick) => <i key={tick} />)}</div>
         {buckets.map((bucket, index) => <button type="button" key={bucket.id} data-bucket-id={bucket.id} tabIndex={selectedId == null ? (index === 0 ? 0 : -1) : (selectedId === bucket.id ? 0 : -1)} className={`global-waste-bar-button${selectedId === bucket.id ? ' selected' : ''}${bucket.total == null ? ' unknown' : ''}`} aria-pressed={selectedId === bucket.id} aria-label={`${bucket.dateLabel}，${bucket.total == null ? '无可靠记录' : `浪费 ${formatWasteAmount(bucket.total)} 份，${bucket.count} 个有效周期`}，查看账号贡献`} title={`${bucket.dateLabel}\n${bucket.total == null ? '无可靠记录' : `${formatWasteAmount(bucket.total)} 份 · ${bucket.count} 个有效周期`}`} onClick={() => onSelect(bucket.id)}>
           <span className="global-waste-bar-area"><span className="global-waste-bar" style={{ height: bucket.total == null ? '0%' : `${bucket.total / maximum * 100}%` }}><b>{formatWasteAmount(bucket.total)}</b></span></span>

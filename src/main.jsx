@@ -993,7 +993,9 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
   // 选中点：当前视图内仍存在时才显示标记（被平移/缩放移出视图时暂时休眠，不移除）
   const selectedPoint = selectedAt == null ? null : (drawn.find((point) => new Date(point.at).getTime() === selectedAt) || null);
   const selectedX = selectedPoint ? toX(new Date(selectedPoint.at).getTime()) : 0;
-  // 键盘浏览：左右方向键在可见数据点间移动选中点，Home/End 跳到两端；
+  // 键盘浏览：方向键在可见数据点间移动选中点，Home/End 跳到两端；
+  // ↑/↓ 与 ←/→ 等效（时间轴上没有上下维度，统一为前一个/后一个点，
+  // 与热力图“四个方向键都能切”的使用习惯一致）；
   // 无选中（或选中点被平移/缩放移出视图休眠）时从最新的点起步，与热力图一致
   const stepSelection = (index) => {
     const next = drawn[Math.max(0, Math.min(drawn.length - 1, index))];
@@ -1004,7 +1006,7 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
     const base = selectedPoint ? drawn.indexOf(selectedPoint) : drawn.length - 1;
     if (event.key === 'Home') { event.preventDefault(); stepSelection(0); return; }
     if (event.key === 'End') { event.preventDefault(); stepSelection(drawn.length - 1); return; }
-    const delta = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+    const delta = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[event.key];
     if (delta === undefined) return;
     event.preventDefault();
     stepSelection((base < 0 ? drawn.length - 1 : base) + delta);
@@ -1045,7 +1047,7 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
         })}
       </div>
     </div>
-    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} tabIndex={0} role="img" aria-label="额度趋势折线图，左右方向键选择数据点" onKeyDown={handleChartKey} onPointerDown={startPan} onPointerMove={movePan} onPointerUp={endPan} onPointerCancel={cancelPan} onMouseLeave={() => { setHover(null); setHoverGap(null); downRef.current = null; endPan(); }}>
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} tabIndex={0} role="img" aria-label="额度趋势折线图，方向键选择数据点" onKeyDown={handleChartKey} onPointerDown={startPan} onPointerMove={movePan} onPointerUp={endPan} onPointerCancel={cancelPan} onMouseLeave={() => { setHover(null); setHoverGap(null); downRef.current = null; endPan(); }}>
       {yTicks.map((value) => <g key={value}><line x1={PAD.l} x2={W - PAD.r} y1={toY(value)} y2={toY(value)} className="chart-grid" /><text x={PAD.l - 6} y={toY(value) + 3} className="chart-y-label">{formatYTick(value)}</text></g>)}
       {xTicks.map((at) => <text key={Math.round(at)} x={Math.min(Math.max(toX(at), PAD.l + 16), W - PAD.r - 16)} y={H - 7} className="chart-x-label">{formatTick(at)}</text>)}
       {paths.map((path, index) => path.segments.map((d) => <path key={`${path.key}-${d.slice(0, 12)}`} d={d} fill="none" stroke={chartColor(path.key, index)} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />))}
@@ -1202,7 +1204,8 @@ function WasteView({ account, wasteWindows }) {
     const base = selectedKey != null ? cycleKeys.indexOf(selectedKey) : shown.length - 1;
     if (event.key === 'Home') { event.preventDefault(); stepSelection(0); return; }
     if (event.key === 'End') { event.preventDefault(); stepSelection(shown.length - 1); return; }
-    const delta = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+    // ↑/↓ 与 ←/→ 等效：柱状图只有时间一个维度，四个方向键都能切，向热力图的使用习惯看齐
+    const delta = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[event.key];
     if (delta === undefined) return;
     event.preventDefault();
     stepSelection((base < 0 ? shown.length - 1 : base) + delta);
@@ -1230,7 +1233,7 @@ function WasteView({ account, wasteWindows }) {
       </> : <><span>0 个周期</span><span>平均浪费 —</span><span>累计 —</span></>}</span>
     </div>
     <div className="chart-detail waste-detail">{hover ? renderDetail(hover) : selectedCycle ? renderDetail(selectedCycle) : <span className="chart-detail-hint">{empty ? '点击柱子查看当前周期详情' : '点击、悬停或用方向键选择柱子查看周期详情 · 周期过多时可左右拖动'}</span>}</div>
-    <div className={`waste-scroll${dragging ? ' dragging' : ''}`} ref={scrollRef} tabIndex={0} role="group" aria-label="周期浪费柱状图，左右方向键选择周期" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={cancelDrag} onPointerLeave={cancelDrag} onKeyDown={handleWasteKey}>
+    <div className={`waste-scroll${dragging ? ' dragging' : ''}`} ref={scrollRef} tabIndex={0} role="group" aria-label="周期浪费柱状图，方向键选择周期" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={cancelDrag} onPointerLeave={cancelDrag} onKeyDown={handleWasteKey}>
       <div className={`waste-plot ${curWindow === 'monthly' ? 'mo' : 'wk'}`}>
         {!empty && [25, 50, 75].map((value) => <div key={value} className="waste-gridline" style={{ bottom: `${value}%` }} />)}
         {!empty && avg != null && <div className="waste-avg" style={{ bottom: `${Math.min(100, avg)}%` }}><em>平均 {avg.toFixed(0)}%</em></div>}

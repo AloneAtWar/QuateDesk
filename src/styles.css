@@ -772,7 +772,6 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .trend-view .chart-legend { margin-top: auto; }
 .usage-chart { position: relative; padding: 10px 8px 2px; user-select: none; }
 .usage-chart svg { display: block; width: 100%; height: auto; touch-action: pan-y; }
-.usage-chart svg:focus-visible { outline: 2px solid var(--focus-border); outline-offset: -2px; }
 .chart-grid { stroke: var(--line-inner); stroke-width: 1; }
 .chart-y-label, .chart-x-label { fill: var(--faint); font-size: 9px; font-family: 'DM Mono', monospace; }
 .chart-y-label { text-anchor: end; }
@@ -838,7 +837,6 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .waste-scroll { flex: 1 1 auto; min-height: 0; margin: 0 6px; display: flex; flex-direction: column; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; cursor: grab; border: 1px solid var(--line-inner); border-radius: 8px; background: var(--surface-2); user-select: none; }
 .waste-scroll::-webkit-scrollbar { display: none; }
 .waste-scroll.dragging { cursor: grabbing; }
-.waste-scroll:focus-visible { outline: 2px solid var(--focus-border); outline-offset: -2px; }
 /* plot 高度 = 柱区（去掉顶部 10px 留白），网格线/平均线的 bottom 百分比都相对柱区 */
 .waste-plot { position: relative; flex: 1 1 auto; min-height: 0; margin-top: 10px; min-width: 100%; display: flex; align-items: flex-end; gap: 1px; padding: 0 10px; border-bottom: 1px solid var(--line-inner); }
 .waste-gridline { position: absolute; left: 10px; right: 10px; height: 1px; background: var(--line-inner); pointer-events: none; }
@@ -953,7 +951,6 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .provider-heatmap-frame.more-left .provider-heatmap-scroll:active, .provider-heatmap-frame.more-right .provider-heatmap-scroll:active { cursor: grabbing; }
 .provider-heatmap-scroll { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; overscroll-behavior-x: contain; touch-action: pan-x pan-y; padding: 4px 3px; border: 1px solid var(--line-inner); border-radius: 8px; background: var(--surface-2); }
 .provider-heatmap-scroll::-webkit-scrollbar { display: none; }
-.provider-heatmap-scroll:focus-visible { outline: 2px solid var(--focus-border); outline-offset: -2px; }
 .provider-heatmap-board { display: grid; grid-template-columns: 10px auto; grid-template-rows: 11px auto; align-items: flex-start; gap: 3px 7px; width: fit-content; margin: auto; }
 .provider-heatmap-corner { grid-column: 1; grid-row: 1; }
 .provider-heatmap-months { grid-column: 2; grid-row: 1; position: relative; height: 11px; overflow: visible; color: var(--faint); font-size: 8px; white-space: nowrap; }
