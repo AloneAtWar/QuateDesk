@@ -967,7 +967,6 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .provider-heatmap-grid button.provider-heatmap-cell.level-missing { background: var(--surface-3); }
 .provider-heatmap-grid button.provider-heatmap-cell:hover { box-shadow: 0 0 0 1px var(--ink-soft); }
 .provider-heatmap-grid button.provider-heatmap-cell.selected { box-shadow: 0 0 0 2px var(--focus-border); }
-.provider-heatmap-grid button.provider-heatmap-cell:focus-visible { outline: 2px solid var(--focus-border); outline-offset: 1px; }
 .provider-heatmap-cell.blank { width: var(--hm-cell); height: var(--hm-cell-h); visibility: hidden; }
 /* 当日明细：淡青描边卡片，一个卡片内三段纯文字、竖线分隔（参考图无图标）；标签「当日花费」默认显示，切到其他日子换成具体日期 */
 .provider-day-card { flex: 0 0 auto; margin: 6px 1px 0; padding: 4px 10px; border: 1px solid color-mix(in srgb, var(--cyan) 30%, var(--line)); border-radius: 10px; background: var(--surface-2); display: grid; grid-template-columns: repeat(3, 1fr); }
@@ -1166,7 +1165,6 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .local-cli-day-models-scroll::-webkit-scrollbar { height: 5px; }
 .local-cli-day-models-scroll::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--scrollbar); }
 .local-cli-day-models-scroll::-webkit-scrollbar-track { background: transparent; }
-.local-cli-day-models-scroll:focus-visible { outline: 2px solid var(--focus-border); outline-offset: -2px; }
 .local-cli-day-models-track { display: flex; align-items: stretch; gap: 6px; padding: 7px 8px; height: 100%; }
 .local-cli-day-model-card { flex: 0 0 auto; width: 118px; display: grid; gap: 2px; align-content: center; padding: 6px 9px; border: 1px solid var(--line-inner); border-radius: 8px; background: var(--surface-3); }
 .local-cli-day-model-card-head { min-width: 0; display: flex; align-items: center; gap: 5px; }
@@ -1211,7 +1209,6 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .local-cli-model-list::-webkit-scrollbar { width: 5px; }
 .local-cli-model-list::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--scrollbar); }
 .local-cli-model-list::-webkit-scrollbar-track { background: transparent; }
-.local-cli-model-list:focus-visible { outline: 2px solid var(--focus-border); outline-offset: -2px; }
 .local-cli-models-hint.block { display: grid; place-items: center; height: 100%; min-height: 120px; padding: 12px; text-align: center; white-space: normal; }
 .local-cli-models-hint.block.error { color: var(--coral-deep); }
 .local-cli-model-row { display: grid; grid-template-columns: var(--model-columns); gap: 8px; align-items: center; padding: 7px 10px; border-bottom: 1px solid var(--line-inner); }

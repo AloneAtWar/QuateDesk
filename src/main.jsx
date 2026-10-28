@@ -993,23 +993,37 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
   // 选中点：当前视图内仍存在时才显示标记（被平移/缩放移出视图时暂时休眠，不移除）
   const selectedPoint = selectedAt == null ? null : (drawn.find((point) => new Date(point.at).getTime() === selectedAt) || null);
   const selectedX = selectedPoint ? toX(new Date(selectedPoint.at).getTime()) : 0;
-  // 键盘浏览：方向键在可见数据点间移动选中点，Home/End 跳到两端；
-  // ↑/↓ 与 ←/→ 等效（时间轴上没有上下维度，统一为前一个/后一个点，
-  // 与热力图“四个方向键都能切”的使用习惯一致）；
-  // 无选中（或选中点被平移/缩放移出视图休眠）时从最新的点起步，与热力图一致
+  // 键盘浏览：方向键逐点移动选中点，Home/End 跳到最早/最新；↑/↓ 与 ←/→ 等效
+  // （时间轴上没有上下维度，统一为前一个/后一个点）。有可见时间窗（预设或缩放/
+  // 平移出的自定义窗口）时，选中点走到可见边缘会带着窗口平移继续——边缘锚定：
+  // 窗口只在越界时滑动且保持跨度，不越界就原地移动；
+  // 无选中（或选中点被移出视图休眠）时从当前视图最新的点起步，与热力图一致
   const stepSelection = (index) => {
-    const next = drawn[Math.max(0, Math.min(drawn.length - 1, index))];
-    if (next) setSelectedAt(new Date(next.at).getTime());
+    const next = samples[Math.max(0, Math.min(samples.length - 1, index))];
+    if (!next) return;
+    const at = new Date(next.at).getTime();
+    if (shown && (at < shown.start || at > shown.end)) {
+      const spanKeep = shown.end - shown.start;
+      if (at < shown.start) {
+        const start = Math.max(fullStart, at - spanKeep * 0.1);
+        applyView({ start, end: Math.min(fullEnd, start + spanKeep) });
+      } else {
+        const end = Math.min(fullEnd, at + spanKeep * 0.1);
+        applyView({ start: Math.max(fullStart, end - spanKeep), end });
+      }
+    }
+    setSelectedAt(at);
   };
   const handleChartKey = (event) => {
-    if (!drawn.length) return;
-    const base = selectedPoint ? drawn.indexOf(selectedPoint) : drawn.length - 1;
+    if (!samples.length) return;
+    const anchor = selectedPoint || drawn[drawn.length - 1];
+    const base = anchor ? samples.indexOf(anchor) : samples.length - 1;
     if (event.key === 'Home') { event.preventDefault(); stepSelection(0); return; }
-    if (event.key === 'End') { event.preventDefault(); stepSelection(drawn.length - 1); return; }
+    if (event.key === 'End') { event.preventDefault(); stepSelection(samples.length - 1); return; }
     const delta = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[event.key];
     if (delta === undefined) return;
     event.preventDefault();
-    stepSelection((base < 0 ? drawn.length - 1 : base) + delta);
+    stepSelection((base < 0 ? samples.length - 1 : base) + delta);
   };
   // 详情条优先级：悬停点 > 断线提示 > 选中点（悬停离开后回落到选中的常驻信息）
   const detailPoint = hoverPoint || (!hoverGap ? selectedPoint : null);
@@ -1479,7 +1493,12 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
     const next = sortedDays[Math.max(0, Math.min(sortedDays.length - 1, index))];
     if (!next) return;
     setSelectedDate(next.date);
-    requestAnimationFrame(() => heatmapRef.current?.querySelector(`[data-usage-date="${next.date}"]`)?.focus());
+    // 格子元素常驻（选中只改样式不改结构），聚焦/滚动直接执行即可；
+    // 边缘锚定：格子在视野内移动不带动滚动，滑出视野才平移滚动框（只滚最少距离）
+    const cell = heatmapRef.current?.querySelector(`[data-usage-date="${next.date}"]`);
+    if (!cell) return;
+    cell.focus({ preventScroll: true });
+    cell.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   };
   const handleHeatmapKey = (event) => {
     if (!sortedDays.length) return;

@@ -125,7 +125,12 @@ export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate,
     const next = days[Math.max(0, Math.min(days.length - 1, index))];
     if (!next) return;
     onSelectDate(next.date);
-    requestAnimationFrame(() => heatmapRef.current?.querySelector(`[data-local-day="${next.date}"]`)?.focus());
+    // 格子元素常驻（选中只改样式不改结构），聚焦/滚动直接执行即可；
+    // 边缘锚定：格子在视野内移动不带动滚动，滑出视野才平移滚动框（只滚最少距离）
+    const cell = heatmapRef.current?.querySelector(`[data-local-day="${next.date}"]`);
+    if (!cell) return;
+    cell.focus({ preventScroll: true });
+    cell.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   };
   const handleKey = (event) => {
     if (!days.length) return;

@@ -192,6 +192,10 @@ export function useHeatmapPan({ wrapRef, cellPx, cellH, cellGap, weekCount }) {
     const el = wrapRef.current;
     if (!el || el.scrollWidth <= el.clientWidth) return;
     event.preventDefault();
+    // preventDefault 会连 mousedown 的默认聚焦一起吞掉：可滚动时点格子后焦点还留在
+    // 页面别处，方向键浏览就没了着落。这里把焦点交给滚动容器（它承载 keydown），
+    // 不聚焦格子本身——避免拖动平移时经 onFocus 误改选中日期
+    el.focus({ preventScroll: true });
     mouseDragRef.current = { pointerId: event.pointerId, startX: event.clientX, startScroll: el.scrollLeft, moved: false };
   };
   const onPointerMove = (event) => {
