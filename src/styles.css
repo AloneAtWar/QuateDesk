@@ -771,7 +771,7 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .trend-view { height: 271px; display: flex; flex-direction: column; }
 .trend-view .chart-legend { margin-top: auto; }
 .usage-chart { position: relative; padding: 10px 8px 2px; user-select: none; }
-.usage-chart svg { display: block; width: 100%; height: auto; touch-action: pan-y; }
+.usage-chart svg { display: block; width: 100%; height: auto; touch-action: pan-y; outline: none; }
 .chart-grid { stroke: var(--line-inner); stroke-width: 1; }
 .chart-y-label, .chart-x-label { fill: var(--faint); font-size: 9px; font-family: 'DM Mono', monospace; }
 .chart-y-label { text-anchor: end; }
@@ -834,7 +834,7 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .waste-detail b { color: var(--ink); font-weight: 700; }
 .waste-detail .when { color: var(--ink); font-weight: 600; }
 .waste-detail .warn { color: var(--amber); }
-.waste-scroll { flex: 1 1 auto; min-height: 0; margin: 0 6px; display: flex; flex-direction: column; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; cursor: grab; border: 1px solid var(--line-inner); border-radius: 8px; background: var(--surface-2); user-select: none; }
+.waste-scroll { flex: 1 1 auto; min-height: 0; margin: 0 6px; display: flex; flex-direction: column; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; cursor: grab; border: 1px solid var(--line-inner); border-radius: 8px; background: var(--surface-2); user-select: none; outline: none; }
 .waste-scroll::-webkit-scrollbar { display: none; }
 .waste-scroll.dragging { cursor: grabbing; }
 /* plot 高度 = 柱区（去掉顶部 10px 留白），网格线/平均线的 bottom 百分比都相对柱区 */
@@ -949,7 +949,7 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .provider-heatmap-frame.more-right .provider-heatmap-fade.right { opacity: 1; }
 .provider-heatmap-frame.more-left .provider-heatmap-scroll, .provider-heatmap-frame.more-right .provider-heatmap-scroll { cursor: grab; }
 .provider-heatmap-frame.more-left .provider-heatmap-scroll:active, .provider-heatmap-frame.more-right .provider-heatmap-scroll:active { cursor: grabbing; }
-.provider-heatmap-scroll { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; overscroll-behavior-x: contain; touch-action: pan-x pan-y; padding: 4px 3px; border: 1px solid var(--line-inner); border-radius: 8px; background: var(--surface-2); }
+.provider-heatmap-scroll { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; overscroll-behavior-x: contain; touch-action: pan-x pan-y; padding: 4px 3px; border: 1px solid var(--line-inner); border-radius: 8px; background: var(--surface-2); outline: none; }
 .provider-heatmap-scroll::-webkit-scrollbar { display: none; }
 .provider-heatmap-board { display: grid; grid-template-columns: 10px auto; grid-template-rows: 11px auto; align-items: flex-start; gap: 3px 7px; width: fit-content; margin: auto; }
 .provider-heatmap-corner { grid-column: 1; grid-row: 1; }
@@ -959,7 +959,7 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .provider-heatmap-grid { grid-column: 2; grid-row: 2; display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, var(--hm-cell-h)); grid-auto-columns: var(--hm-cell); gap: var(--hm-gap, 2px); }
 /* 方格：GitHub 式圆角小方块，色阶为参考图同款青色系；无数据的日子与空档同色 */
 .provider-heatmap-cell { width: 8px; height: 8px; display: block; flex: 0 0 auto; border-radius: 3px; background: var(--surface-3); }
-.provider-heatmap-grid button.provider-heatmap-cell { width: var(--hm-cell); height: var(--hm-cell-h); appearance: none; border: 0; padding: 0; border-radius: max(3px, calc(var(--hm-cell) * 0.16)); background: var(--surface-3); }
+.provider-heatmap-grid button.provider-heatmap-cell { width: var(--hm-cell); height: var(--hm-cell-h); appearance: none; border: 0; padding: 0; border-radius: max(3px, calc(var(--hm-cell) * 0.16)); background: var(--surface-3); outline: none; }
 .provider-heatmap-grid button.provider-heatmap-cell.level-1 { background: color-mix(in srgb, var(--cyan) 35%, var(--surface-3)); }
 .provider-heatmap-grid button.provider-heatmap-cell.level-2 { background: color-mix(in srgb, var(--cyan) 58%, var(--surface-3)); }
 .provider-heatmap-grid button.provider-heatmap-cell.level-3 { background: color-mix(in srgb, var(--cyan) 82%, var(--surface-3)); }
@@ -1161,7 +1161,7 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .local-cli-page.embedded .local-cli-day-models-frame { height: 36px; min-height: 36px; }
 .local-cli-page.embedded .local-cli-day-models-track { padding-top: 3px; padding-bottom: 3px; }
 .local-cli-page.embedded .local-cli-day-model-card { padding: 2px 7px; }
-.local-cli-day-models-scroll { height: 100%; display: flex; overflow-x: auto; overflow-y: hidden; scrollbar-gutter: stable; scrollbar-width: thin; }
+.local-cli-day-models-scroll { height: 100%; display: flex; overflow-x: auto; overflow-y: hidden; scrollbar-gutter: stable; scrollbar-width: thin; outline: none; }
 .local-cli-day-models-scroll::-webkit-scrollbar { height: 5px; }
 .local-cli-day-models-scroll::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--scrollbar); }
 .local-cli-day-models-scroll::-webkit-scrollbar-track { background: transparent; }
@@ -1205,7 +1205,7 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .local-cli-model-table { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line-inner); border-radius: 8px; background: var(--surface-2); overflow: hidden; }
 .local-cli-model-header { flex: 0 0 auto; display: grid; grid-template-columns: var(--model-columns); gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line-inner); color: var(--ink-soft); font-size: 9px; font-weight: 700; }
 .local-cli-model-header .col-usage, .local-cli-model-header .col-cache, .local-cli-model-header .col-share { text-align: right; }
-.local-cli-model-list { flex: 0 1 auto; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; scrollbar-width: thin; }
+.local-cli-model-list { flex: 0 1 auto; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; scrollbar-width: thin; outline: none; }
 .local-cli-model-list::-webkit-scrollbar { width: 5px; }
 .local-cli-model-list::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--scrollbar); }
 .local-cli-model-list::-webkit-scrollbar-track { background: transparent; }
