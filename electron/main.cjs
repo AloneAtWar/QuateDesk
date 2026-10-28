@@ -15,6 +15,7 @@ const { createCliUsageService } = require('./cli-usage/index.cjs');
 const { UsageSyncService } = require('./usage-sync/index.cjs');
 const { buildExportPackage, validateExportPackage, mergeImportPackage } = require('./import-export.cjs');
 const { CLI_KINDS, SNAPSHOT_KEY, readLiveAuth, cliIdentity, resolveCliAuth, authVersionMatches, writeLiveIfCurrent, fetchWithCliAuth, refreshTokenOf, claudeProfileOf, claudeProfileMatches, CLAUDE_PROFILE_KEY, COPILOT_CLIENT_ID, COPILOT_DEVICE_CODE_URL, COPILOT_TOKEN_URL, COPILOT_SCOPE, configureCooldownPersistence, clearCooldownForAuth } = require('./cli-auth.cjs');
+const { nextResetAlignedAt, dueResetAlignedAccounts } = require('./reset-aligned.cjs');
 const {
   fetchDeepSeekUsage,
   fetchDeepSeekSummary,
@@ -1496,8 +1497,29 @@ async function pollState(accountIds = null) {
   pollInProgress = false;
   refreshLiveIdentities();
   sendState(next);
+  scheduleResetAlignedPoll(next);
   return next;
 }
+
+// ── 窗口重置对齐的点名轮询 ─────────────────────────────────────────────────
+// 固定间隔轮询感知不到 resetAt：窗口重置后旧数据最多再挂 pollMinutes 分钟才翻新。
+// 在最近一个窗口重置点后约一分钟（见 reset-aligned.cjs）单独拉一次「刚重置」的账号，
+// 新周期数据、悬浮窗显示与浪费统计的周期归档都能在重置点后第一时间落位。调度只认
+// 「未来」的重置点：点名拉过之后新数据的 resetAt 指向下一周期，不会形成轮询循环。
+let resetAlignedTimer = null;
+const scheduleResetAlignedPoll = (stateSnapshot = null) => {
+  if (resetAlignedTimer) { clearTimeout(resetAlignedTimer); resetAlignedTimer = null; }
+  const next = nextResetAlignedAt(stateSnapshot || store.loadState());
+  if (!next) return;
+  resetAlignedTimer = setTimeout(() => {
+    resetAlignedTimer = null;
+    if (pollInProgress) { scheduleResetAlignedPoll(); return; } // 常规轮询进行中，新数据马上就来
+    const ids = dueResetAlignedAccounts(store.loadState());
+    const run = ids.length ? pollState(ids) : Promise.resolve();
+    run.catch(() => {}).finally(() => scheduleResetAlignedPoll());
+  }, Math.max(0, next.at - Date.now()));
+  resetAlignedTimer.unref?.();
+};
 
 function schedulePolling() {
   if (pollTimer) clearInterval(pollTimer);
@@ -1505,6 +1527,7 @@ function schedulePolling() {
   const minutes = Math.min(30, Math.max(1, Number(state?.settings?.pollMinutes) || 5));
   pollStartedAt ||= new Date().toISOString();
   nextPollAt = new Date(Date.now() + minutes * 60_000).toISOString();
+  scheduleResetAlignedPoll(state);
   pollTimer = setInterval(() => {
     pollState().catch(() => {}).finally(() => {
       nextPollAt = new Date(Date.now() + minutes * 60_000).toISOString();

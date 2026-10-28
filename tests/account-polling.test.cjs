@@ -32,6 +32,9 @@ function harness(accounts, query) {
     authStatusForPollError: () => 'reauth_required',
     refreshLiveIdentities: () => {},
     pollInProgress: false,
+    // 重置对齐调度在此沙盒中不演练（有 reset-aligned.test.cjs 覆盖纯逻辑）
+    nextResetAlignedAt: () => null,
+    dueResetAlignedAccounts: () => [],
   });
   vm.runInContext(`${mergeSource}\n${pollSource}`, context);
   return { poll: context.pollState, history, broadcasts, setState: (next) => { state = next; } };
