@@ -1,7 +1,7 @@
 #remote-root { min-height: 100dvh; }
 /* overflow-x 只挂在 html 上(传播到视口,横向裁剪不变);不能再挂到 body——那会让 body 成为
    滚动容器,position: sticky 的吸顶标题栏与钉底「即将刷新」栏都会随之失效 */
-html.remote-page { overflow-x: hidden; }
+html.remote-page { overflow-x: hidden; scrollbar-gutter: stable; scrollbar-width: thin; }
 /* Use the board's gesture instead of the browser's native pull-to-refresh. */
 html.remote-board-pull { overscroll-behavior-y: none; }
 body.remote-page { width: 100%; min-width: 0; }
