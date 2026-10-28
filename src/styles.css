@@ -772,6 +772,7 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .trend-view .chart-legend { margin-top: auto; }
 .usage-chart { position: relative; padding: 10px 8px 2px; user-select: none; }
 .usage-chart svg { display: block; width: 100%; height: auto; touch-action: pan-y; }
+.usage-chart svg:focus-visible { outline: 2px solid var(--focus-border); outline-offset: -2px; }
 .chart-grid { stroke: var(--line-inner); stroke-width: 1; }
 .chart-y-label, .chart-x-label { fill: var(--faint); font-size: 9px; font-family: 'DM Mono', monospace; }
 .chart-y-label { text-anchor: end; }
@@ -837,6 +838,7 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .waste-scroll { flex: 1 1 auto; min-height: 0; margin: 0 6px; display: flex; flex-direction: column; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; cursor: grab; border: 1px solid var(--line-inner); border-radius: 8px; background: var(--surface-2); user-select: none; }
 .waste-scroll::-webkit-scrollbar { display: none; }
 .waste-scroll.dragging { cursor: grabbing; }
+.waste-scroll:focus-visible { outline: 2px solid var(--focus-border); outline-offset: -2px; }
 /* plot 高度 = 柱区（去掉顶部 10px 留白），网格线/平均线的 bottom 百分比都相对柱区 */
 .waste-plot { position: relative; flex: 1 1 auto; min-height: 0; margin-top: 10px; min-width: 100%; display: flex; align-items: flex-end; gap: 1px; padding: 0 10px; border-bottom: 1px solid var(--line-inner); }
 .waste-gridline { position: absolute; left: 10px; right: 10px; height: 1px; background: var(--line-inner); pointer-events: none; }

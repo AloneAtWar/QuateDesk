@@ -8,17 +8,39 @@ const exclusionReason = (cycle) => cycle.kind !== 'natural' ? '提前结束，�
 const cycleValue = (cycle) => `${!cycle.counted && cycle.remaining != null ? '≤ ' : ''}${formatWastePercent(cycle.remaining)}`;
 
 function WasteChart({ buckets, selectedId, onSelect, hasData, plotHeight = null, plotRef = null }) {
+  const barsRef = useRef(null);
   const peak = Math.max(1, ...buckets.map((bucket) => bucket.total || 0));
   const magnitude = 10 ** Math.floor(Math.log10(peak));
   const maximum = Math.ceil(peak / magnitude) * magnitude;
   const step = maximum / 5;
+  // 键盘浏览：左右方向键在时间桶间移动选中并聚焦（桶从左到右按时间排列），Home/End 跳到两端；
+  // 基点优先取当前聚焦的柱，选中与焦点不同步（Tab 进来未选中）时也能起步
+  const stepBucket = (index) => {
+    const next = buckets[Math.max(0, Math.min(buckets.length - 1, index))];
+    if (!next) return;
+    if (next.id !== selectedId) onSelect(next.id);
+    // 柱子元素按 bucket.id 稳定存在，直接聚焦即可；用 rAF 反而在后台/被遮挡的窗口里失效
+    barsRef.current?.querySelector(`[data-bucket-id="${next.id}"]`)?.focus();
+  };
+  const handleBarsKey = (event) => {
+    if (!buckets.length) return;
+    const focusedId = event.target?.dataset?.bucketId;
+    const base = (focusedId != null ? buckets.findIndex((bucket) => bucket.id === focusedId)
+      : selectedId != null ? buckets.findIndex((bucket) => bucket.id === selectedId) : buckets.length - 1);
+    if (event.key === 'Home') { event.preventDefault(); stepBucket(0); return; }
+    if (event.key === 'End') { event.preventDefault(); stepBucket(buckets.length - 1); return; }
+    const delta = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+    if (delta === undefined) return;
+    event.preventDefault();
+    stepBucket((base < 0 ? buckets.length - 1 : base) + delta);
+  };
   return <section className="global-waste-chart" aria-label="历史浪费趋势">
     <div className="global-waste-block-head"><b>历史浪费趋势</b><small>份周期额度</small></div>
     <div className="global-waste-plot" ref={plotRef} style={plotHeight !== null ? { '--waste-plot-height': `${plotHeight}px` } : undefined}>
       <div className="global-waste-axis" aria-hidden="true">{[5, 4, 3, 2, 1, 0].map((tick) => <span key={tick}>{formatWasteAmount(step * tick)}</span>)}</div>
-      <div className="global-waste-bars" style={{ '--waste-columns': buckets.length }}>
+      <div className="global-waste-bars" role="group" aria-label="按时间分段的浪费柱，左右方向键切换" ref={barsRef} onKeyDown={handleBarsKey} style={{ '--waste-columns': buckets.length }}>
         <div className="global-waste-gridlines" aria-hidden="true">{[0, 1, 2, 3, 4, 5].map((tick) => <i key={tick} />)}</div>
-        {buckets.map((bucket) => <button type="button" key={bucket.id} className={`global-waste-bar-button${selectedId === bucket.id ? ' selected' : ''}${bucket.total == null ? ' unknown' : ''}`} aria-pressed={selectedId === bucket.id} aria-label={`${bucket.dateLabel}，${bucket.total == null ? '无可靠记录' : `浪费 ${formatWasteAmount(bucket.total)} 份，${bucket.count} 个有效周期`}，查看账号贡献`} title={`${bucket.dateLabel}\n${bucket.total == null ? '无可靠记录' : `${formatWasteAmount(bucket.total)} 份 · ${bucket.count} 个有效周期`}`} onClick={() => onSelect(bucket.id)}>
+        {buckets.map((bucket, index) => <button type="button" key={bucket.id} data-bucket-id={bucket.id} tabIndex={selectedId == null ? (index === 0 ? 0 : -1) : (selectedId === bucket.id ? 0 : -1)} className={`global-waste-bar-button${selectedId === bucket.id ? ' selected' : ''}${bucket.total == null ? ' unknown' : ''}`} aria-pressed={selectedId === bucket.id} aria-label={`${bucket.dateLabel}，${bucket.total == null ? '无可靠记录' : `浪费 ${formatWasteAmount(bucket.total)} 份，${bucket.count} 个有效周期`}，查看账号贡献`} title={`${bucket.dateLabel}\n${bucket.total == null ? '无可靠记录' : `${formatWasteAmount(bucket.total)} 份 · ${bucket.count} 个有效周期`}`} onClick={() => onSelect(bucket.id)}>
           <span className="global-waste-bar-area"><span className="global-waste-bar" style={{ height: bucket.total == null ? '0%' : `${bucket.total / maximum * 100}%` }}><b>{formatWasteAmount(bucket.total)}</b></span></span>
           <span className="global-waste-bar-label"><strong><span>{formatWasteDate(bucket.start)}</span><span>–{formatWasteDate(bucket.endExclusive - 1)}</span></strong></span>
         </button>)}

@@ -993,6 +993,22 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
   // 选中点：当前视图内仍存在时才显示标记（被平移/缩放移出视图时暂时休眠，不移除）
   const selectedPoint = selectedAt == null ? null : (drawn.find((point) => new Date(point.at).getTime() === selectedAt) || null);
   const selectedX = selectedPoint ? toX(new Date(selectedPoint.at).getTime()) : 0;
+  // 键盘浏览：左右方向键在可见数据点间移动选中点，Home/End 跳到两端；
+  // 无选中（或选中点被平移/缩放移出视图休眠）时从最新的点起步，与热力图一致
+  const stepSelection = (index) => {
+    const next = drawn[Math.max(0, Math.min(drawn.length - 1, index))];
+    if (next) setSelectedAt(new Date(next.at).getTime());
+  };
+  const handleChartKey = (event) => {
+    if (!drawn.length) return;
+    const base = selectedPoint ? drawn.indexOf(selectedPoint) : drawn.length - 1;
+    if (event.key === 'Home') { event.preventDefault(); stepSelection(0); return; }
+    if (event.key === 'End') { event.preventDefault(); stepSelection(drawn.length - 1); return; }
+    const delta = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+    if (delta === undefined) return;
+    event.preventDefault();
+    stepSelection((base < 0 ? drawn.length - 1 : base) + delta);
+  };
   // 详情条优先级：悬停点 > 断线提示 > 选中点（悬停离开后回落到选中的常驻信息）
   const detailPoint = hoverPoint || (!hoverGap ? selectedPoint : null);
   const pickRange = (preset) => {
@@ -1021,7 +1037,7 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
           const reset = formatPointResetShort(sample.resetAt, detailPoint.at);
           return <span className="chart-detail-item" key={key} title={[windowCatalog[key]?.label || key, formatChartDetail(sample), reset].filter(Boolean).join(' ')}><i style={{ background: chartColor(key, index) }} />{windowCatalog[key]?.short || key}<b>{formatChartDetail(sample)}</b>{reset && <small>{reset}</small>}</span>;
         })}
-      </> : hoverGap ? <span className="chart-detail-hint">{formatChartStamp(hoverGap.from)} – {formatChartStamp(hoverGap.to)} · 该时段暂无数据</span> : <span className="chart-detail-hint">悬停或点击数据点查看数值与重置时间</span>}</div>
+      </> : hoverGap ? <span className="chart-detail-hint">{formatChartStamp(hoverGap.from)} – {formatChartStamp(hoverGap.to)} · 该时段暂无数据</span> : <span className="chart-detail-hint">悬停、点击或用方向键选择数据点，查看数值与重置时间</span>}</div>
       <div className="range-control" role="group" aria-label="趋势时间范围" onPointerDown={(event) => event.stopPropagation()}>
         {RANGE_PRESETS.map((preset) => {
           const available = rangeAvailable(preset.ms, fullStart, fullEnd);
@@ -1029,7 +1045,7 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
         })}
       </div>
     </div>
-    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} onPointerDown={startPan} onPointerMove={movePan} onPointerUp={endPan} onPointerCancel={cancelPan} onMouseLeave={() => { setHover(null); setHoverGap(null); downRef.current = null; endPan(); }}>
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} tabIndex={0} role="img" aria-label="额度趋势折线图，左右方向键选择数据点" onKeyDown={handleChartKey} onPointerDown={startPan} onPointerMove={movePan} onPointerUp={endPan} onPointerCancel={cancelPan} onMouseLeave={() => { setHover(null); setHoverGap(null); downRef.current = null; endPan(); }}>
       {yTicks.map((value) => <g key={value}><line x1={PAD.l} x2={W - PAD.r} y1={toY(value)} y2={toY(value)} className="chart-grid" /><text x={PAD.l - 6} y={toY(value) + 3} className="chart-y-label">{formatYTick(value)}</text></g>)}
       {xTicks.map((at) => <text key={Math.round(at)} x={Math.min(Math.max(toX(at), PAD.l + 16), W - PAD.r - 16)} y={H - 7} className="chart-x-label">{formatTick(at)}</text>)}
       {paths.map((path, index) => path.segments.map((d) => <path key={`${path.key}-${d.slice(0, 12)}`} d={d} fill="none" stroke={chartColor(path.key, index)} strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />))}
@@ -1171,6 +1187,26 @@ function WasteView({ account, wasteWindows }) {
     downRef.current = null;
     setDragging(false);
   };
+  // 键盘浏览：左右方向键在周期柱间移动选中（复用点击选中的状态），Home/End 跳到最老/最新；
+  // 周期过多横向滚动时把选中柱滚进视野
+  const cycleKeys = shown.map((cycle, index) => cycleKey(cycle, index));
+  const stepSelection = (index) => {
+    const next = Math.max(0, Math.min(shown.length - 1, index));
+    if (!shown[next]) return;
+    setSelectedKey(cycleKeys[next]);
+    // 周期过多横向滚动时把选中柱滚进视野；rAF 在后台/被遮挡的窗口里不触发，直接滚动
+    scrollRef.current?.querySelector(`[data-key="${cycleKeys[next]}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  };
+  const handleWasteKey = (event) => {
+    if (!shown.length) return;
+    const base = selectedKey != null ? cycleKeys.indexOf(selectedKey) : shown.length - 1;
+    if (event.key === 'Home') { event.preventDefault(); stepSelection(0); return; }
+    if (event.key === 'End') { event.preventDefault(); stepSelection(shown.length - 1); return; }
+    const delta = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+    if (delta === undefined) return;
+    event.preventDefault();
+    stepSelection((base < 0 ? shown.length - 1 : base) + delta);
+  };
   // 选中期间点到图表区域以外（页签、图例等）也取消选中
   useEffect(() => {
     if (selectedKey == null) return undefined;
@@ -1193,8 +1229,8 @@ function WasteView({ account, wasteWindows }) {
         <span>{windowCycles.length} 个周期</span><span>平均浪费 <b>{avg != null ? `${avg.toFixed(0)}%` : '—'}</b>（{good.length} 可靠）</span>{good.length ? <span>累计 <b>{Math.round(total * 100) / 100}</b> 倍额度</span> : <span>累计 —</span>}
       </> : <><span>0 个周期</span><span>平均浪费 —</span><span>累计 —</span></>}</span>
     </div>
-    <div className="chart-detail waste-detail">{hover ? renderDetail(hover) : selectedCycle ? renderDetail(selectedCycle) : <span className="chart-detail-hint">{empty ? '点击柱子查看当前周期详情' : '点击或悬停柱子查看周期详情 · 周期过多时可左右拖动'}</span>}</div>
-    <div className={`waste-scroll${dragging ? ' dragging' : ''}`} ref={scrollRef} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={cancelDrag} onPointerLeave={cancelDrag}>
+    <div className="chart-detail waste-detail">{hover ? renderDetail(hover) : selectedCycle ? renderDetail(selectedCycle) : <span className="chart-detail-hint">{empty ? '点击柱子查看当前周期详情' : '点击、悬停或用方向键选择柱子查看周期详情 · 周期过多时可左右拖动'}</span>}</div>
+    <div className={`waste-scroll${dragging ? ' dragging' : ''}`} ref={scrollRef} tabIndex={0} role="group" aria-label="周期浪费柱状图，左右方向键选择周期" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={cancelDrag} onPointerLeave={cancelDrag} onKeyDown={handleWasteKey}>
       <div className={`waste-plot ${curWindow === 'monthly' ? 'mo' : 'wk'}`}>
         {!empty && [25, 50, 75].map((value) => <div key={value} className="waste-gridline" style={{ bottom: `${value}%` }} />)}
         {!empty && avg != null && <div className="waste-avg" style={{ bottom: `${Math.min(100, avg)}%` }}><em>平均 {avg.toFixed(0)}%</em></div>}
