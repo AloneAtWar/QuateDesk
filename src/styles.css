@@ -1099,6 +1099,12 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .local-cli-page-title b { font-size: 13px; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .local-cli-page-title small { color: var(--faint); font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .local-cli-page-actions { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+/* 档案过滤 chip:从设置「用量档案」单独查看时标注当前档案,× 返回全部来源 */
+.local-cli-source-chip { flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 5px; max-width: 200px; padding: 4px 5px 4px 8px; border: 1px solid var(--line-inner); border-radius: 7px; background: var(--green-bg); color: var(--green-deep); font-size: 10px; }
+.local-cli-source-chip > svg { flex: 0 0 auto; }
+.local-cli-source-chip b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.local-cli-source-chip button { flex: 0 0 auto; display: grid; place-items: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 4px; color: inherit; background: transparent; cursor: pointer; }
+.local-cli-source-chip button:hover { background: var(--green-deep); color: var(--surface-2); }
 .local-cli-view-switch { flex: 0 0 auto; }
 .local-cli-scope-models { min-width: 0; display: flex; align-items: center; gap: 5px; overflow: hidden; color: var(--faint); font-size: 9px; white-space: nowrap; }
 .local-cli-scope-models > span:first-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ink-soft); font-weight: 700; }

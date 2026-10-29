@@ -20,7 +20,7 @@ contextBridge.exposeInMainWorld('quotaDesk', {
   // 本机 CLI 用量:只暴露聚合报告与扫描动作,不暴露路径和原始事件
   getLocalCliUsageSummary: (options) => ipcRenderer.invoke('cliUsage:get-summary', options),
   getLocalCliUsageModels: (options) => ipcRenderer.invoke('cliUsage:get-models', options),
-  getLocalCliUsageSources: () => ipcRenderer.invoke('cliUsage:get-sources'),
+  getLocalCliUsageSources: (options) => ipcRenderer.invoke('cliUsage:get-sources', options),
   scanLocalCliUsage: () => ipcRenderer.invoke('cliUsage:scan'),
   getUsageArchives: () => ipcRenderer.invoke('archives:info'),
   exportUsageArchives: (options) => ipcRenderer.invoke('archives:export', options),

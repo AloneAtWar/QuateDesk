@@ -1,20 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Database, Download, Pencil, RefreshCw, Trash2, UploadCloud } from 'lucide-react';
+import { ChartColumn, Database, Download, Pencil, RefreshCw, Trash2, UploadCloud } from 'lucide-react';
 import { formatLocalDateTime, formatLocalTokensCompact } from './local-cli-usage-format';
 
 const date = (value) => value ? formatLocalDateTime(value).slice(0, 10) : '—';
 const number = (value) => Number(value || 0).toLocaleString('zh-CN');
 
-function SourceCard({ source, local = false, busy, onUpdate, onDelete }) {
+function SourceCard({ source, local = false, busy, onUpdate, onDelete, onViewUsage }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(source.label);
   const save = async (event) => {
     event.preventDefault();
     if (await onUpdate({ sourceId: source.sourceId, label: name.trim() })) setEditing(false);
   };
+  const viewable = Number(source.records) > 0;
   return <article className={`usage-archive-card${local ? ' is-local' : ''}${source.enabled === false ? ' is-disabled' : ''}`}>
     <div className="usage-archive-heading">
       <b title={source.label}>{source.label}</b><span className="usage-archive-badge">{local ? '本机采集' : '导入档案'}</span>
+      <button type="button" className="row-icon-button" disabled={!viewable || !onViewUsage} title={viewable ? '在本机用量页只看这个档案' : '该档案还没有用量记录'} aria-label={`查看 ${source.label} 的本机用量`} onClick={() => onViewUsage?.({ sourceId: source.sourceId, label: source.label })}><ChartColumn size={13} /></button>
       <button type="button" className="row-icon-button" disabled={busy} title="修改显示名称" aria-label={`重命名 ${source.label}`} onClick={() => { setName(source.label); setEditing(true); }}><Pencil size={13} /></button>
     </div>
     {editing && <form className="usage-archive-rename" onSubmit={save}>
@@ -31,7 +33,7 @@ function SourceCard({ source, local = false, busy, onUpdate, onDelete }) {
   </article>;
 }
 
-export default function UsageArchivesSettings({ showHeading = true }) {
+export default function UsageArchivesSettings({ showHeading = true, onViewUsage }) {
   const bridge = window.quotaDesk;
   const [info, setInfo] = useState(null);
   const [scope, setScope] = useState('local');
@@ -76,10 +78,10 @@ export default function UsageArchivesSettings({ showHeading = true }) {
       {loadError && <div className="usage-archive-notice is-error" role="alert">{loadError}<button className="outline-button" onClick={load}>重试</button></div>}
       {!info && !loadError && <p className="usage-archive-help" role="status">正在读取档案信息…</p>}
       {info && <>
-        <SourceCard source={info.local} local busy={Boolean(busy)} onUpdate={(query) => run('update', () => bridge.updateUsageArchive(query), '来源名称已更新')} />
+        <SourceCard source={info.local} local busy={Boolean(busy)} onViewUsage={onViewUsage} onUpdate={(query) => run('update', () => bridge.updateUsageArchive(query), '来源名称已更新')} />
         <div className="usage-archive-subtitle">导入来源 <span>{info.imported.length}</span></div>
         {info.imported.length === 0 ? <p className="usage-archive-empty">还没有导入来源。可在另一台电脑导出档案，再到这里导入。</p>
-          : info.imported.map((source) => <SourceCard key={source.sourceId} source={source} busy={Boolean(busy)}
+          : info.imported.map((source) => <SourceCard key={source.sourceId} source={source} busy={Boolean(busy)} onViewUsage={onViewUsage}
             onUpdate={(query) => run('update', () => bridge.updateUsageArchive(query), query.label ? '显示名称已更新' : query.enabled ? '该来源已计入汇总' : '该来源已暂停计入汇总')}
             onDelete={(sourceId) => run('delete', () => bridge.deleteUsageArchive(sourceId), '导入档案已删除，本机记录保留')} />)}
         <label className="setting-select"><span><b>导出范围</b><small>保留每个来源的身份和数据版本</small></span><select aria-label="用量档案导出范围" value={scope} disabled={Boolean(busy)} onChange={(event) => setScope(event.target.value)}><option value="local">仅本机档案</option><option value="all">全部来源档案</option></select></label>

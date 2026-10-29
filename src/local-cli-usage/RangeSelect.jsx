@@ -47,17 +47,17 @@ export default function RangeSelect({ value, options, onChange, ariaLabel }) {
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [open]);
 
-  const selected = options.find((option) => option.days === value) || options[0];
+  const selected = options.find((option) => option.id === value) || options[0];
 
   const menu = open && menuStyle ? createPortal(
     <div className="local-cli-range-menu" style={menuStyle} ref={menuRef} role="listbox" aria-label={ariaLabel}>
       {options.map((option) => <button
-        type="button" key={option.days} role="option" aria-selected={option.days === value}
-        className={`local-cli-range-option${option.days === value ? ' selected' : ''}`}
-        onClick={() => { onChange(option.days); setOpen(false); buttonRef.current?.focus(); }}
+        type="button" key={option.id} role="option" aria-selected={option.id === value}
+        className={`local-cli-range-option${option.id === value ? ' selected' : ''}`}
+        onClick={() => { onChange(option.id); setOpen(false); buttonRef.current?.focus(); }}
       >
         <span>{option.label}</span>
-        {option.days === value && <Check size={11} className="local-cli-range-check" />}
+        {option.id === value && <Check size={11} className="local-cli-range-check" />}
       </button>)}
     </div>, document.body) : null;
 

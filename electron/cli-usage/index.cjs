@@ -90,8 +90,8 @@ class CliUsageService {
     return this.request('models', query, QUERY_TIMEOUT_MS);
   }
 
-  getSources() {
-    return this.request('sources', null, QUERY_TIMEOUT_MS);
+  getSources(query) {
+    return this.request('sources', query, QUERY_TIMEOUT_MS);
   }
 
   getArchiveInfo() { return this.request('archiveInfo', null, SCAN_TIMEOUT_MS); }
@@ -118,6 +118,13 @@ class CliUsageService {
     return timezone;
   }
 
+  // 档案来源 ID:本机与导入来源都是 UUID;缺省(null/undefined/空串)表示不过滤
+  static normalizeSourceId(raw) {
+    if (raw === null || raw === undefined || raw === '') return null;
+    if (typeof raw !== 'string' || !/^[0-9a-fA-F-]{10,64}$/.test(raw)) throw new CliUsageError('无效的档案来源');
+    return raw;
+  }
+
   static normalizeSummaryQuery(raw) {
     const query = raw && typeof raw === 'object' ? raw : {};
     const timezone = CliUsageService.validateTimezone(query.timezone);
@@ -130,7 +137,7 @@ class CliUsageService {
     let modelRules;
     try { modelRules = normalizeModelRules(query.modelRules); }
     catch (error) { throw new CliUsageError(error.message); }
-    return { agent, timezone, endDate, modelRules };
+    return { agent, timezone, endDate, modelRules, sourceId: CliUsageService.normalizeSourceId(query.sourceId) };
   }
 
   static normalizeModelsQuery(raw) {
@@ -144,6 +151,11 @@ class CliUsageService {
     if (scope.kind === 'day') {
       if (!isValidDateString(scope.date)) throw new CliUsageError('无效的日期');
       normalizedScope = { kind: 'day', date: scope.date };
+    } else if (scope.kind === 'since') {
+      // 自周期起点至今:界面用账号额度窗口的 resetAt 反推周期开始时刻
+      const sinceMs = Number(scope.sinceMs);
+      if (!Number.isSafeInteger(sinceMs) || sinceMs <= 0 || sinceMs > Date.now() + 86_400_000) throw new CliUsageError('无效的周期起点');
+      normalizedScope = { kind: 'since', sinceMs };
     } else if (scope.kind === 'range') {
       const days = Number(scope.days);
       if (days !== 0 && !RANGE_DAYS.includes(days)) throw new CliUsageError('无效的统计周期');
@@ -152,7 +164,12 @@ class CliUsageService {
     let modelRules;
     try { modelRules = normalizeModelRules(query.modelRules); }
     catch (error) { throw new CliUsageError(error.message); }
-    return { agent, timezone, mergeSameModels, scope: normalizedScope, modelRules };
+    return { agent, timezone, mergeSameModels, scope: normalizedScope, modelRules, sourceId: CliUsageService.normalizeSourceId(query.sourceId) };
+  }
+
+  static normalizeSourcesQuery(raw) {
+    const query = raw && typeof raw === 'object' ? raw : {};
+    return { sourceId: CliUsageService.normalizeSourceId(query.sourceId) };
   }
 
   // ---- 后台增量 ----------------------------------------------------------
@@ -178,7 +195,7 @@ class CliUsageService {
   registerIpc(ipcMain) {
     ipcMain.handle('cliUsage:get-summary', async (_event, raw) => this.getSummary(CliUsageService.normalizeSummaryQuery(raw)));
     ipcMain.handle('cliUsage:get-models', async (_event, raw) => this.getModels(CliUsageService.normalizeModelsQuery(raw)));
-    ipcMain.handle('cliUsage:get-sources', () => this.getSources());
+    ipcMain.handle('cliUsage:get-sources', (_event, raw) => this.getSources(CliUsageService.normalizeSourcesQuery(raw)));
     ipcMain.handle('cliUsage:scan', () => this.scan().then(() => this.getSources()));
   }
 

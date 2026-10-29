@@ -3,7 +3,7 @@ import LocalCliUsageView from '../local-cli-usage/LocalCliUsageView';
 import WasteOverviewView from './WasteOverviewView';
 import './statistics.css';
 
-export default function StatisticsView({ mode, onModeChange, showNavigation = true, accounts, providers, settings, setSettings, Logo, api, onLocalApi, onLocalMeta, onWasteApi, onWasteMeta }) {
+export default function StatisticsView({ mode, onModeChange, showNavigation = true, accounts, providers, settings, setSettings, Logo, api, onLocalApi, onLocalMeta, onWasteApi, onWasteMeta, sourceFilter = null, onClearSourceFilter }) {
   const id = useId();
   const [visitedWaste, setVisitedWaste] = useState(mode === 'waste');
   const [visitedLocal, setVisitedLocal] = useState(mode === 'local-usage');
@@ -30,7 +30,7 @@ export default function StatisticsView({ mode, onModeChange, showNavigation = tr
       </div>
     </div>}
     <div className="statistics-panel" role={showNavigation ? 'tabpanel' : 'region'} id={`${id}-panel-local-usage`} aria-labelledby={showNavigation ? `${id}-tab-local-usage` : undefined} aria-label={showNavigation ? undefined : '本机用量'} hidden={mode !== 'local-usage'}>
-      {(visitedLocal || mode === 'local-usage') && <LocalCliUsageView settings={settings} setSettings={setSettings} onApi={onLocalApi} onMetaChange={onLocalMeta} />}
+      {(visitedLocal || mode === 'local-usage') && <LocalCliUsageView settings={settings} setSettings={setSettings} onApi={onLocalApi} onMetaChange={onLocalMeta} sourceFilter={sourceFilter} onClearSourceFilter={onClearSourceFilter} />}
     </div>
     <div className="statistics-panel" role={showNavigation ? 'tabpanel' : 'region'} id={`${id}-panel-waste`} aria-labelledby={showNavigation ? `${id}-tab-waste` : undefined} aria-label={showNavigation ? undefined : '额度浪费'} hidden={mode !== 'waste'}>
       {(visitedWaste || mode === 'waste') && <WasteOverviewView accounts={accounts} providers={providers} Logo={Logo} api={api} active={mode === 'waste'} onApi={onWasteApi} onMetaChange={onWasteMeta} />}

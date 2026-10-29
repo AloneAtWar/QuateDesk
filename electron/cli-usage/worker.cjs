@@ -137,8 +137,9 @@ class CliUsageWorker {
     }
   }
 
-  async sources() {
+  async sources(query = {}) {
     const detected = this.scanState.size ? null : await this.detectOnlyStatus();
+    const sourceId = query?.sourceId || null;
     return AGENT_ORDER.map((id) => {
       const adapter = adapters[id];
       const scanned = this.scanState.get(id);
@@ -151,7 +152,7 @@ class CliUsageWorker {
         rootLabels: adapter.defaultRootLabels,
         status,
         lastScannedAt: this.lastScanAt,
-        records: this.store.countEvents(id),
+        records: this.store.countEvents(id, sourceId),
         files: scanned?.files ?? this.store.countSourceFiles(id),
         warning: scanned?.warning || null,
       };

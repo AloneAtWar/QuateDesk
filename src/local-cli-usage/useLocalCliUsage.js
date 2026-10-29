@@ -26,9 +26,9 @@ export default function useLocalCliUsage() {
     });
   }, []);
 
-  const refreshSources = useCallback(() => {
+  const refreshSources = useCallback((query = {}) => {
     if (!bridge?.getLocalCliUsageSources) return;
-    run('sources', () => bridge.getLocalCliUsageSources(), setSources);
+    run('sources', () => bridge.getLocalCliUsageSources(query), setSources);
   }, [bridge, run]);
 
   const refreshSummary = useCallback((query) => {

@@ -1645,6 +1645,33 @@ function HistoryViewSwitch({ tabs, view, onChange, domId, panelId, onToast }) {
   </>;
 }
 
+// 账号额度周期 → 本机用量统计范围:周期起点 = resetAt 往前推一个周期。
+// 周窗口固定 7 天;月窗口按自然月同日对齐(月末收拢),与浪费统计的月份口径一致。
+const cycleStartBefore = (key, resetMs) => {
+  if (key === 'weekly') return resetMs - 7 * 86_400_000;
+  const end = new Date(resetMs);
+  const target = new Date(end.getFullYear(), end.getMonth() - 1, 1);
+  const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  return new Date(target.getFullYear(), target.getMonth(), Math.min(end.getDate(), lastDay)).getTime();
+};
+// 账号追踪周 / 月额度窗口时提供对应周期选项;resetAt 缺失(轮询失败)或起点
+// 不在合理范围内则不提供,避免给出错误的统计边界
+const accountCycleRanges = (account, now = Date.now()) => {
+  const tracked = Array.isArray(account?.windowKeys) && account.windowKeys.length
+    ? account.windowKeys
+    : account?.windows?.length ? account.windows.map((item) => item.key) : [];
+  const ranges = [];
+  for (const [key, label] of [['weekly', '周周期'], ['monthly', '月周期']]) {
+    if (!tracked.includes(key)) continue;
+    const resetMs = Date.parse(account?.windows?.find((item) => item.key === key)?.resetAt || '');
+    if (!Number.isFinite(resetMs)) continue;
+    const sinceMs = cycleStartBefore(key, resetMs);
+    if (!Number.isFinite(sinceMs) || sinceMs <= 0 || sinceMs >= now) continue;
+    ranges.push({ id: `cycle:${key}`, label, sinceMs });
+  }
+  return ranges;
+};
+
 function HistoryView({ account, provider, onBack, onProviderUsageState, settings, setSettings, readOnly = false, wasteWindowsOverride, onToast }) {
   const [points, setPoints] = useState(null);
   const [hiddenKeys, setHiddenKeys] = useState([]);
@@ -1665,6 +1692,8 @@ function HistoryView({ account, provider, onBack, onProviderUsageState, settings
   const localAnalysis = useMemo(() => resolveProviderLocalAnalysis(provider), [provider]);
   // 远程查看(只读)也展示本机页签:数据本身只读,远程页会传自己的本机用量会话设置
   const showLocalUsageEntry = localAnalysis.enabled;
+  // 该账号的周 / 月额度周期 → 本机用量模型拆分的额外统计范围
+  const cycleRanges = useMemo(() => accountCycleRanges(account), [account]);
   const showWaste = view === 'waste' && wasteWindows.length > 0;
   const showProviderUsage = view === 'provider-usage' && showProviderUsageEntry;
   const showLocalUsage = view === 'local-usage' && showLocalUsageEntry;
@@ -1740,7 +1769,7 @@ function HistoryView({ account, provider, onBack, onProviderUsageState, settings
         {account.disabled && <span className="history-disabled-tag"><CircleStop size={12} /> 已停用 · {formatDisabledDate(account.disabledAt)}</span>}
         <HistoryViewSwitch tabs={historyTabs} view={view} onChange={setView} domId={historyDomId} panelId={historyPanelId} onToast={onToast} />
       </div>
-      <div className={`history-tabpanel${showLocalUsage ? ' local-usage-tabpanel' : ''}`} role="tabpanel" id={historyPanelId} aria-labelledby={`${historyDomId}-tab-${view}`}>{showProviderUsage ? <ProviderUsageView account={account} provider={provider} onState={onProviderUsageState} readOnly={readOnly} /> : showLocalUsage ? <LocalCliUsageView settings={settings} setSettings={setSettings} modelRules={localAnalysis.modelRules} scopeName={provider?.name || '当前厂商'} embedded /> : showWaste ? <WasteView account={account} wasteWindows={wasteWindows} /> : <div className="trend-view">
+      <div className={`history-tabpanel${showLocalUsage ? ' local-usage-tabpanel' : ''}`} role="tabpanel" id={historyPanelId} aria-labelledby={`${historyDomId}-tab-${view}`}>{showProviderUsage ? <ProviderUsageView account={account} provider={provider} onState={onProviderUsageState} readOnly={readOnly} /> : showLocalUsage ? <LocalCliUsageView settings={settings} setSettings={setSettings} modelRules={localAnalysis.modelRules} scopeName={provider?.name || '当前厂商'} cycleRanges={cycleRanges} embedded /> : showWaste ? <WasteView account={account} wasteWindows={wasteWindows} /> : <div className="trend-view">
         {points === null ? <div className="settings-empty chart-empty">正在读取历史记录…</div>
           : points.length === 0 ? <div className="settings-empty chart-empty">暂无历史数据，每次成功刷新额度后都会记录一条</div>
             : <UsageChart points={points} hiddenKeys={hiddenKeys} rangeKey={rangeKey} onRangeKeyChange={setRangeKey} onToast={onToast} />}
@@ -2259,7 +2288,7 @@ function AccountRow({ account, provider, testing, onEdit, onTest, onToggleDisabl
   </div>;
 }
 
-function SettingsDrawer({ variant = 'desktop', accounts, providers, settings, setSettings, onClose, openModal, onDeleteAccount, onToggleAccountDisabled, onTestAccount, testingAccountId, onEditProvider, autoLaunch, onToggleAutoLaunch, appVersion, update, onOpenUpdate, onCheckUpdate, onClearHistory, runtime, onReopenOnboarding, onOpenDevTools, onExportData, onImportData, dataBusy, onSaveRemoteSettings, theme, setTheme, mode, setMode }) {
+function SettingsDrawer({ variant = 'desktop', accounts, providers, settings, setSettings, onClose, openModal, onDeleteAccount, onToggleAccountDisabled, onTestAccount, testingAccountId, onEditProvider, autoLaunch, onToggleAutoLaunch, appVersion, update, onOpenUpdate, onCheckUpdate, onClearHistory, runtime, onReopenOnboarding, onOpenDevTools, onExportData, onImportData, dataBusy, onSaveRemoteSettings, theme, setTheme, mode, setMode, onViewUsageArchive }) {
   const [category, setCategory] = useState('appearance');
   const drawerRef = useRef(null);
   const scrollRef = useRef(null);
@@ -2362,7 +2391,7 @@ function SettingsDrawer({ variant = 'desktop', accounts, providers, settings, se
     {
       id: 'archives', category: 'data', title: '用量档案', icon: Database,
       summary: '本机与导入来源 · 用量档案导入、导出',
-      content: <UsageArchivesSettings showHeading={false} />,
+      content: <UsageArchivesSettings showHeading={false} onViewUsage={onViewUsageArchive} />,
     },
     {
       id: 'sync', category: 'data', title: 'WebDAV 云同步', icon: Cloud,
@@ -4064,6 +4093,8 @@ function App() {
   const toggleAutoLaunch = async (value) => { if (bridge?.setAutoLaunch) setAutoLaunch(await bridge.setAutoLaunch(value)); };
   const [overviewMode, setOverviewMode] = useState('rings');
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
+  // 从设置「用量档案」单独查看某个档案时,本机用量页只显示该档案({ sourceId, label })
+  const [localUsageSource, setLocalUsageSource] = useState(null);
   // 额度历史折线图视图：点账号卡片进入，返回按钮或右上角视图切换退出
   const [historyAccountId, setHistoryAccountId] = useState(null);
   // 用量与浪费分别从菜单进入，刷新只读取当前内容。
@@ -4402,7 +4433,7 @@ function App() {
     <span className="last-checked" title={inLocalUsageView ? '最后一次本机用量扫描时间' : inWasteView ? '最后一次历史周期读取时间' : '最后一次额度检查时间'}><Clock3 size={11} />{inLocalUsageView ? (localUsageMeta?.lastScannedAt ? formatChecked(localUsageMeta.lastScannedAt) : '未扫描') : inWasteView ? (wasteMeta?.loadedAt ? formatChecked(wasteMeta.loadedAt) : '未读取') : formatChecked(lastSync)}</span>
     {update && ['available', 'downloading', 'downloaded', 'error'].includes(update.status) && !(update.status === 'available' && update.version && update.version === settings.ignoredUpdateVersion) && <button className={`update-badge ${update.status}`} onClick={() => setUpdateOpen(true)} title="查看版本更新"><Download size={11} />{update.status === 'available' && `v${update.version} 可更新`}{update.status === 'downloading' && `下载中 ${update.percent || 0}%`}{update.status === 'downloaded' && '重启升级'}{update.status === 'error' && '更新失败'}</button>}
     <button className="control-solo" onClick={handleGlobalRefresh} disabled={refreshing || (inWasteView && wasteMeta?.loading)} title={inLocalUsageView ? '重新扫描本机用量' : inWasteView ? '重新读取历史浪费' : '立即刷新全部账号'} aria-label={inLocalUsageView ? '重新扫描本机用量' : inWasteView ? '重新读取历史浪费' : '立即刷新全部账号'}><RefreshCw size={13} className={refreshing || (inLocalUsageView && localUsageMeta?.scanning) || (inWasteView && wasteMeta?.loading) ? 'spinning' : ''} /></button>
-    <ViewMenu current={overviewMode} onChange={(key) => { setHistoryAccountId(null); setOverviewMode(key); }} open={viewMenuOpen} onOpenChange={setViewMenuOpen} />
+    <ViewMenu current={overviewMode} onChange={(key) => { setHistoryAccountId(null); setLocalUsageSource(null); setOverviewMode(key); }} open={viewMenuOpen} onOpenChange={setViewMenuOpen} />
   </>;
   const appShellActions = <>
     <button title="设置" aria-label="打开设置" onClick={() => { setViewMenuOpen(false); setSettingsOpen(true); }}><Settings2 size={13} /></button>
@@ -4413,7 +4444,7 @@ function App() {
     <TransientToast toast={toast} />
     <main ref={boardPull.ref} className={`main-shell${inUsageView ? ' local-usage-mode' : ''}`}>
       <BoardPullRefreshIndicator pull={boardPull} />
-      <div className={`content-area${inUsageView ? ' local-usage-mode' : ''}`}>{inUsageView ? <StatisticsView mode={overviewMode} showNavigation={false} accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} Logo={Logo} api={bridge} onLocalApi={(api) => { localUsageApiRef.current = api; }} onLocalMeta={handleLocalUsageMeta} onWasteApi={(api) => { wasteApiRef.current = api; }} onWasteMeta={setWasteMeta} /> : onboardOpen ? <OnboardingWizard settings={settings} setSettings={setSettings} accounts={accounts} providers={providers} ccswitchAvailable={Boolean(bridge?.scanCcswitchImport) || new URLSearchParams(window.location.search).get('onboard') === '1'} onOpenImport={() => setModal('account')} onApplyCcswitch={async (keys, chosen) => {
+      <div className={`content-area${inUsageView ? ' local-usage-mode' : ''}`}>{inUsageView ? <StatisticsView mode={overviewMode} showNavigation={false} accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} Logo={Logo} api={bridge} sourceFilter={localUsageSource} onClearSourceFilter={() => setLocalUsageSource(null)} onLocalApi={(api) => { localUsageApiRef.current = api; }} onLocalMeta={handleLocalUsageMeta} onWasteApi={(api) => { wasteApiRef.current = api; }} onWasteMeta={setWasteMeta} /> : onboardOpen ? <OnboardingWizard settings={settings} setSettings={setSettings} accounts={accounts} providers={providers} ccswitchAvailable={Boolean(bridge?.scanCcswitchImport) || new URLSearchParams(window.location.search).get('onboard') === '1'} onOpenImport={() => setModal('account')} onApplyCcswitch={async (keys, chosen) => {
         if (!bridge) {
           // 网页演示模式：直接把选中的模拟条目变成账号，走与真实导入一致的落库形态
           const stamp = Date.now();
@@ -4439,7 +4470,7 @@ function App() {
       }} onDeleteAccount={deleteAccount} onFinish={finishOnboarding} /> : accounts.length === 0 ? <EmptyWorkspace onAddAccount={() => setModal('account')} onOpenSettings={() => setSettingsOpen(true)} onImport={window.quotaDesk?.scanCcswitchImport ? () => setModal('import-ccswitch') : undefined} /> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} onProviderUsageState={applyProviderUsageState} settings={settings} setSettings={setSettings} onToast={setToast} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} onReorderAccounts={reorderAccounts} sortWeights={{ fiveHourRemaining: settings.periodSort5hRemaining, otherRemaining: settings.periodSortLongRemaining }} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const kind = reloginChannel(provider)?.kind || 'kimi'; setModal({ type: `${kind}-relogin`, account }); }} />}</div>
     </main>
     {settings.showUpcomingRefresh !== false && !inUsageView && !onboardOpen && !historyAccount && accounts.length > 0 && <UpcomingRefreshBar accounts={accounts} providers={providers} onOpenHistory={(account) => setHistoryAccountId(account.id)} />}
-    {settingsOpen && <SettingsDrawer accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)} openModal={setModal} onDeleteAccount={deleteAccount} onToggleAccountDisabled={toggleAccountDisabled} onTestAccount={testAccount} testingAccountId={testingAccountId} onEditProvider={editProvider} autoLaunch={autoLaunch} onToggleAutoLaunch={toggleAutoLaunch} appVersion={appVersion} update={update} onOpenUpdate={() => setUpdateOpen(true)} onCheckUpdate={onCheckUpdate} onClearHistory={clearHistory} runtime={runtime} onExportData={exportData} onImportData={importData} dataBusy={dataBusy} onReopenOnboarding={() => { setSettingsOpen(false); setHistoryAccountId(null); setOnboardOpen(true); }} onOpenDevTools={bridge?.toggleDevTools ? () => bridge.toggleDevTools() : null} />}
+    {settingsOpen && <SettingsDrawer accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)} openModal={setModal} onDeleteAccount={deleteAccount} onToggleAccountDisabled={toggleAccountDisabled} onTestAccount={testAccount} testingAccountId={testingAccountId} onEditProvider={editProvider} autoLaunch={autoLaunch} onToggleAutoLaunch={toggleAutoLaunch} appVersion={appVersion} update={update} onOpenUpdate={() => setUpdateOpen(true)} onCheckUpdate={onCheckUpdate} onClearHistory={clearHistory} runtime={runtime} onExportData={exportData} onImportData={importData} dataBusy={dataBusy} onViewUsageArchive={(source) => { setSettingsOpen(false); setHistoryAccountId(null); setOverviewMode('local-usage'); setLocalUsageSource(source); }} onReopenOnboarding={() => { setSettingsOpen(false); setHistoryAccountId(null); setOnboardOpen(true); }} onOpenDevTools={bridge?.toggleDevTools ? () => bridge.toggleDevTools() : null} />}
     {confirmState && <ConfirmModal confirm={confirmState} onClose={() => setConfirmState(null)} />}
     {updateOpen && update && <UpdateModal update={update} version={appVersion} onIgnore={ignoreUpdate} onClose={() => setUpdateOpen(false)} />}
     {settings.widgetPreview && <WidgetPreview account={currentWidgetAccount} provider={currentWidgetProvider} tagLimit={Number(settings.widgetTagLimit ?? 2)} scale={settings.widgetScale} length={settings.widgetLength} onClose={() => setSettings((old) => ({ ...old, widgetPreview: false }))} />}

@@ -31,13 +31,45 @@ export function createDemoBridge(snapshot, { now = Date.now(), theme = 'dark' } 
     return value;
   };
   const data = rebase(snapshot);
+  // 演示档案:kimi 渠道挂在「笔记本归档」导入来源下,其余都是本机采集;
+  // 行级来源分配是演示专用的,桌面版由 sqlite 的来源表决定
+  const LOCAL_SOURCE_ID = 'demo-local-archive-01';
+  const LAPTOP_SOURCE_ID = 'demo-imported-laptop-01';
+  const rowSourceId = (row) => (row.agent === 'kimi' ? LAPTOP_SOURCE_ID : LOCAL_SOURCE_ID);
+  const sourceRows = (sourceId) => data.localUsage.rows.filter((row) => rowSourceId(row) === sourceId);
+  const sourceStats = (sourceId) => {
+    const rows = sourceRows(sourceId);
+    return {
+      records: rows.reduce((sum, row) => sum + row.requests, 0),
+      totalTokens: rows.reduce((sum, row) => sum + row.totalTokens, 0),
+      firstAt: rows.length ? `${rows[0].date}T09:00:00.000Z` : null,
+      lastAt: rows.length ? `${rows[rows.length - 1].date}T21:30:00.000Z` : null,
+    };
+  };
+  let archiveState = {
+    local: { sourceId: LOCAL_SOURCE_ID, label: '本机采集', revision: 7, ...sourceStats(LOCAL_SOURCE_ID) },
+    imported: [{ sourceId: LAPTOP_SOURCE_ID, label: '笔记本归档', originLabel: 'LAPTOP-DEMO', revision: 4, enabled: true, importedAt: new Date(now - 12 * DAY).toISOString(), ...sourceStats(LAPTOP_SOURCE_ID) }],
+    history: [],
+  };
   let state = {
     accounts: data.accounts, providers: data.providers,
     settings: { theme, onboarded: true, widget: false, historyDays: 0, localCliUsage: { enabled: true, mergeSameModels: true, scanWsl: false } },
     lastSync: new Date(now).toISOString(), runtime: { running: false, checking: false, nextPollAt: null },
   };
   const accountFor = (id) => state.accounts.find((account) => account.id === id);
-  const filteredRows = (query) => data.localUsage.rows.filter((row) => (!query.agent || query.agent === 'all' || query.agent === row.agent) && matchesRules(row, query.modelRules));
+  // 汇总口径排除「暂停计入」的导入来源;指定 sourceId 查看时档案本身仍完整可见
+  const rowVisible = (row, query) => (!query.sourceId
+    || rowSourceId(row) === query.sourceId)
+    && (query.sourceId || !archiveState.imported.some((source) => source.sourceId === rowSourceId(row) && source.enabled === false));
+  const filteredRows = (query) => data.localUsage.rows.filter((row) => (!query.agent || query.agent === 'all' || query.agent === row.agent) && rowVisible(row, query) && matchesRules(row, query.modelRules));
+  const sourceScopedSources = (query) => clone(data.localUsage.sources.map((source) => ({
+    ...source,
+    records: query.sourceId
+      ? sourceRows(query.sourceId).filter((row) => row.agent === source.agent).reduce((sum, row) => sum + row.requests, 0)
+      : (archiveState.imported.some((entry) => entry.sourceId === LAPTOP_SOURCE_ID && entry.enabled === false)
+        ? data.localUsage.rows.filter((row) => rowVisible(row, {})).filter((row) => row.agent === source.agent).reduce((sum, row) => sum + row.requests, 0)
+        : source.records),
+  })));
   const summary = (query = {}) => {
     const end = query.endDate || today;
     const start = addDays(end, 1 - (query.days || 365));
@@ -59,7 +91,7 @@ export function createDemoBridge(snapshot, { now = Date.now(), theme = 'dark' } 
     return {
       range: { start, end, timezone: query.timezone || snapshot.timezone }, filter: clone(query),
       matchedModels: query.modelRules == null ? [] : [...new Map(rows.map((row) => [row.canonical, { key: row.canonical, displayName: row.model }])).values()],
-      recordsByAgent: query.modelRules == null ? null : data.localUsage.rows.filter((row) => matchesRules(row, query.modelRules)).reduce((counts, row) => ({ ...counts, [row.agent]: (counts[row.agent] || 0) + row.requests }), {}),
+      recordsByAgent: query.modelRules == null ? null : filteredRows({ modelRules: query.modelRules }).reduce((counts, row) => ({ ...counts, [row.agent]: (counts[row.agent] || 0) + row.requests }), {}),
       summary: { ...totals, totalTokens: rows.reduce((sum, row) => sum + row.totalTokens, 0), coverageComplete: rows.every((row) => row.date >= start), peakTokens: Math.max(0, ...dayRows.map((row) => row.totalTokens)), currentStreakDays: counts.current, longestStreakDays: counts.longest, sessions: sessions.size, activeDays: dayRows.filter((row) => row.totalTokens > 0).length, cacheReuseRatio: cacheBase > 0 ? totals.cacheReadTokens / cacheBase : null },
       days: dayRows,
     };
@@ -67,7 +99,9 @@ export function createDemoBridge(snapshot, { now = Date.now(), theme = 'dark' } 
   const models = (query = {}) => {
     const scope = query.scope || { kind: 'range', days: 30 };
     const end = scope.kind === 'day' ? scope.date : today;
-    const start = scope.kind === 'day' ? end : scope.days > 0 ? addDays(end, 1 - scope.days) : null;
+    const start = scope.kind === 'day' ? end
+      : scope.kind === 'since' ? dateInZone(scope.sinceMs, query.timezone || snapshot.timezone)
+        : scope.days > 0 ? addDays(end, 1 - scope.days) : null;
     const merge = (!query.agent || query.agent === 'all') && query.mergeSameModels !== false;
     const groups = new Map();
     for (const row of filteredRows(query).filter((row) => (!start || row.date >= start) && row.date <= end)) {
@@ -116,8 +150,31 @@ export function createDemoBridge(snapshot, { now = Date.now(), theme = 'dark' } 
     saveCredential: unsupported, deleteCredential: async () => true,
     readCliLogins: async () => ({}), importCliLogin: unsupported,
     getHistory: async (id) => clone(data.history[id] || []), getCycles: async (id) => clone(data.cycles[id] || []),
-    getLocalCliUsageSources: async () => clone(data.localUsage.sources), scanLocalCliUsage: async () => clone(data.localUsage.sources),
+    getLocalCliUsageSources: async (query = {}) => sourceScopedSources(query), scanLocalCliUsage: async () => clone(data.localUsage.sources),
     getLocalCliUsageSummary: async (query) => summary(query), getLocalCliUsageModels: async (query) => models(query),
+    getUsageArchives: async () => clone(archiveState),
+    onUsageArchivesChanged: () => () => {},
+    updateUsageArchive: async (query) => {
+      if (query.sourceId === LOCAL_SOURCE_ID) {
+        if (query.label !== undefined) archiveState.local.label = String(query.label).slice(0, 100);
+        if (query.enabled === false) throw new Error('不能停用本机档案');
+      } else {
+        const source = archiveState.imported.find((entry) => entry.sourceId === query.sourceId);
+        if (!source) throw new Error('导入来源不存在');
+        if (query.label !== undefined) source.label = String(query.label).slice(0, 100);
+        if (query.enabled !== undefined) source.enabled = Boolean(query.enabled);
+      }
+      return clone(archiveState);
+    },
+    deleteUsageArchive: async (sourceId) => {
+      if (sourceId === LOCAL_SOURCE_ID) throw new Error('不能通过导入管理删除本机档案');
+      if (!archiveState.imported.some((entry) => entry.sourceId === sourceId)) throw new Error('导入来源不存在');
+      archiveState.imported = archiveState.imported.filter((entry) => entry.sourceId !== sourceId);
+      data.localUsage.rows = data.localUsage.rows.filter((row) => rowSourceId(row) !== sourceId);
+      return clone(archiveState);
+    },
+    exportUsageArchives: async () => { throw new Error('演示模式不支持导出档案'); },
+    importUsageArchives: async () => { throw new Error('演示模式不支持导入档案'); },
     getProviderUsage: async (id) => officialUsage(id),
     connectProviderUsage: async (id) => {
       const account = accountFor(id);
