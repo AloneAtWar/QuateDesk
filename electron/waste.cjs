@@ -131,6 +131,10 @@ const extractCycles = (points, windowKeys) => {
 // 合并已有档案与新提取的记录（每次全量扫描调用）：
 // - 旧记录按 窗口+类型+相近结束时间 匹配新记录，匹配到就用新记录覆盖——
 //   全量历史算出的 from/reliable 更准，且不同批次扫描的 end 锚点会差几分钟，按精确值去重会留下重复
+// - 例外：旧记录可靠而新提取失真时不覆盖。永久保留模式下超过 30 天的历史已降采样为
+//   每小时一点，重提取的观测点只能落在整点附近，gap 被拉长到接近一小时，reliable 判据
+//   （≤2×当前轮询中位间隔）必然不满足；可靠档案只应被同样可靠的重算更新，否则当时按
+//   全分辨率归档的记录会在越过降采样线后被改写成失真记录
 // - 落在本次历史覆盖范围内的旧记录若新链条里没有对应 → 旧算法的误报，丢弃；
 //   覆盖范围之前的历史已裁剪或来自导入，无法重算，原样保留
 const mergeCycles = (existing, extracted, coveredFromMs = null) => {
@@ -141,12 +145,18 @@ const mergeCycles = (existing, extracted, coveredFromMs = null) => {
     return fresh.find((item) => item.window === record.window && item.kind === record.kind
       && Math.abs(Date.parse(item.end) - end) <= MERGE_TOL_MS) || null;
   };
+  const downgraded = new Set(); // 被旧可靠记录压制的新提取记录，不再进入档案
   const kept = (existing || []).filter((record) => {
-    if (nearMatch(record)) return false;
+    const match = nearMatch(record);
+    if (match) {
+      if (record.reliable === true && match.reliable !== true) downgraded.add(match);
+      return record.reliable === true && match.reliable !== true;
+    }
     const observed = Date.parse(record.observedAt);
     return !(coveredFromMs != null && Number.isFinite(observed) && observed >= coveredFromMs);
   });
-  return [...kept, ...fresh].sort((a, b) => a.end.localeCompare(b.end));
+  return [...kept, ...fresh.filter((record) => !downgraded.has(record))]
+    .sort((a, b) => a.end.localeCompare(b.end));
 };
 
 // 读取档案时清洗：同一 窗口+类型 结束时间相近的重复记录（早期只增不覆盖的合并留下的）
@@ -209,4 +219,33 @@ const resolveWasteWindows = (requestConfig) => {
   return (requestConfig?.windows || []).filter((key) => ['weekly', 'monthly'].includes(key));
 };
 
-module.exports = { medianGapMs, detectCycleClose, extractCycles, mergeCycles, dedupeCycles, purgeGhostCycles, computeWasteStats, resolveWasteWindows, naturalCycleStartMs, RESET_JITTER_MS, RELIABLE_FACTOR, REFILL_EPS, MERGE_TOL_MS };
+// v0.6.18–0.7.0 的一次性修复（纯逻辑）：当时的 mergeCycles 把越过降采样线（30 天）的
+// 可靠档案改写成了失真记录——历史降采样为每小时一点后重提取，观测点只能落在整点附近，
+// gap 被拉长到约一小时。每个每日快照 / 滚动 .bak 都是改写前的完好档案：用其中
+// 「同窗口 + 同类型 + 相近结束时间」的可靠记录替换当前失真的记录，恢复当时的观测点、
+// 剩余率与 reliable。只升不降：当前可靠的记录不动；快照里没有可靠对照的失真记录
+// （如重置前长期断档观测到的）本来就失真，保持原样。候选多条时取 gap 最小的一条。
+const repairDowngradedCycles = (current, backups) => {
+  const next = {};
+  const repaired = [];
+  for (const [accountId, records] of Object.entries(current || {})) {
+    const candidates = [];
+    for (const source of backups || []) candidates.push(...(source?.[accountId] || []));
+    next[accountId] = (records || []).map((record) => {
+      if (record.reliable === true) return record;
+      const end = Date.parse(record.end);
+      if (!Number.isFinite(end)) return record;
+      const match = candidates
+        .filter((item) => item.reliable === true && item.window === record.window && item.kind === record.kind
+          && Number.isFinite(Date.parse(item.end)) && Math.abs(Date.parse(item.end) - end) <= MERGE_TOL_MS)
+        .sort((a, b) => (Number(a.gapMs) || Infinity) - (Number(b.gapMs) || Infinity)
+          || (Date.parse(b.observedAt) || 0) - (Date.parse(a.observedAt) || 0))[0];
+      if (!match) return record;
+      repaired.push({ accountId, window: record.window, kind: record.kind, end: record.end, observedAt: match.observedAt });
+      return { ...match };
+    });
+  }
+  return { cycles: next, repaired };
+};
+
+module.exports = { medianGapMs, detectCycleClose, extractCycles, mergeCycles, dedupeCycles, purgeGhostCycles, computeWasteStats, resolveWasteWindows, naturalCycleStartMs, repairDowngradedCycles, RESET_JITTER_MS, RELIABLE_FACTOR, REFILL_EPS, MERGE_TOL_MS };

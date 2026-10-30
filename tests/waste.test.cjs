@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { medianGapMs, detectCycleClose, extractCycles, mergeCycles, dedupeCycles, purgeGhostCycles, computeWasteStats, resolveWasteWindows } = require('../electron/waste.cjs');
+const { medianGapMs, detectCycleClose, extractCycles, mergeCycles, dedupeCycles, purgeGhostCycles, computeWasteStats, resolveWasteWindows, repairDowngradedCycles } = require('../electron/waste.cjs');
 
 const T0 = Date.parse('2026-09-01T02:00:00Z'); // 周期重置时刻（周二 10:00 +08）
 const H = 3_600_000;
@@ -249,6 +249,41 @@ test('mergeCycles：相近结束时间的旧记录被新记录覆盖，不再重
   assert.equal(merged[0].reliable, true);
 });
 
+test('mergeCycles：降采样历史的重提取不得把可靠档案改写成失真', () => {
+  // 10/28 事故场景：9 月周期按全分辨率归档（观测贴近重置、reliable），历史越过 30 天
+  // 降采样线后重提取只能拿到整点附近的观测点，gap 拉长到约一小时且 reliable=false
+  const archived = { window: 'weekly', kind: 'natural', end: '2026-09-16T10:00:07.998Z', from: '2026-09-09T10:00:07.998Z', observedAt: '2026-09-16T09:59:01Z', remaining: 3, gapMs: 70_000, reliable: true };
+  const degraded = { window: 'weekly', kind: 'natural', end: '2026-09-16T10:00:07.998Z', from: '2026-09-09T10:00:07.998Z', observedAt: '2026-09-16T09:04:11Z', remaining: 17, gapMs: 3_356_000, reliable: false };
+  const merged = mergeCycles([archived], [degraded]);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].observedAt, archived.observedAt);
+  assert.equal(merged[0].reliable, true);
+  assert.equal(merged[0].remaining, 3);
+});
+
+test('mergeCycles：旧记录失真时仍采用重提取结果（可靠方向不受保护限制）', () => {
+  // 旧档案本来就不可靠（如重置前长期断档），全量重扫产出更可信或同样新的记录时照常覆盖
+  const oldBad = { window: 'weekly', kind: 'natural', end: '2026-09-21T01:58:05Z', observedAt: '2026-09-20T11:02Z', remaining: 1.88, gapMs: 53_760_000, reliable: false };
+  const freshGood = { window: 'weekly', kind: 'natural', end: '2026-09-21T01:58:06Z', observedAt: '2026-09-20T11:12Z', remaining: 1.88, gapMs: 53_700_000, reliable: false };
+  assert.equal(mergeCycles([oldBad], [freshGood])[0].observedAt, freshGood.observedAt);
+  // 两条都可靠时也按原语义取新记录（end 锚点修正仍生效）
+  const oldOk = { ...oldBad, reliable: true };
+  const freshOk = { ...freshGood, end: '2026-09-21T01:58:06.2Z', reliable: true };
+  assert.equal(mergeCycles([oldOk], [freshOk])[0].end, freshOk.end);
+});
+
+test('mergeCycles：被压制的失真重提取不再进入档案，重复扫描保持幂等', () => {
+  const archived = { window: 'weekly', kind: 'natural', end: '2026-09-23T10:00:07Z', observedAt: '2026-09-23T09:59:02Z', remaining: 0, gapMs: 65_000, reliable: true };
+  const degraded = { window: 'weekly', kind: 'natural', end: '2026-09-23T10:00:07Z', observedAt: '2026-09-23T09:04:12Z', remaining: 4, gapMs: 3_355_000, reliable: false };
+  const first = mergeCycles([archived], [degraded]);
+  assert.equal(first.length, 1);
+  // 下一轮轮询同样只能重提取出失真记录，档案不再变化（不重复、不降级）
+  const again = mergeCycles(first, [degraded]);
+  assert.equal(again.length, 1);
+  assert.equal(again[0].reliable, true);
+  assert.equal(again[0].observedAt, archived.observedAt);
+});
+
 test('mergeCycles：历史覆盖范围内的旧记录在新链条中无对应 → 丢弃；范围之前的保留', () => {
   const coveredFrom = Date.parse('2026-09-01T00:00:00Z');
   const fresh = { window: 'weekly', kind: 'early', end: '2026-09-26T18:04:33Z', observedAt: '2026-09-26T18:04:33Z', remaining: 100, reliable: false };
@@ -340,3 +375,46 @@ test('resolveWasteWindows：预设优先，缺省取周期类型窗口', () => {
   assert.deepEqual(resolveWasteWindows({ windows: ['balance'] }), []);
   assert.deepEqual(resolveWasteWindows(undefined), []);
 });
+
+test('repairDowngradedCycles：用备份中的可靠记录替换被改写的失真记录', () => {
+  // 10/28 事故的真实形态：当前档案观测点被拉到整点附近（失真），备份里是当时贴近重置的观测
+  const degraded = { window: 'weekly', kind: 'natural', end: '2026-09-09T10:00:07.998Z', from: '2026-09-02T10:00:07.998Z', observedAt: '2026-09-09T09:02:25.356Z', remaining: 17, gapMs: 3_462_642, reliable: false };
+  const original = { window: 'weekly', kind: 'natural', end: '2026-09-09T10:00:07.998Z', from: '2026-09-02T10:00:07.998Z', observedAt: '2026-09-09T09:57:16Z', remaining: 5, gapMs: 171_998, reliable: true };
+  const { cycles, repaired } = repairDowngradedCycles(
+    { 'zai-x': [degraded] },
+    [{ 'zai-x': [original] }],
+  );
+  assert.equal(repaired.length, 1);
+  assert.equal(repaired[0].window, 'weekly');
+  assert.deepEqual(cycles['zai-x'], [original]);
+});
+
+test('repairDowngradedCycles：可靠记录不动，无可靠对照的失真保持失真', () => {
+  const good = { window: 'weekly', kind: 'natural', end: '2026-10-07T10:00:00Z', observedAt: '2026-10-07T09:59:30Z', remaining: 67, gapMs: 30_000, reliable: true };
+  // kimi 9/21 场景：重置前 15 小时无观测，任何备份里都没有可靠版本
+  const gapDay = { window: 'weekly', kind: 'natural', end: '2026-09-21T01:58:05Z', observedAt: '2026-09-20T11:02:08Z', remaining: 1.88, gapMs: 53_760_000, reliable: false };
+  const { cycles, repaired } = repairDowngradedCycles(
+    { 'k': [good, gapDay] },
+    [{ 'k': [{ ...gapDay, observedAt: '2026-09-20T11:12:08Z', gapMs: 53_700_000 }] }],
+  );
+  assert.equal(repaired.length, 0);
+  assert.equal(cycles['k'][0], good);
+  assert.equal(cycles['k'][1].reliable, false);
+});
+
+test('repairDowngradedCycles：候选按 窗口+类型+相近结束时间 匹配，取 gap 最小的一条', () => {
+  const damaged = { window: 'weekly', kind: 'natural', end: '2026-09-16T10:00:07Z', observedAt: '2026-09-16T09:04:11Z', remaining: 17, gapMs: 3_356_000, reliable: false };
+  const farEnd = { window: 'weekly', kind: 'natural', end: '2026-09-19T10:00:07Z', observedAt: '2026-09-19T09:59:00Z', remaining: 1, gapMs: 60_000, reliable: true }; // 结束时间超出容差
+  const otherWindow = { window: 'monthly', kind: 'natural', end: '2026-09-16T10:00:07Z', observedAt: '2026-09-16T09:59:00Z', remaining: 1, gapMs: 60_000, reliable: true }; // 窗口不同
+  const worse = { window: 'weekly', kind: 'natural', end: '2026-09-16T10:00:07Z', observedAt: '2026-09-16T09:40:00Z', remaining: 9, gapMs: 1_207_000, reliable: true };
+  const best = { window: 'weekly', kind: 'natural', end: '2026-09-16T10:00:07Z', observedAt: '2026-09-16T09:59:01Z', remaining: 0, gapMs: 66_000, reliable: true };
+  const { cycles, repaired } = repairDowngradedCycles(
+    { 'a': [damaged], 'b': [{ ...damaged, end: '2026-09-23T10:00:07Z' }] },
+    [{ 'a': [farEnd, otherWindow, worse], 'b': [] }, { 'a': [best] }],
+  );
+  assert.equal(repaired.length, 1);
+  assert.equal(cycles['a'][0].observedAt, best.observedAt);
+  // b 账号在备份里没有对应记录 → 保持原样
+  assert.equal(cycles['b'][0].reliable, false);
+});
+

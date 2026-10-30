@@ -2,9 +2,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { app, safeStorage } = require('electron');
-const { readJsonSafe, writeJsonDurable } = require('./json-file.cjs');
+const { readJsonSafe, writeJsonDurable, listDailySnapshots } = require('./json-file.cjs');
 const { appendHistoryPoint, pruneHistory } = require('./history.cjs');
-const { extractCycles, mergeCycles, dedupeCycles, purgeGhostCycles } = require('./waste.cjs');
+const { extractCycles, mergeCycles, dedupeCycles, purgeGhostCycles, repairDowngradedCycles } = require('./waste.cjs');
 const { REMOTE_PORT } = require('./remote-view.cjs');
 
 // 本机预览允许同时存活的会话令牌数:多个预览标签页并存,超出后最旧的先失效
@@ -17,6 +17,7 @@ class DesktopStore {
     this.credentialsPath = path.join(root, 'credentials.json');
     this.historyPath = path.join(root, 'history.json');
     this.cyclesPath = path.join(root, 'cycles.json');
+    this.cyclesRepairPath = path.join(root, 'cycles-repair.json');
     this.remoteAccessPath = path.join(root, 'remote-access.json');
     this.windowStatePath = path.join(root, 'window-state.json');
     this.usageSyncConfigPath = path.join(root, 'usage-sync-config.json');
@@ -216,7 +217,32 @@ class DesktopStore {
     if (JSON.stringify(next) !== JSON.stringify(all)) writeJsonDurable(this.cyclesPath, next);
   }
 
-  clearCycles() { writeJsonDurable(this.cyclesPath, {}); return true; }
+  clearCycles() {
+    writeJsonDurable(this.cyclesPath, {});
+    // 修复标记一并落位：档案是被用户主动清空的，之后启动不能从快照复活
+    writeJsonDurable(this.cyclesRepairPath, { doneAt: new Date().toISOString(), cleared: true });
+    return true;
+  }
+
+  // 一次性修复被 v0.6.18–0.7.0 改写的周期档案（mergeCycles 当时会把越过降采样线的
+  // 可靠档案覆盖成失真记录）。来源是 json-file 的滚动 .bak 与每日快照——都是改写前的
+  // 完好档案；标记文件保证只跑一次，手动清空的档案不会在下次启动被快照复活。
+  // 修复必须赶在每日快照的保留窗口（7 份）轮转掉完好版本之前完成。
+  repairCyclesOnce() {
+    try {
+      if (this.readJson(this.cyclesRepairPath, null)?.doneAt) return { repaired: [] };
+      const backups = [`${this.cyclesPath}.bak`, ...listDailySnapshots(this.cyclesPath).slice().reverse()]
+        .map((file) => readJsonSafe(file, null).value)
+        .filter((value) => value && typeof value === 'object');
+      const { cycles, repaired } = repairDowngradedCycles(this.loadCycles(), backups);
+      if (repaired.length) this.saveCycles(cycles);
+      writeJsonDurable(this.cyclesRepairPath, { doneAt: new Date().toISOString(), repaired: repaired.length });
+      return { repaired };
+    } catch (error) {
+      // 修复失败不影响启动；标记未写入，下次启动会再试
+      return { repaired: [], error: String(error?.message || error) };
+    }
+  }
 
   // 删除账号后清理它的周期档案
   pruneCyclesAccounts(accountIds) {

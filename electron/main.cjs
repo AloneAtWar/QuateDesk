@@ -2768,6 +2768,10 @@ if (!app.requestSingleInstanceLock()) {
       onArchivesChanged: () => mainWindow?.webContents.send('archives:changed'),
     });
     store.purgeAllCycles();
+    // 一次性修复被旧版 mergeCycles 改写的周期档案（详见 storage.repairCyclesOnce）
+    const cycleRepair = store.repairCyclesOnce();
+    if (cycleRepair.repaired?.length) startupLog('ready: 周期档案修复', `${cycleRepair.repaired.length} 条失真记录已从备份恢复`);
+    else if (cycleRepair.error) startupLog('ready: 周期档案修复失败', cycleRepair.error);
     await scrubLegacyProviderUsagePartitions();
     applyProxySetting();
     refreshLiveIdentities();
