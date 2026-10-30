@@ -18,7 +18,8 @@ const HEATMAP_ZOOM_MAX_CELL = 40;
 
 // 统一的格子测量：宽屏整年铺满（1:2.5 扁长格子）；竖屏按「高度留白后的余量」取格子
 // （比例约 1:1.45 接近方形），铺不下一年就横向滚动。返回 base(未缩放列宽，缩放换算基准)
-// 与应用缩放后的 w/h/gap
+// 与应用缩放后的 w/h/gap。列数很少的板（周期过滤只有 7~31 天）按宽度反解的格子会远超
+// 高度容得下的尺寸，且板宽远窄于容器——此时最小缩放退回固定小档，实际大小交给高度富余
 export function computeHeatmapCells(el, weekCount, zoom = 1) {
   // 可用宽度 = 容器 clientWidth − 自身左右 padding(4×2) − 星期列(实际宽度) − 列间距(7)
   const weekdayCol = el.querySelector('.provider-heatmap-weekdays')?.offsetWidth ?? 10;
@@ -27,9 +28,15 @@ export function computeHeatmapCells(el, weekCount, zoom = 1) {
   // 别忘了列间距：一年板宽 = 列数×格宽 + (列数-1)×间距，按该尺寸档的间距反解格宽
   const rough = Math.floor(avail / weekCount);
   const fitGap = rough >= 18 ? 3 : rough >= 10 ? 2 : 0;
-  const minCell = Math.max(HEATMAP_ZOOM_MIN_CELL, Math.min(HEATMAP_ZOOM_MAX_CELL, Math.floor((avail - (weekCount - 1) * fitGap) / weekCount)));
+  const fitWidth = Math.floor((avail - (weekCount - 1) * fitGap) / weekCount);
   const gap0 = rough >= 18 ? 3 : rough >= 10 ? 2 : 0;
-  let base = Math.min(HEATMAP_ZOOM_MAX_CELL, Math.max(5, Math.floor((avail - (weekCount - 1) * gap0) / weekCount)));
+  let base = Math.min(HEATMAP_ZOOM_MAX_CELL, Math.max(5, fitWidth));
+  // 用基准格宽也铺不满容器宽 = 短板（周期过滤等短区间）：「铺满宽度」不再有意义，
+  // 缩放下限退回固定小档，避免它顶过高度上限把 7 行格子挤出可视区
+  const shortBoard = weekCount * base + (weekCount - 1) * gap0 < avail;
+  const minCell = shortBoard
+    ? HEATMAP_ZOOM_MIN_CELL
+    : Math.max(HEATMAP_ZOOM_MIN_CELL, Math.min(HEATMAP_ZOOM_MAX_CELL, fitWidth));
   const narrow = el.clientWidth < HEATMAP_NARROW_PX;
   const ratio = narrow ? 1.45 : 2.5;
   // 高度富余时按长宽比放大格子（桌面端拉高窗口与竖屏手机同等待遇）：常规高度下与
@@ -39,10 +46,11 @@ export function computeHeatmapCells(el, weekCount, zoom = 1) {
   base = Math.max(base, Math.min(HEATMAP_ZOOM_MAX_CELL, Math.max(HEATMAP_MIN_CELL, fromHeight)));
   // 放大上限：一整列(7 行格子 + 间距 + 轴标签)恰好装满容器高度的格子宽。滚动区
   // 纵向不滚动(overflow-y hidden)，超过它一列 7 天会被裁掉。行高另有 96px 绝对
-  // 封顶(下方 h 公式)，上限同步封顶避免格子被拉成横条；下限兜底不小于最小档
+  // 封顶(下方 h 公式)，上限同步封顶避免格子被拉成横条；下限只用绝对小档——
+  // 宽度铺满值可能远高于高度上限（短板），拿它兜底会重新把行挤出可视区
   const zoomGap = base * zoom >= 18 ? 3 : base * zoom >= 10 ? 2 : 0;
   const rowCap = Math.floor((el.clientHeight - 10 - 2 - 10 - 3 - 6 * zoomGap) / 7);
-  const maxCell = Math.max(minCell, Math.min(96, rowCap));
+  const maxCell = Math.max(HEATMAP_ZOOM_MIN_CELL, Math.min(96, rowCap));
   const w = Math.round(Math.min(maxCell, Math.max(minCell, base * zoom)));
   const gap = w >= 18 ? 3 : w >= 10 ? 2 : 0;
   // 行高吃满外框剩余高度；双重封顶：绝对 96px + 长宽比，防止格子被拉成竖条
