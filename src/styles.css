@@ -761,6 +761,8 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .history-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px 10px; border-bottom: 1px solid var(--line); }
 .history-head .account-identity { flex: 1; min-width: 0; }
 .range-control { display: flex; flex: 0 0 auto; gap: 0; }
+/* 周期过滤(浪费 → 查看期间趋势)下的固定周期标签,占位原范围按钮 */
+.range-control-fixed { display: inline-flex; align-items: center; padding: 4px 8px; border: 1px solid var(--line-inner); border-radius: 7px; background: var(--green-bg); color: var(--green-deep); font-size: 10px; font-weight: 600; white-space: nowrap; cursor: default; }
 .range-control button { border: 0; padding: 1px 5px; border-radius: 4px; color: var(--ink-soft); background: transparent; font-size: 9px; }
 .range-control button.active { color: var(--ink); background: var(--surface-3); }
 .range-control button:hover:not(.active):not(:disabled):not([aria-disabled="true"]) { color: var(--ink-soft); }

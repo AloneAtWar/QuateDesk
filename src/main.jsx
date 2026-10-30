@@ -11,6 +11,7 @@ import { adapterDefinitions } from './adapters';
 import { newApiTemplateScript } from './newapi-template';
 import { computeUsageStreaks, formatProviderUsageCost, formatProviderUsageSummaryTokens } from './provider-usage-format';
 import LocalCliUsageView from './local-cli-usage/LocalCliUsageView';
+import { localDateStringOf } from './local-cli-usage/local-cli-usage-format';
 import UsageArchivesSettings from './local-cli-usage/UsageArchivesSettings';
 import WebDavSyncSettings from './local-cli-usage/WebDavSyncSettings';
 import { computeHeatmapCells, useHeatmapPan } from './heatmap-pan';
@@ -698,7 +699,7 @@ const matchRangeKey = (next, fullStart, fullEnd) => {
   return null;
 };
 
-function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange, onToast }) {
+function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange, fixedRangeLabel = null, onToast }) {
   const [hover, setHover] = useState(null);
   // 断线区间（无数据时段）的悬停提示：{ from, to } 为区间前后两个数据点的时间
   const [hoverGap, setHoverGap] = useState(null);
@@ -1055,10 +1056,13 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
         })}
       </> : hoverGap ? <span className="chart-detail-hint">{formatChartStamp(hoverGap.from)} – {formatChartStamp(hoverGap.to)} · 该时段暂无数据</span> : <span className="chart-detail-hint">悬停、点击或用方向键选择数据点，查看数值与重置时间</span>}</div>
       <div className="range-control" role="group" aria-label="趋势时间范围" onPointerDown={(event) => event.stopPropagation()}>
-        {RANGE_PRESETS.map((preset) => {
-          const available = rangeAvailable(preset.ms, fullStart, fullEnd);
-          return <button type="button" key={preset.id} className={rangeKey === preset.id ? 'active' : ''} aria-disabled={!available || undefined} title={available ? preset.label : `历史不足 ${preset.label}`} onClick={() => pickRange(preset)}>{preset.label}</button>;
-        })}
+        {/* 周期过滤(浪费 → 查看期间趋势)下点集已裁剪,预设范围按钮换成周期标签 */}
+        {fixedRangeLabel
+          ? <span className="range-control-fixed" title="已按所选周期过滤趋势记录">{fixedRangeLabel}</span>
+          : RANGE_PRESETS.map((preset) => {
+            const available = rangeAvailable(preset.ms, fullStart, fullEnd);
+            return <button type="button" key={preset.id} className={rangeKey === preset.id ? 'active' : ''} aria-disabled={!available || undefined} title={available ? preset.label : `历史不足 ${preset.label}`} onClick={() => pickRange(preset)}>{preset.label}</button>;
+          })}
       </div>
     </div>
     <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} tabIndex={0} role="img" aria-label="额度趋势折线图，方向键选择数据点" onKeyDown={handleChartKey} onPointerDown={startPan} onPointerMove={movePan} onPointerUp={endPan} onPointerCancel={cancelPan} onMouseLeave={() => { setHover(null); setHoverGap(null); downRef.current = null; endPan(); }}>
@@ -1110,8 +1114,8 @@ const formatWasteGap = (gapMs) => {
 };
 
 // 浪费统计视图：每根柱子是一个周期区间（最新在右），柱高 = 周期末剩余百分比（即浪费率）
-// 右键(触屏长按)周期柱可「查看期间本机消耗」：跳到本机页签并只统计该周期
-function WasteView({ account, wasteWindows, onViewLocalUsage }) {
+// 右键(触屏长按)周期柱可按该周期查看本机消耗 / 官方用量 / 趋势
+function WasteView({ account, wasteWindows, onViewLocalUsage, onViewProviderUsage, onViewTrend }) {
   const [cycles, setCycles] = useState(null);
   const [curWindow, setCurWindow] = useState(wasteWindows[0]);
   const [hover, setHover] = useState(null);
@@ -1245,9 +1249,9 @@ function WasteView({ account, wasteWindows, onViewLocalUsage }) {
     document.addEventListener('keydown', onKey);
     return () => { window.removeEventListener('resize', close); document.removeEventListener('keydown', onKey); };
   }, [contextMenu]);
-  // 菜单项:把该周期换成本机用量的统计期间;进行中的周期终点收在当前时刻
+  // 菜单项:把该周期换成本机用量 / 官方用量 / 趋势的统计期间;进行中的周期终点收在当前时刻
   const openContextMenu = (event, cycle) => {
-    if (!onViewLocalUsage) return;
+    if (!onViewTrend && !onViewProviderUsage && !onViewLocalUsage) return;
     event.preventDefault();
     setContextMenu({ x: event.clientX, y: event.clientY, cycle });
     setSelectedKey(null);
@@ -1259,11 +1263,17 @@ function WasteView({ account, wasteWindows, onViewLocalUsage }) {
     if (!Number.isFinite(fromMs) || fromMs >= toMs) return null;
     return { fromMs, toMs, label: `${formatWasteDay(displayFrom(cycle))}→${formatWasteDay(cycle.end)}${cycle.now ? ' 进行中' : ''}` };
   };
-  const pickContextPeriod = () => {
-    const period = contextMenu && contextPeriod(contextMenu.cycle);
-    setContextMenu(null);
-    if (period) onViewLocalUsage?.(period);
-  };
+  // 顺序与文案保持稳定;各项入口由 HistoryView 按账号能力决定是否提供
+  const contextItems = (() => {
+    if (!contextMenu) return [];
+    const period = contextPeriod(contextMenu.cycle);
+    if (!period) return [];
+    return [
+      onViewLocalUsage && { key: 'local', label: '查看期间本机消耗', run: () => onViewLocalUsage(period) },
+      onViewProviderUsage && { key: 'provider', label: '查看期间官方用量', run: () => onViewProviderUsage(period) },
+      onViewTrend && { key: 'trend', label: '查看期间趋势', run: () => onViewTrend(period) },
+    ].filter(Boolean);
+  })();
   const softColor = `color-mix(in srgb, ${CHART_COLORS[curWindow] || 'var(--violet)'} 30%, transparent)`;
   // 柱子少时每根都标完整区间；多了只标结束日期并按需抽稀，避免文字挤在一起
   const compactLabels = shown.length <= 6;
@@ -1306,9 +1316,9 @@ function WasteView({ account, wasteWindows, onViewLocalUsage }) {
         <span className="legend-right">{windowCycles.length - good.length} 个周期不计入平均</span>
       </>}</div>
     {/* 周期菜单挂在 body:浪费柱状图容器有横向滚动,层内定位会被裁剪 */}
-    {contextMenu && createPortal(<div className="waste-context-backdrop" onPointerDown={() => setContextMenu(null)} onContextMenu={(event) => { event.preventDefault(); setContextMenu(null); }}>
-      <div className="waste-context-menu" role="menu" aria-label="周期操作" style={{ left: Math.max(8, Math.min(contextMenu.x, window.innerWidth - 176)), top: Math.max(8, Math.min(contextMenu.y, window.innerHeight - 64)) }} onPointerDown={(event) => event.stopPropagation()}>
-        <button type="button" role="menuitem" onClick={pickContextPeriod}>查看期间本机消耗</button>
+    {contextItems.length > 0 && createPortal(<div className="waste-context-backdrop" onPointerDown={() => setContextMenu(null)} onContextMenu={(event) => { event.preventDefault(); setContextMenu(null); }}>
+      <div className="waste-context-menu" role="menu" aria-label="周期操作" style={{ left: Math.max(8, Math.min(contextMenu.x, window.innerWidth - 176)), top: Math.max(8, Math.min(contextMenu.y, window.innerHeight - 40 - contextItems.length * 30)) }} onPointerDown={(event) => event.stopPropagation()}>
+        {contextItems.map((item) => <button type="button" role="menuitem" key={item.key} onClick={() => { setContextMenu(null); item.run(); }}>{item.label}</button>)}
       </div>
     </div>, document.body)}
   </div>;
@@ -1316,7 +1326,7 @@ function WasteView({ account, wasteWindows, onViewLocalUsage }) {
 
 // 厂商控制台的逐日用量。默认按金额着色；只有服务端同时返回 Token 数据时才
 // 开放切换。每一格都来自 usage:get 的 days，和本地轮询历史完全隔离。
-function ProviderUsageView({ account, provider, onState, readOnly = false }) {
+function ProviderUsageView({ account, provider, onState, readOnly = false, periodFilter = null }) {
   const bridge = window.quotaDesk;
   const reportedStatus = providerUsageStatus(account);
   const supported = providerUsageSupported(account, provider, { readOnly });
@@ -1381,13 +1391,31 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
   const sortedDays = useMemo(() => [...(data?.days || [])]
     .filter((day) => /^\d{4}-\d{2}-\d{2}$/.test(String(day?.date || '')))
     .sort((left, right) => left.date.localeCompare(right.date)), [data]);
+  // 周期过滤(浪费 → 查看期间官方用量):逐日数据按周期覆盖的本地日期(含两端)裁剪,
+  // 摘要卡改为从这些天本地汇总,不再展示服务端的全区间口径
+  const period = periodFilter && Number.isFinite(periodFilter.fromMs) && Number.isFinite(periodFilter.toMs) && periodFilter.fromMs < periodFilter.toMs
+    ? periodFilter : null;
+  const periodDays = useMemo(() => {
+    if (!period) return null;
+    const start = localDateStringOf(period.fromMs);
+    const end = localDateStringOf(Math.min(period.toMs, Date.now()));
+    if (!start || !end || start > end) return [];
+    return sortedDays.filter((day) => day.date >= start && day.date <= end);
+  }, [sortedDays, period]);
+  const viewDays = periodDays || sortedDays;
+  // 选中日期收敛到周期内:周期外的选中日在过滤视图里没有格子可对应
+  useEffect(() => {
+    if (!periodDays || !periodDays.length) return;
+    if (periodDays.some((day) => day.date === selectedDate)) return;
+    setSelectedDate(periodDays[periodDays.length - 1].date);
+  }, [periodDays]); // eslint-disable-line react-hooks/exhaustive-deps
   // 热力图列数（周数）：首行按第一天的星期补空位，与渲染时的铺格规则一致
   const weekCount = useMemo(() => {
-    if (!sortedDays.length) return 1;
-    const first = String(sortedDays[0].date).split('-').map(Number);
+    if (!viewDays.length) return 1;
+    const first = String(viewDays[0].date).split('-').map(Number);
     const leading = (new Date(Date.UTC(first[0], first[1] - 1, first[2])).getUTCDay() + 6) % 7;
-    return Math.ceil((leading + sortedDays.length) / 7);
-  }, [sortedDays]);
+    return Math.ceil((leading + viewDays.length) / 7);
+  }, [viewDays]);
   // 近 1 年热力图整幅铺满：列宽由容器宽度决定（无缝排列），行高吃满剩余纵向空间
   // （方格优先，富余时最多加高到列宽的 1.4 倍），整块热力图约占视图 40%，与参考图同比例
   const heatmapWrapRef = useRef(null);
@@ -1452,37 +1480,45 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
     <button type="button" className="outline-button" disabled={loading} onClick={refreshUsage}><RefreshCw size={13} /> 重试</button>
   </div>;
   if (!data) return null;
+  if (period && !viewDays.length) return <div className="provider-usage-state">
+    <span className="provider-usage-state-icon"><History size={18} /></span>
+    <div><b>该期间没有官方用量记录</b><small>{period.label} 这段时间没有厂商逐日数据。</small></div>
+  </div>;
 
   const hasCost = providerUsageHasMetric(data, 'cost');
   const hasTokens = providerUsageHasMetric(data, 'tokens');
   // 参考图没有指标切换：热力图优先按 Token 着色（DeepSeek 等同时有金额数据的
   // 厂商也与其他厂商页统一口径），账号没有 Token 数据时才退回金额
   const metric = hasTokens ? 'tokens' : 'cost';
+  // 周期口径:花费 / Token / 峰值 / 连续天数都从周期内的逐日数据本地汇总
+  const periodDaySum = (field) => periodDays.reduce((sum, day) => sum + (providerUsageHasNumber(day?.[field]) ? Number(day[field]) : 0), 0);
   // 花费卡片：DeepSeek 摘要的 totalCost 是账号累计花费；拿不到时退回区间累计
   const accountTotalCost = providerUsageHasNumber(data.summary?.totalCost) ? data.summary.totalCost : null;
   const rangeCostExact = providerUsageHasNumber(data.summary?.rangeCost) ? data.summary.rangeCost : null;
   const rangeCostKnown = providerUsageHasNumber(data.summary?.knownRangeCost) ? data.summary.knownRangeCost : null;
-  const costTotal = accountTotalCost != null
-    ? accountTotalCost
-    : (data.coverage?.cost?.complete && rangeCostExact != null ? rangeCostExact : rangeCostKnown);
-  const costLabel = accountTotalCost != null ? '累计花费' : '区间花费';
+  const costTotal = period ? periodDaySum('cost')
+    : accountTotalCost != null
+      ? accountTotalCost
+      : (data.coverage?.cost?.complete && rangeCostExact != null ? rangeCostExact : rangeCostKnown);
+  const costLabel = period ? '期间花费' : accountTotalCost != null ? '累计花费' : '区间花费';
   // Token 口径：部分厂商摘要直接提供账号累计（totalTokens）；否则退回区间口径，
   // 覆盖不完整时如实标注
   const accountTotalTokens = providerUsageHasNumber(data.summary?.totalTokens) ? data.summary.totalTokens : null;
   const tokensExact = providerUsageHasNumber(data.summary?.rangeTokens) ? data.summary.rangeTokens : null;
   const tokensKnown = providerUsageHasNumber(data.summary?.knownRangeTokens) ? data.summary.knownRangeTokens : null;
-  const tokensTotal = accountTotalTokens != null
-    ? accountTotalTokens
-    : (data.coverage?.tokens?.complete && tokensExact != null ? tokensExact : tokensKnown);
-  const tokensLabel = accountTotalTokens != null || (data.coverage?.tokens?.complete && tokensExact != null) ? '累计消耗 Token' : '已覆盖区间 Token';
-  const values = sortedDays.map((day) => day[metric]).filter(providerUsageHasNumber).map(Number);
+  const tokensTotal = period ? periodDaySum('tokens')
+    : accountTotalTokens != null
+      ? accountTotalTokens
+      : (data.coverage?.tokens?.complete && tokensExact != null ? tokensExact : tokensKnown);
+  const tokensLabel = period ? '期间消耗 Token' : accountTotalTokens != null || (data.coverage?.tokens?.complete && tokensExact != null) ? '累计消耗 Token' : '已覆盖区间 Token';
+  const values = viewDays.map((day) => day[metric]).filter(providerUsageHasNumber).map(Number);
   const maxValue = Math.max(0, ...values);
-  const firstDate = sortedDays[0]?.date;
+  const firstDate = viewDays[0]?.date;
   const firstParts = String(firstDate || '').split('-').map(Number);
   const leading = firstParts.length === 3
     ? (new Date(Date.UTC(firstParts[0], firstParts[1] - 1, firstParts[2])).getUTCDay() + 6) % 7
     : 0;
-  const heatmapCells = [...Array(leading).fill(null), ...sortedDays];
+  const heatmapCells = [...Array(leading).fill(null), ...viewDays];
   const monthMarkers = [];
   let previousMonth = '';
   heatmapCells.forEach((day, index) => {
@@ -1492,8 +1528,8 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
     previousMonth = month;
     monthMarkers.push({ key: month, label: `${Number(month.slice(5))}月`, column: Math.floor(index / 7) + 1 });
   });
-  const selectedDay = sortedDays.find((day) => day.date === selectedDate) || null;
-  const selectedIndex = selectedDay ? sortedDays.indexOf(selectedDay) : -1;
+  const selectedDay = viewDays.find((day) => day.date === selectedDate) || null;
+  const selectedIndex = selectedDay ? viewDays.indexOf(selectedDay) : -1;
   // 详情标签：默认（今天）叫「当日」，切到其他日子显示具体日期 + 空格（当日花费 / 2026-05-14 花费）
   const today = providerUsageToday(data.coverage?.timezoneOffsetSec);
   const dayLabel = selectedDay && selectedDay.date === today ? '当日' : `${selectedDay?.date || ''} `;
@@ -1527,7 +1563,7 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
   ].filter(Boolean).join('，');
   // 方向键浏览热力图：上下 = 前后一天，左右 = 前后一周（列 = 周、行 = 星期一到日）
   const stepTo = (index) => {
-    const next = sortedDays[Math.max(0, Math.min(sortedDays.length - 1, index))];
+    const next = viewDays[Math.max(0, Math.min(viewDays.length - 1, index))];
     if (!next) return;
     setSelectedDate(next.date);
     // 格子元素常驻（选中只改样式不改结构），聚焦/滚动直接执行即可；
@@ -1538,10 +1574,10 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
     cell.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   };
   const handleHeatmapKey = (event) => {
-    if (!sortedDays.length) return;
-    const base = selectedIndex >= 0 ? selectedIndex : sortedDays.length - 1;
+    if (!viewDays.length) return;
+    const base = selectedIndex >= 0 ? selectedIndex : viewDays.length - 1;
     if (event.key === 'Home') { event.preventDefault(); stepTo(0); return; }
-    if (event.key === 'End') { event.preventDefault(); stepTo(sortedDays.length - 1); return; }
+    if (event.key === 'End') { event.preventDefault(); stepTo(viewDays.length - 1); return; }
     const delta = { ArrowUp: -1, ArrowDown: 1, ArrowLeft: -7, ArrowRight: 7 }[event.key];
     if (delta === undefined) return;
     event.preventDefault();
@@ -1550,18 +1586,23 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
 
   // 统计卡片按厂商实际返回的指标组装：花费/Token/套餐/连续使用按需出现，活跃日固定收尾
   const planName = typeof data.summary?.planName === 'string' && data.summary.planName.trim() ? data.summary.planName.trim() : null;
-  // 连续天数：优先用厂商接口的账号级口径（如 Z.ai）；接口不提供时按逐日数据本地计算
-  const computedStreaks = computeUsageStreaks(sortedDays);
-  const streakDays = providerUsageHasNumber(data.summary?.currentStreakDays) ? Number(data.summary.currentStreakDays) : computedStreaks.current;
-  const longestStreak = providerUsageHasNumber(data.summary?.longestStreakDays) ? Number(data.summary.longestStreakDays) : computedStreaks.longest;
-  const peakTokens = providerUsageHasNumber(data.summary?.peakDailyTokens)
-    ? Number(data.summary.peakDailyTokens)
-    : (hasTokens ? (sortedDays.reduce((max, day) => Math.max(max, Number(day?.tokens) || 0), 0) || null) : null);
+  // 连续天数：优先用厂商接口的账号级口径（如 Z.ai）；接口不提供时按逐日数据本地计算;
+  // 周期过滤时一律按周期内的天本地计算
+  const computedStreaks = computeUsageStreaks(viewDays);
+  const streakDays = period ? computedStreaks.current : providerUsageHasNumber(data.summary?.currentStreakDays) ? Number(data.summary.currentStreakDays) : computedStreaks.current;
+  const longestStreak = period ? computedStreaks.longest : providerUsageHasNumber(data.summary?.longestStreakDays) ? Number(data.summary.longestStreakDays) : computedStreaks.longest;
+  const peakTokens = period
+    ? (hasTokens ? (viewDays.reduce((max, day) => Math.max(max, Number(day?.tokens) || 0), 0) || null) : null)
+    : providerUsageHasNumber(data.summary?.peakDailyTokens)
+      ? Number(data.summary.peakDailyTokens)
+      : (hasTokens ? (viewDays.reduce((max, day) => Math.max(max, Number(day?.tokens) || 0), 0) || null) : null);
   // 峰值花费同样本地兜底：金额指标可用但摘要没给峰值时，从逐日花费取最大，
   // 花费卡在的地方峰值卡不缺位
-  const peakCost = providerUsageHasNumber(data.summary?.peakDailyCost)
-    ? Number(data.summary.peakDailyCost)
-    : (hasCost ? (sortedDays.reduce((max, day) => Math.max(max, Number(day?.cost) || 0), 0) || null) : null);
+  const peakCost = period
+    ? (hasCost ? (viewDays.reduce((max, day) => Math.max(max, Number(day?.cost) || 0), 0) || null) : null)
+    : providerUsageHasNumber(data.summary?.peakDailyCost)
+      ? Number(data.summary.peakDailyCost)
+      : (hasCost ? (viewDays.reduce((max, day) => Math.max(max, Number(day?.cost) || 0), 0) || null) : null);
   const peakIsCost = metric === 'cost' && peakCost !== null;
   const peakReady = peakIsCost || peakTokens !== null;
   const peakDate = typeof data.summary?.peakDailyTokensDate === 'string' && data.summary.peakDailyTokensDate ? data.summary.peakDailyTokensDate : null;
@@ -1586,7 +1627,7 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
         <strong>{providerUsageHasNumber(tokensTotal) ? formatProviderUsageSummaryTokens(tokensTotal) : '—'}</strong>
       </div>
     </div>,
-    peakReady && <div key="peak" className="provider-stat peak" title={peakDate && !peakIsCost ? `峰值日期 ${peakDate}` : '区间内单日最高消耗'}>
+    peakReady && <div key="peak" className="provider-stat peak" title={period ? '期间内单日最高消耗' : (peakDate && !peakIsCost ? `峰值日期 ${peakDate}` : '区间内单日最高消耗')}>
       <span className="stat-icon"><TrendingUp size={13} /></span>
       <div className="stat-copy">
         <span>{peakIsCost ? '峰值花费' : '峰值 Token'}</span>
@@ -1612,7 +1653,7 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
   return <div className="provider-usage-view">
     <div className="provider-usage-summary">{summaryCards}</div>
     <div className="provider-heatmap-head">
-      <span className="provider-heatmap-title">近 1 年使用热力图</span>
+      <span className="provider-heatmap-title">{period ? '周期内使用热力图' : '近 1 年使用热力图'}</span>
       <div className="provider-heatmap-legend" aria-hidden="true">
         <span>较少</span>{[0, 1, 2, 3, 4].map((level) => <i key={level} className={`provider-heatmap-cell level-${level}`} />)}<span>较多</span>
       </div>
@@ -1620,7 +1661,7 @@ function ProviderUsageView({ account, provider, onState, readOnly = false }) {
     <div className="provider-heatmap-frame">
       <div
         className="provider-heatmap-scroll"
-        role="grid" tabIndex={0} aria-label="近 1 年每日用量热力图，方向键选择日期"
+        role="grid" tabIndex={0} aria-label={`${period ? '周期内' : '近 1 年'}每日用量热力图，方向键选择日期`}
         ref={attachHeatmap}
         onKeyDown={handleHeatmapKey}
         {...heatmapPanHandlers}
@@ -1702,8 +1743,16 @@ function HistoryView({ account, provider, onBack, onProviderUsageState, settings
   const localAnalysis = useMemo(() => resolveProviderLocalAnalysis(provider), [provider]);
   // 远程查看(只读)也展示本机页签:数据本身只读,远程页会传自己的本机用量会话设置
   const showLocalUsageEntry = localAnalysis.enabled;
-  // 从浪费视图右键周期进入「查看期间本机消耗」时,本机页签只统计该周期
+  // 从浪费视图右键周期进入时,趋势 / 官方用量 / 本机页签都只统计该周期,切换页签保留
   const [localPeriod, setLocalPeriod] = useState(null);
+  // 趋势按时间戳过滤;区间含头不含尾,与浪费周期口径一致
+  const trendPoints = useMemo(() => {
+    if (!localPeriod || !points) return points;
+    return points.filter((point) => {
+      const at = Date.parse(point.at);
+      return Number.isFinite(at) && at >= localPeriod.fromMs && at < localPeriod.toMs;
+    });
+  }, [points, localPeriod]);
   const showWaste = view === 'waste' && wasteWindows.length > 0;
   const showProviderUsage = view === 'provider-usage' && showProviderUsageEntry;
   const showLocalUsage = view === 'local-usage' && showLocalUsageEntry;
@@ -1777,22 +1826,22 @@ function HistoryView({ account, provider, onBack, onProviderUsageState, settings
         {onBack && <button type="button" className="back-button" onClick={onBack} title="返回看板" aria-label="返回看板"><ChevronLeft size={15} /></button>}
         <AccountIdentity account={account} provider={provider} />
         {account.disabled && <span className="history-disabled-tag"><CircleStop size={12} /> 已停用 · {formatDisabledDate(account.disabledAt)}</span>}
-        {localPeriod && <span className="history-period-chip" title={`本机页签只统计该周期的用量：${localPeriod.label}`}>
+        {localPeriod && <span className="history-period-chip" title={`趋势 / 用量 / 本机页签只统计该周期：${localPeriod.label}`}>
           <CalendarDays size={11} />
           <b>{localPeriod.label}</b>
-          <button type="button" onClick={() => setLocalPeriod(null)} title="关闭周期过滤，查看全部本机用量" aria-label="关闭周期过滤"><X size={10} /></button>
+          <button type="button" onClick={() => setLocalPeriod(null)} title="关闭周期过滤，查看全部数据" aria-label="关闭周期过滤"><X size={10} /></button>
         </span>}
         <HistoryViewSwitch tabs={historyTabs} view={view} onChange={setView} domId={historyDomId} panelId={historyPanelId} onToast={onToast} />
       </div>
-      <div className={`history-tabpanel${showLocalUsage ? ' local-usage-tabpanel' : ''}`} role="tabpanel" id={historyPanelId} aria-labelledby={`${historyDomId}-tab-${view}`}>{showProviderUsage ? <ProviderUsageView account={account} provider={provider} onState={onProviderUsageState} readOnly={readOnly} /> : showLocalUsage ? <LocalCliUsageView settings={settings} setSettings={setSettings} modelRules={localAnalysis.modelRules} scopeName={provider?.name || '当前厂商'} periodFilter={localPeriod} embedded /> : showWaste ? <WasteView account={account} wasteWindows={wasteWindows} onViewLocalUsage={showLocalUsageEntry ? (period) => { setLocalPeriod(period); setView('local-usage'); } : undefined} /> : <div className="trend-view">
+      <div className={`history-tabpanel${showLocalUsage ? ' local-usage-tabpanel' : ''}`} role="tabpanel" id={historyPanelId} aria-labelledby={`${historyDomId}-tab-${view}`}>{showProviderUsage ? <ProviderUsageView account={account} provider={provider} onState={onProviderUsageState} readOnly={readOnly} periodFilter={localPeriod} /> : showLocalUsage ? <LocalCliUsageView settings={settings} setSettings={setSettings} modelRules={localAnalysis.modelRules} scopeName={provider?.name || '当前厂商'} periodFilter={localPeriod} embedded /> : showWaste ? <WasteView account={account} wasteWindows={wasteWindows} onViewLocalUsage={showLocalUsageEntry ? (period) => { setLocalPeriod(period); setView('local-usage'); } : undefined} onViewProviderUsage={showProviderUsageEntry ? (period) => { setLocalPeriod(period); setView('provider-usage'); } : undefined} onViewTrend={(period) => { setLocalPeriod(period); setView('trend'); }} /> : <div className="trend-view">
         {points === null ? <div className="settings-empty chart-empty">正在读取历史记录…</div>
-          : points.length === 0 ? <div className="settings-empty chart-empty">暂无历史数据，每次成功刷新额度后都会记录一条</div>
-            : <UsageChart points={points} hiddenKeys={hiddenKeys} rangeKey={rangeKey} onRangeKeyChange={setRangeKey} onToast={onToast} />}
+          : trendPoints.length === 0 ? <div className="settings-empty chart-empty">{localPeriod ? `该期间（${localPeriod.label}）没有趋势记录` : '暂无历史数据，每次成功刷新额度后都会记录一条'}</div>
+            : <UsageChart points={trendPoints} hiddenKeys={hiddenKeys} rangeKey={rangeKey} onRangeKeyChange={setRangeKey} fixedRangeLabel={localPeriod?.label || null} onToast={onToast} />}
         {legendKeys.length > 0 && <div className="chart-legend">{legendKeys.map((key, index) => {
           const sample = latestSamples[key];
           const hidden = hiddenKeys.includes(key);
           return <button type="button" key={key} className={hidden ? 'off' : ''} title={hidden ? '点击显示该折线' : '点击隐藏该折线'} onClick={() => toggleKey(key)}><i style={{ background: chartColor(key, index) }} />{windowCatalog[key]?.label || key}{staleWindowKeys.includes(key) && <small>已停更</small>}{sample && <em>{formatChartValue(sample, chartValue(sample))}</em>}</button>;
-        })}<span className="legend-right">{points.length} 条记录</span></div>}
+        })}<span className="legend-right">{trendPoints.length} 条记录</span></div>}
       </div>}</div>
     </section>
   </div>;
