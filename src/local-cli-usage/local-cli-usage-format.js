@@ -37,6 +37,13 @@ export const formatLocalDateTime = (isoString) => {
   return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
 };
 
+// 毫秒时间戳 → 本地日期串 YYYY-MM-DD(把周期起止换成本机用量的日期区间查询参数)
+export const localDateStringOf = (ms) => {
+  const date = new Date(ms);
+  if (Number.isNaN(date.getTime())) return null;
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+};
+
 export const localSourceStatusLabel = (status) => ({
   ready: '正常',
   missing: '未检测到',

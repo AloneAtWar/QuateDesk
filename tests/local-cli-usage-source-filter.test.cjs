@@ -65,30 +65,63 @@ test('sourceId 过滤:本机 / 导入来源各自完整,合并视图只含启用
   assert.equal(modelsTotal(home, { scope, sourceId: '0b74a3f0-0000-4000-8000-000000000000' }), 0);
 });
 
-test('since 范围:自周期起点精确截断,不是整天对齐', (t) => {
+test('between 范围:按周期起止精确截断,含头不含尾', (t) => {
   const store = fixture(t, 'qd-src-since-');
-  const sinceMs = now - 5 * DAY + 3 * 3_600_000; // 周期起点在当天 03:00 这类非零点时刻
+  const fromMs = now - 5 * DAY + 3 * 3_600_000; // 周期起点在当天 03:00 这类非零点时刻
+  const toMs = now - DAY; // 周期重置时刻(区间终点,不含)
   store.upsertEvents([
-    event('before-day', { inputTokens: 10, occurredAtMs: sinceMs - 2 * 3_600_000, model: 'glm-4.7' }), // 同一天但早于起点
-    event('at-start', { inputTokens: 100, occurredAtMs: sinceMs }),
-    event('after', { inputTokens: 1000, occurredAtMs: sinceMs + DAY }),
+    event('before-day', { inputTokens: 10, occurredAtMs: fromMs - 2 * 3_600_000, model: 'glm-4.7' }), // 同一天但早于起点
+    event('at-start', { inputTokens: 100, occurredAtMs: fromMs }),
+    event('after', { inputTokens: 1000, occurredAtMs: fromMs + DAY }),
+    event('at-end', { inputTokens: 7, occurredAtMs: toMs, model: 'glm-4.7' }), // 正好落在重置时刻:属于下一周期
+    event('beyond-end', { inputTokens: 5, occurredAtMs: toMs + 3_600_000, model: 'glm-4.7' }),
   ]);
-  const report = store.models({ agent: 'all', mergeSameModels: true, timezone: 'UTC', scope: { kind: 'since', sinceMs } });
-  assert.equal(modelsTotal(store, { scope: { kind: 'since', sinceMs } }), tokens(100) + tokens(1000));
+  const report = store.models({ agent: 'all', mergeSameModels: true, timezone: 'UTC', scope: { kind: 'between', fromMs, toMs } });
+  assert.equal(modelsTotal(store, { scope: { kind: 'between', fromMs, toMs } }), tokens(100) + tokens(1000));
   assert.ok(!report.models.some((row) => row.modelKey === 'glm-4.7'));
-  assert.equal(report.range.start, localDateString('UTC', sinceMs));
-  assert.equal(report.range.end, localDateString('UTC'));
-  // 与固定 7 天范围互补:7 天会把起点之前的事件也圈进来
-  assert.equal(modelsTotal(store, { scope: { kind: 'range', days: 7 } }), tokens(10) + tokens(100) + tokens(1000));
+  assert.equal(report.range.start, localDateString('UTC', fromMs));
+  assert.equal(report.range.end, localDateString('UTC', toMs - 1));
+  // 与固定 7 天范围互补:固定范围按整天对齐,会把起点之前与终点之后的事件也圈进来
+  assert.equal(modelsTotal(store, { scope: { kind: 'range', days: 7 } }), tokens(10) + tokens(100) + tokens(1000) + tokens(7) + tokens(5));
 });
 
-test('facade 校验:since 起点与档案来源 ID 的合法输入', () => {
+test('summary 显式日期区间:天数桶与累计口径都随区间收敛', (t) => {
+  const store = fixture(t, 'qd-src-range-');
+  const today = localDateString('UTC');
+  const dateOf = (ms) => localDateString('UTC', ms);
+  const inStart = dateOf(now - 3 * DAY);
+  const inEnd = dateOf(now - 2 * DAY);
+  store.upsertEvents([
+    event('outside-before', { inputTokens: 10, occurredAtMs: now - 5 * DAY, model: 'glm-4.7' }),
+    event('inside-a', { inputTokens: 100, occurredAtMs: now - 3 * DAY }),
+    event('inside-b', { inputTokens: 50, occurredAtMs: now - 2 * DAY }),
+    event('outside-after', { inputTokens: 1000, occurredAtMs: now - DAY, model: 'glm-4.7' }),
+  ]);
+  const report = store.summary({ agent: 'all', timezone: 'UTC', endDate: inEnd, startDate: inStart, days: 30 });
+  // 区间内只保留两个日期的桶,起点早于区间首日 → coverage 提示
+  assert.equal(report.days.length, 2);
+  assert.deepEqual(report.days.map((day) => day.date), [inStart, inEnd]);
+  assert.equal(report.summary.totalTokens, tokens(100) + tokens(50));
+  assert.equal(report.summary.activeDays, 2);
+  // 显式区间的累计随区间收敛;coverage 提示只对默认「近一年」窗口有意义
+  assert.equal(report.summary.coverageComplete, true);
+  // 不带 startDate 时维持原口径:累计为全部历史
+  const full = store.summary({ agent: 'all', timezone: 'UTC', endDate: today, days: 30 });
+  assert.equal(full.summary.totalTokens, tokens(10) + tokens(100) + tokens(50) + tokens(1000));
+  assert.equal(full.days.length, 30);
+});
+
+test('facade 校验:between 区间与档案来源 ID 的合法输入', () => {
   const base = { agent: 'all', timezone: 'UTC' };
-  const since = CliUsageService.normalizeModelsQuery({ ...base, scope: { kind: 'since', sinceMs: now - DAY } });
-  assert.equal(since.scope.kind, 'since');
-  assert.equal(since.scope.sinceMs, now - DAY);
-  assert.throws(() => CliUsageService.normalizeModelsQuery({ ...base, scope: { kind: 'since', sinceMs: 'x' } }), /周期起点/);
-  assert.throws(() => CliUsageService.normalizeModelsQuery({ ...base, scope: { kind: 'since', sinceMs: now + 10 * DAY } }), /周期起点/);
+  const between = CliUsageService.normalizeModelsQuery({ ...base, scope: { kind: 'between', fromMs: now - 5 * DAY, toMs: now } });
+  assert.equal(between.scope.kind, 'between');
+  assert.equal(between.scope.toMs, now);
+  assert.throws(() => CliUsageService.normalizeModelsQuery({ ...base, scope: { kind: 'between', fromMs: 'x', toMs: now } }), /时间区间/);
+  assert.throws(() => CliUsageService.normalizeModelsQuery({ ...base, scope: { kind: 'between', fromMs: now, toMs: now - DAY } }), /时间区间/);
+  assert.throws(() => CliUsageService.normalizeModelsQuery({ ...base, scope: { kind: 'between', fromMs: now - DAY, toMs: now + 10 * DAY } }), /时间区间/);
+  assert.throws(() => CliUsageService.normalizeSummaryQuery({ ...base, startDate: '2030-01-01' }), /日期区间/);
+  assert.throws(() => CliUsageService.normalizeSummaryQuery({ ...base, startDate: 'bad' }), /无效的日期/);
+  assert.equal(CliUsageService.normalizeSummaryQuery({ ...base, startDate: '2026-10-01' }).startDate, '2026-10-01');
   const withSource = CliUsageService.normalizeModelsQuery({ ...base, scope: { kind: 'range', days: 7 }, sourceId: '0b74a3f0-1234-4abc-9def-0123456789ab' });
   assert.equal(withSource.sourceId, '0b74a3f0-1234-4abc-9def-0123456789ab');
   assert.equal(CliUsageService.normalizeModelsQuery({ ...base, scope: { kind: 'range', days: 7 } }).sourceId, null);

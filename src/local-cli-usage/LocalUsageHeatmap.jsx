@@ -15,7 +15,7 @@ const statCard = (key, icon, label, value, title) => (
   </div>
 );
 
-export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate, dayModels, dayModelsLoading, sources, selectedAgent, canMergeModels, mergeSameModels, onToggleMerge, resizable = true }) {
+export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate, dayModels, dayModelsLoading, sources, selectedAgent, canMergeModels, mergeSameModels, onToggleMerge, periodMode = false, resizable = true }) {
   const days = useMemo(() => (summary?.days || []).filter((day) => /^\d{4}-\d{2}-\d{2}$/.test(String(day?.date))), [summary]);
   const heatmapRef = useRef(null);
   const wrapRef = useRef(null);
@@ -144,24 +144,25 @@ export default function LocalUsageHeatmap({ summary, selectedDate, onSelectDate,
   };
 
   const coverageLabel = info && info.coverageComplete === false ? '已覆盖区间 Token' : '累计消耗 Token';
+  // 周期视图(浪费 → 查看期间本机消耗):统计卡与热力图标题都按期间口径描述
   const stats = info ? [
-    statCard('tokens', <Bot size={13} />, coverageLabel, formatLocalTokensCompact(info.totalTokens), `${formatLocalTokensExact(info.totalTokens)} Token(全部已索引历史)`),
-    statCard('peak', <TrendingUp size={13} />, '峰值消耗 Token', formatLocalTokensCompact(info.peakTokens), `近一年单日最高:${formatLocalTokensExact(info.peakTokens)} Token`),
-    statCard('streak', <Flame size={13} />, '当前连续', `${info.currentStreakDays} 天`, '从今天向前连续有 Token 的天数'),
-    statCard('longest', <Trophy size={13} />, '最长连续', `${info.longestStreakDays} 天`, '全部已索引日期中的最长连续使用天数'),
+    statCard('tokens', <Bot size={13} />, periodMode ? '期间消耗 Token' : coverageLabel, formatLocalTokensCompact(info.totalTokens), periodMode ? `该周期消耗 ${formatLocalTokensExact(info.totalTokens)} Token` : `${formatLocalTokensExact(info.totalTokens)} Token(全部已索引历史)`),
+    statCard('peak', <TrendingUp size={13} />, '峰值消耗 Token', formatLocalTokensCompact(info.peakTokens), `${periodMode ? '期间' : '近一年'}单日最高:${formatLocalTokensExact(info.peakTokens)} Token`),
+    statCard('streak', <Flame size={13} />, '当前连续', `${info.currentStreakDays} 天`, periodMode ? '从期间最后一天向前连续有 Token 的天数' : '从今天向前连续有 Token 的天数'),
+    statCard('longest', <Trophy size={13} />, '最长连续', `${info.longestStreakDays} 天`, periodMode ? '期间最长连续使用天数' : '全部已索引日期中的最长连续使用天数'),
   ] : [];
 
   return <div className="local-cli-heatmap-view">
     {!!stats.length && <div className="provider-usage-summary local-cli-stats" ref={resizable ? statsResize.targetRef : undefined} style={resizable && statsResize.height !== null ? { height: `${Math.max(statsResize.height, statsBounds.min)}px` } : undefined}>{stats}</div>}
     {resizable && !!stats.length && <ResizeHandle handleProps={statsResize.handleProps} label="统计卡条" />}
     <div className="provider-heatmap-head">
-      <span className="provider-heatmap-title">近 1 年本机使用热力图</span>
+      <span className="provider-heatmap-title">{periodMode ? '周期内本机使用热力图' : '近 1 年本机使用热力图'}</span>
       <div className="provider-heatmap-legend" aria-hidden="true" title="颜色深浅按当前筛选范围强度缩放,悬停方格显示准确 Token">
         <span>较少</span>{[0, 1, 2, 3, 4].map((level) => <i key={level} className={`provider-heatmap-cell level-${level}`} />)}<span>较多</span>
       </div>
     </div>
     <div className="provider-heatmap-frame">
-      <div className="provider-heatmap-scroll local-cli-heatmap-scroll" role="grid" tabIndex={0} aria-label="近 1 年本机 CLI Token 热力图,方向键选择日期" ref={attachHeatmap} onKeyDown={handleKey} {...heatmapPanHandlers}>
+      <div className="provider-heatmap-scroll local-cli-heatmap-scroll" role="grid" tabIndex={0} aria-label={`${periodMode ? '周期内' : '近 1 年'}本机 CLI Token 热力图,方向键选择日期`} ref={attachHeatmap} onKeyDown={handleKey} {...heatmapPanHandlers}>
         <div className="provider-heatmap-board" ref={heatmapRef} style={{ '--hm-cell': `${cellPx}px`, '--hm-cell-h': `${cellH}px`, '--hm-gap': `${cellGap}px` }}>
           <span className="provider-heatmap-corner" aria-hidden="true" />
           <div className="provider-heatmap-months" aria-hidden="true" style={{ width: `${weekCount * cellPx + (weekCount - 1) * cellGap}px` }}>{monthMarkers.filter((_item, index) => index % (cellPx >= 14 ? 1 : cellPx >= 9 ? 2 : cellPx >= 6 ? 3 : 6) === 0).map((item) => <span key={item.key} style={{ left: `${(item.column - 1) * (cellPx + cellGap)}px` }}>{item.label}</span>)}</div>

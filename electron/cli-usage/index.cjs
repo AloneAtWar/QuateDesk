@@ -134,10 +134,17 @@ class CliUsageService {
       if (!isValidDateString(query.endDate)) throw new CliUsageError('无效的日期');
       endDate = query.endDate;
     }
+    // 显式日期区间(浪费周期 → 本机用量):起始日不能晚于结束日
+    let startDate = null;
+    if (query.startDate !== undefined && query.startDate !== null) {
+      if (!isValidDateString(query.startDate)) throw new CliUsageError('无效的日期');
+      if (query.startDate > endDate) throw new CliUsageError('无效的日期区间');
+      startDate = query.startDate;
+    }
     let modelRules;
     try { modelRules = normalizeModelRules(query.modelRules); }
     catch (error) { throw new CliUsageError(error.message); }
-    return { agent, timezone, endDate, modelRules, sourceId: CliUsageService.normalizeSourceId(query.sourceId) };
+    return { agent, timezone, endDate, startDate, modelRules, sourceId: CliUsageService.normalizeSourceId(query.sourceId) };
   }
 
   static normalizeModelsQuery(raw) {
@@ -151,11 +158,13 @@ class CliUsageService {
     if (scope.kind === 'day') {
       if (!isValidDateString(scope.date)) throw new CliUsageError('无效的日期');
       normalizedScope = { kind: 'day', date: scope.date };
-    } else if (scope.kind === 'since') {
-      // 自周期起点至今:界面用账号额度窗口的 resetAt 反推周期开始时刻
-      const sinceMs = Number(scope.sinceMs);
-      if (!Number.isSafeInteger(sinceMs) || sinceMs <= 0 || sinceMs > Date.now() + 86_400_000) throw new CliUsageError('无效的周期起点');
-      normalizedScope = { kind: 'since', sinceMs };
+    } else if (scope.kind === 'between') {
+      // 显式时间区间(浪费周期 → 本机用量):含头不含尾,上界不允许伸到未来
+      const fromMs = Number(scope.fromMs);
+      const toMs = Number(scope.toMs);
+      if (!Number.isSafeInteger(fromMs) || !Number.isSafeInteger(toMs)
+        || fromMs <= 0 || fromMs >= toMs || toMs > Date.now() + 86_400_000) throw new CliUsageError('无效的时间区间');
+      normalizedScope = { kind: 'between', fromMs, toMs };
     } else if (scope.kind === 'range') {
       const days = Number(scope.days);
       if (days !== 0 && !RANGE_DAYS.includes(days)) throw new CliUsageError('无效的统计周期');

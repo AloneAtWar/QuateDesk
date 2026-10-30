@@ -72,8 +72,10 @@ export function createDemoBridge(snapshot, { now = Date.now(), theme = 'dark' } 
   })));
   const summary = (query = {}) => {
     const end = query.endDate || today;
-    const start = addDays(end, 1 - (query.days || 365));
-    const rows = filteredRows(query);
+    const start = query.startDate || addDays(end, 1 - (query.days || 365));
+    const rowsAll = filteredRows(query);
+    // 显式日期区间(浪费周期 → 本机用量):累计口径随区间收敛
+    const rows = query.startDate ? rowsAll.filter((row) => row.date >= start && row.date <= end) : rowsAll;
     const days = new Map();
     for (let date = start; date <= end; date = addDays(date, 1)) days.set(date, { date, ...emptyTokens(), sessions: new Set(), agents: {} });
     const sessions = new Set();
@@ -91,16 +93,19 @@ export function createDemoBridge(snapshot, { now = Date.now(), theme = 'dark' } 
     return {
       range: { start, end, timezone: query.timezone || snapshot.timezone }, filter: clone(query),
       matchedModels: query.modelRules == null ? [] : [...new Map(rows.map((row) => [row.canonical, { key: row.canonical, displayName: row.model }])).values()],
-      recordsByAgent: query.modelRules == null ? null : filteredRows({ modelRules: query.modelRules }).reduce((counts, row) => ({ ...counts, [row.agent]: (counts[row.agent] || 0) + row.requests }), {}),
+      recordsByAgent: query.modelRules == null ? null : rowsAll.reduce((counts, row) => ({ ...counts, [row.agent]: (counts[row.agent] || 0) + row.requests }), {}),
       summary: { ...totals, totalTokens: rows.reduce((sum, row) => sum + row.totalTokens, 0), coverageComplete: rows.every((row) => row.date >= start), peakTokens: Math.max(0, ...dayRows.map((row) => row.totalTokens)), currentStreakDays: counts.current, longestStreakDays: counts.longest, sessions: sessions.size, activeDays: dayRows.filter((row) => row.totalTokens > 0).length, cacheReuseRatio: cacheBase > 0 ? totals.cacheReadTokens / cacheBase : null },
       days: dayRows,
     };
   };
   const models = (query = {}) => {
     const scope = query.scope || { kind: 'range', days: 30 };
-    const end = scope.kind === 'day' ? scope.date : today;
-    const start = scope.kind === 'day' ? end
-      : scope.kind === 'since' ? dateInZone(scope.sinceMs, query.timezone || snapshot.timezone)
+    const tz = query.timezone || snapshot.timezone;
+    const end = scope.kind === 'day' ? scope.date
+      : scope.kind === 'between' ? dateInZone(Math.max(scope.fromMs, scope.toMs - 1), tz)
+        : today;
+    const start = scope.kind === 'day' ? scope.date
+      : scope.kind === 'between' ? dateInZone(scope.fromMs, tz)
         : scope.days > 0 ? addDays(end, 1 - scope.days) : null;
     const merge = (!query.agent || query.agent === 'all') && query.mergeSameModels !== false;
     const groups = new Map();

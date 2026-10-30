@@ -6,7 +6,8 @@ import { formatLocalTokensCompact, formatLocalTokensExact, formatLocalPercent, l
 import MergeSameModelsToggle from './MergeSameModelsToggle';
 import RangeSelect from './RangeSelect';
 
-// 固定周期:id 为天数;days = 0 表示"全部"。账号嵌入视图会追加周 / 月周期选项
+// 固定周期:id 为天数;days = 0 表示"全部"。周期视图(浪费 → 查看期间本机消耗)
+// 用 fixedRangeLabel 固定为该周期,不再提供周期选择
 const BASE_RANGES = [
   { id: 1, label: '1天' },
   { id: 7, label: '7天' },
@@ -22,7 +23,7 @@ const cacheHitRatio = (row) => {
   return (row.cacheReadTokens || 0) / base;
 };
 
-export default function LocalUsageModelBreakdown({ report, loading, error, rangeValue, onRangeChange, cycleRanges = [], canMergeModels, mergeSameModels, onToggleMerge, sources, selectedAgent }) {
+export default function LocalUsageModelBreakdown({ report, loading, error, rangeValue, onRangeChange, fixedRangeLabel = null, canMergeModels, mergeSameModels, onToggleMerge, sources, selectedAgent }) {
   const agentNames = useMemo(() => Object.fromEntries((sources || []).map((source) => [source.agent, source.displayName])), [sources]);
   const models = report?.models || [];
   // 全部渠道 + 开启合并,或已指定单个渠道时,行内不再标注 CLI 来源
@@ -30,10 +31,6 @@ export default function LocalUsageModelBreakdown({ report, loading, error, range
   // 合并开关只改变分组,不改变每行数值;条宽按各行自身 total,不按合并后归一化
   const maxTotal = useMemo(() => models.reduce((max, row) => Math.max(max, row.totalTokens), 0), [models]);
   const periodTotal = useMemo(() => models.reduce((sum, row) => sum + (Number(row.totalTokens) || 0), 0), [models]);
-  // 周期选项插在「全部」之前,保持短 → 长的顺序
-  const rangeOptions = useMemo(() => (cycleRanges.length
-    ? [...BASE_RANGES.slice(0, -1), ...cycleRanges, BASE_RANGES[BASE_RANGES.length - 1]]
-    : BASE_RANGES), [cycleRanges]);
   const rangeTitle = report?.range?.start ? `周期总计 ${formatLocalTokensExact(periodTotal)} Token · ${report.range.start} 至 ${report.range.end}` : (models.length ? `周期总计 ${formatLocalTokensExact(periodTotal)} Token` : undefined);
 
   return <div className="local-cli-models-view">
@@ -42,7 +39,9 @@ export default function LocalUsageModelBreakdown({ report, loading, error, range
         周期总计： <b>{models.length ? formatLocalTokensCompact(periodTotal) : '—'}</b> Token
       </span>
       {canMergeModels && <MergeSameModelsToggle checked={mergeSameModels} onChange={onToggleMerge} />}
-      <RangeSelect value={rangeValue} options={rangeOptions} onChange={onRangeChange} ariaLabel="模型统计周期" />
+      {fixedRangeLabel
+        ? <span className="local-cli-range-select fixed" title="已按所选周期统计该期间的全部用量">{fixedRangeLabel}</span>
+        : <RangeSelect value={rangeValue} options={BASE_RANGES} onChange={onRangeChange} ariaLabel="模型统计周期" />}
     </div>
     <div className="local-cli-model-table">
       <div className="local-cli-model-header" aria-hidden="true">

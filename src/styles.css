@@ -1105,6 +1105,19 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .local-cli-source-chip b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .local-cli-source-chip button { flex: 0 0 auto; display: grid; place-items: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 4px; color: inherit; background: transparent; cursor: pointer; }
 .local-cli-source-chip button:hover { background: var(--green-deep); color: var(--surface-2); }
+/* 账号详情头的周期过滤 chip:从浪费视图「查看期间本机消耗」进入时标注当前周期,× 恢复全部 */
+.history-period-chip { flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 5px; max-width: 220px; padding: 4px 5px 4px 8px; border: 1px solid var(--line-inner); border-radius: 7px; background: var(--green-bg); color: var(--green-deep); font-size: 10px; }
+.history-period-chip > svg { flex: 0 0 auto; }
+.history-period-chip b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.history-period-chip button { flex: 0 0 auto; display: grid; place-items: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 4px; color: inherit; background: transparent; cursor: pointer; }
+.history-period-chip button:hover { background: var(--green-deep); color: var(--surface-2); }
+/* 模型拆分固定周期标签:周期视图下不再提供周期选择 */
+.local-cli-range-select.fixed { display: inline-flex; align-items: center; gap: 4px; cursor: default; opacity: .9; }
+/* 浪费视图右键 / 长按周期柱的菜单 */
+.waste-context-backdrop { position: fixed; inset: 0; z-index: 80; }
+.waste-context-menu { position: fixed; z-index: 81; min-width: 150px; padding: 4px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--drawer-bg); box-shadow: var(--shadow-strong); }
+.waste-context-menu button { width: 100%; display: block; padding: 6px 8px; border: 0; border-radius: 6px; color: var(--ink-soft); background: transparent; font-size: 11px; text-align: left; cursor: pointer; }
+.waste-context-menu button:hover { background: var(--surface-3); color: var(--ink); }
 .local-cli-view-switch { flex: 0 0 auto; }
 .local-cli-scope-models { min-width: 0; display: flex; align-items: center; gap: 5px; overflow: hidden; color: var(--faint); font-size: 9px; white-space: nowrap; }
 .local-cli-scope-models > span:first-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ink-soft); font-weight: 700; }

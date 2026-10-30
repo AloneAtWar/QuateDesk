@@ -1110,12 +1110,15 @@ const formatWasteGap = (gapMs) => {
 };
 
 // 浪费统计视图：每根柱子是一个周期区间（最新在右），柱高 = 周期末剩余百分比（即浪费率）
-function WasteView({ account, wasteWindows }) {
+// 右键(触屏长按)周期柱可「查看期间本机消耗」：跳到本机页签并只统计该周期
+function WasteView({ account, wasteWindows, onViewLocalUsage }) {
   const [cycles, setCycles] = useState(null);
   const [curWindow, setCurWindow] = useState(wasteWindows[0]);
   const [hover, setHover] = useState(null);
   // 触屏没有悬停：点击柱子选中、再点一次或点空白处取消；悬停优先于选中展示
   const [selectedKey, setSelectedKey] = useState(null);
+  // 右键 / 触屏长按弹出的周期菜单:{ x, y, cycle }
+  const [contextMenu, setContextMenu] = useState(null);
   const [dragging, setDragging] = useState(false);
   const scrollRef = useRef(null);
   const dragRef = useRef(null);
@@ -1233,6 +1236,34 @@ function WasteView({ account, wasteWindows }) {
     document.addEventListener('pointerdown', onPointerDown, true);
     return () => document.removeEventListener('pointerdown', onPointerDown, true);
   }, [selectedKey]);
+  // 右键 / 触屏长按周期柱 → 周期菜单;点菜单外、Esc 或开始拖动时收起
+  useEffect(() => {
+    if (!contextMenu) return undefined;
+    const close = () => setContextMenu(null);
+    const onKey = (event) => { if (event.key === 'Escape') close(); };
+    window.addEventListener('resize', close);
+    document.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('resize', close); document.removeEventListener('keydown', onKey); };
+  }, [contextMenu]);
+  // 菜单项:把该周期换成本机用量的统计期间;进行中的周期终点收在当前时刻
+  const openContextMenu = (event, cycle) => {
+    if (!onViewLocalUsage) return;
+    event.preventDefault();
+    setContextMenu({ x: event.clientX, y: event.clientY, cycle });
+    setSelectedKey(null);
+  };
+  const contextPeriod = (cycle) => {
+    const fromMs = Date.parse(displayFrom(cycle));
+    const endMs = Date.parse(cycle.end);
+    const toMs = Math.min(Number.isFinite(endMs) ? endMs : Date.now(), Date.now());
+    if (!Number.isFinite(fromMs) || fromMs >= toMs) return null;
+    return { fromMs, toMs, label: `${formatWasteDay(displayFrom(cycle))}→${formatWasteDay(cycle.end)}${cycle.now ? ' 进行中' : ''}` };
+  };
+  const pickContextPeriod = () => {
+    const period = contextMenu && contextPeriod(contextMenu.cycle);
+    setContextMenu(null);
+    if (period) onViewLocalUsage?.(period);
+  };
   const softColor = `color-mix(in srgb, ${CHART_COLORS[curWindow] || 'var(--violet)'} 30%, transparent)`;
   // 柱子少时每根都标完整区间；多了只标结束日期并按需抽稀，避免文字挤在一起
   const compactLabels = shown.length <= 6;
@@ -1256,7 +1287,7 @@ function WasteView({ account, wasteWindows }) {
           const key = cycleKey(cycle, index);
           const classes = ['waste-col', cycle.now ? 'now' : cycle.kind === 'early' ? 'early' : !cycle.reliable ? 'bad' : '', hover === cycle || selectedKey === key ? 'hot' : ''].filter(Boolean).join(' ');
           const tip = `${formatWasteDay(displayFrom(cycle))} → ${formatWasteDay(cycle.end)}${cycle.now ? '（进行中）' : ` · 浪费 ${Math.round(cycle.remaining)}%`}`;
-          return <div key={key} className={classes} data-key={key} title={tip} onMouseEnter={() => setHover(cycle)} onMouseLeave={() => setHover(null)}>
+          return <div key={key} className={classes} data-key={key} title={tip} onMouseEnter={() => setHover(cycle)} onMouseLeave={() => setHover(null)} onContextMenu={(event) => openContextMenu(event, cycle)}>
             <div className="waste-bar" style={{ height: `${Math.max(2, Math.min(100, cycle.remaining))}%` }} />
           </div>;
         })}
@@ -1274,6 +1305,12 @@ function WasteView({ account, wasteWindows }) {
         <span><i className="swatch-now" />进行中</span>
         <span className="legend-right">{windowCycles.length - good.length} 个周期不计入平均</span>
       </>}</div>
+    {/* 周期菜单挂在 body:浪费柱状图容器有横向滚动,层内定位会被裁剪 */}
+    {contextMenu && createPortal(<div className="waste-context-backdrop" onPointerDown={() => setContextMenu(null)} onContextMenu={(event) => { event.preventDefault(); setContextMenu(null); }}>
+      <div className="waste-context-menu" role="menu" aria-label="周期操作" style={{ left: Math.max(8, Math.min(contextMenu.x, window.innerWidth - 176)), top: Math.max(8, Math.min(contextMenu.y, window.innerHeight - 64)) }} onPointerDown={(event) => event.stopPropagation()}>
+        <button type="button" role="menuitem" onClick={pickContextPeriod}>查看期间本机消耗</button>
+      </div>
+    </div>, document.body)}
   </div>;
 }
 
@@ -1645,33 +1682,6 @@ function HistoryViewSwitch({ tabs, view, onChange, domId, panelId, onToast }) {
   </>;
 }
 
-// 账号额度周期 → 本机用量统计范围:周期起点 = resetAt 往前推一个周期。
-// 周窗口固定 7 天;月窗口按自然月同日对齐(月末收拢),与浪费统计的月份口径一致。
-const cycleStartBefore = (key, resetMs) => {
-  if (key === 'weekly') return resetMs - 7 * 86_400_000;
-  const end = new Date(resetMs);
-  const target = new Date(end.getFullYear(), end.getMonth() - 1, 1);
-  const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
-  return new Date(target.getFullYear(), target.getMonth(), Math.min(end.getDate(), lastDay)).getTime();
-};
-// 账号追踪周 / 月额度窗口时提供对应周期选项;resetAt 缺失(轮询失败)或起点
-// 不在合理范围内则不提供,避免给出错误的统计边界
-const accountCycleRanges = (account, now = Date.now()) => {
-  const tracked = Array.isArray(account?.windowKeys) && account.windowKeys.length
-    ? account.windowKeys
-    : account?.windows?.length ? account.windows.map((item) => item.key) : [];
-  const ranges = [];
-  for (const [key, label] of [['weekly', '周周期'], ['monthly', '月周期']]) {
-    if (!tracked.includes(key)) continue;
-    const resetMs = Date.parse(account?.windows?.find((item) => item.key === key)?.resetAt || '');
-    if (!Number.isFinite(resetMs)) continue;
-    const sinceMs = cycleStartBefore(key, resetMs);
-    if (!Number.isFinite(sinceMs) || sinceMs <= 0 || sinceMs >= now) continue;
-    ranges.push({ id: `cycle:${key}`, label, sinceMs });
-  }
-  return ranges;
-};
-
 function HistoryView({ account, provider, onBack, onProviderUsageState, settings, setSettings, readOnly = false, wasteWindowsOverride, onToast }) {
   const [points, setPoints] = useState(null);
   const [hiddenKeys, setHiddenKeys] = useState([]);
@@ -1692,8 +1702,8 @@ function HistoryView({ account, provider, onBack, onProviderUsageState, settings
   const localAnalysis = useMemo(() => resolveProviderLocalAnalysis(provider), [provider]);
   // 远程查看(只读)也展示本机页签:数据本身只读,远程页会传自己的本机用量会话设置
   const showLocalUsageEntry = localAnalysis.enabled;
-  // 该账号的周 / 月额度周期 → 本机用量模型拆分的额外统计范围
-  const cycleRanges = useMemo(() => accountCycleRanges(account), [account]);
+  // 从浪费视图右键周期进入「查看期间本机消耗」时,本机页签只统计该周期
+  const [localPeriod, setLocalPeriod] = useState(null);
   const showWaste = view === 'waste' && wasteWindows.length > 0;
   const showProviderUsage = view === 'provider-usage' && showProviderUsageEntry;
   const showLocalUsage = view === 'local-usage' && showLocalUsageEntry;
@@ -1767,9 +1777,14 @@ function HistoryView({ account, provider, onBack, onProviderUsageState, settings
         {onBack && <button type="button" className="back-button" onClick={onBack} title="返回看板" aria-label="返回看板"><ChevronLeft size={15} /></button>}
         <AccountIdentity account={account} provider={provider} />
         {account.disabled && <span className="history-disabled-tag"><CircleStop size={12} /> 已停用 · {formatDisabledDate(account.disabledAt)}</span>}
+        {localPeriod && <span className="history-period-chip" title={`本机页签只统计该周期的用量：${localPeriod.label}`}>
+          <CalendarDays size={11} />
+          <b>{localPeriod.label}</b>
+          <button type="button" onClick={() => setLocalPeriod(null)} title="关闭周期过滤，查看全部本机用量" aria-label="关闭周期过滤"><X size={10} /></button>
+        </span>}
         <HistoryViewSwitch tabs={historyTabs} view={view} onChange={setView} domId={historyDomId} panelId={historyPanelId} onToast={onToast} />
       </div>
-      <div className={`history-tabpanel${showLocalUsage ? ' local-usage-tabpanel' : ''}`} role="tabpanel" id={historyPanelId} aria-labelledby={`${historyDomId}-tab-${view}`}>{showProviderUsage ? <ProviderUsageView account={account} provider={provider} onState={onProviderUsageState} readOnly={readOnly} /> : showLocalUsage ? <LocalCliUsageView settings={settings} setSettings={setSettings} modelRules={localAnalysis.modelRules} scopeName={provider?.name || '当前厂商'} cycleRanges={cycleRanges} embedded /> : showWaste ? <WasteView account={account} wasteWindows={wasteWindows} /> : <div className="trend-view">
+      <div className={`history-tabpanel${showLocalUsage ? ' local-usage-tabpanel' : ''}`} role="tabpanel" id={historyPanelId} aria-labelledby={`${historyDomId}-tab-${view}`}>{showProviderUsage ? <ProviderUsageView account={account} provider={provider} onState={onProviderUsageState} readOnly={readOnly} /> : showLocalUsage ? <LocalCliUsageView settings={settings} setSettings={setSettings} modelRules={localAnalysis.modelRules} scopeName={provider?.name || '当前厂商'} periodFilter={localPeriod} embedded /> : showWaste ? <WasteView account={account} wasteWindows={wasteWindows} onViewLocalUsage={showLocalUsageEntry ? (period) => { setLocalPeriod(period); setView('local-usage'); } : undefined} /> : <div className="trend-view">
         {points === null ? <div className="settings-empty chart-empty">正在读取历史记录…</div>
           : points.length === 0 ? <div className="settings-empty chart-empty">暂无历史数据，每次成功刷新额度后都会记录一条</div>
             : <UsageChart points={points} hiddenKeys={hiddenKeys} rangeKey={rangeKey} onRangeKeyChange={setRangeKey} onToast={onToast} />}

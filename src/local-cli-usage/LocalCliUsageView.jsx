@@ -1,7 +1,7 @@
 // 本机用量页:标题栏第四个全局视图。只读展示本机 CLI 会话的 Token 统计,
 // 与账号额度、官方用量完全独立。首卡确认后才开始扫描,数据只含聚合数值。
-// sourceFilter:从用量档案入口进入时只看单个档案;cycleRanges:账号嵌入视图
-// 按额度窗口追加「当前周 / 月周期」统计范围(自周期起点至今)。
+// sourceFilter:从用量档案入口进入时只看单个档案;periodFilter:从浪费视图
+// 「查看期间本机消耗」进入时只统计该周期(热力图与模型拆分都随周期收敛)。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Database, Play, RefreshCw, ShieldCheck, X } from 'lucide-react';
 import useLocalCliUsage from './useLocalCliUsage';
@@ -10,7 +10,7 @@ import LocalUsageHeatmap from './LocalUsageHeatmap';
 import LocalUsageModelBreakdown from './LocalUsageModelBreakdown';
 import RelatedModels from './RelatedModels';
 import {
-  formatLocalDateTime, localTimeZone, canMergeModelsFor,
+  formatLocalDateTime, localDateStringOf, localTimeZone, canMergeModelsFor,
 } from './local-cli-usage-format';
 
 const VIEWS = [
@@ -18,15 +18,25 @@ const VIEWS = [
   { key: 'models', label: '模型拆分' },
 ];
 
-export default function LocalCliUsageView({ settings, setSettings, onApi, onMetaChange, modelRules, scopeName, embedded = false, sourceFilter = null, onClearSourceFilter, cycleRanges = [] }) {
+export default function LocalCliUsageView({ settings, setSettings, onApi, onMetaChange, modelRules, scopeName, embedded = false, sourceFilter = null, onClearSourceFilter, periodFilter = null }) {
   const bridge = window.quotaDesk;
   const timezone = useMemo(() => localTimeZone(), []);
   const [activeView, setActiveView] = useState('heatmap');
   const [selectedAgent, setSelectedAgent] = useState('all');
   const [selectedDate, setSelectedDate] = useState(null);
-  // 数字 = 固定天数(0 为全部);cycle:* = 账号周 / 月额度周期
   const [modelRange, setModelRange] = useState(30);
   const sourceId = sourceFilter?.sourceId || null;
+  // 周期过滤:{ fromMs, toMs, label };非法区间视为没有
+  const period = periodFilter && Number.isFinite(periodFilter.fromMs) && Number.isFinite(periodFilter.toMs) && periodFilter.fromMs < periodFilter.toMs
+    ? periodFilter : null;
+  // 周期 → 日期区间(热力图按天聚合,取周期覆盖的本地日期,含两端)
+  const periodQuery = useMemo(() => {
+    if (!period) return null;
+    const startDate = localDateStringOf(period.fromMs);
+    const endDate = localDateStringOf(Math.min(period.toMs, Date.now()));
+    if (!startDate || !endDate || startDate > endDate) return null;
+    return { startDate, endDate };
+  }, [period]);
   const {
     sources: sourcesBlock, summary: summaryBlock, dayModels: dayModelsBlock, rangeModels: rangeModelsBlock, scanning,
     refreshSources, refreshSummary, refreshDayModels, refreshRangeModels, scan,
@@ -53,7 +63,7 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
   })), [sources, queryModelRules, scopeMeta.recordsByAgent]);
   const selectedSource = sources.find((source) => source.agent === selectedAgent) || null;
   const enteredRef = useRef(false);
-  const sourceIdRef = useRef(sourceId);
+  const scopeKeyRef = useRef(`${sourceId}|${period?.fromMs}|${period?.toMs}`);
 
   const updateMergeSameModels = useCallback((next) => {
     setSettings((old) => ({ ...old, localCliUsage: { ...(old.localCliUsage || {}), mergeSameModels: next } }));
@@ -62,24 +72,21 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
   // ---- 数据加载 -----------------------------------------------------------
 
   const loadSummary = useCallback((agent) => {
-    refreshSummary({ agent, timezone, sourceId, ...(queryModelRules ? { modelRules: queryModelRules } : {}) });
-  }, [refreshSummary, timezone, queryModelRules, sourceId]);
+    refreshSummary({ agent, timezone, sourceId, ...(periodQuery ? { startDate: periodQuery.startDate, endDate: periodQuery.endDate } : {}), ...(queryModelRules ? { modelRules: queryModelRules } : {}) });
+  }, [refreshSummary, timezone, queryModelRules, sourceId, periodQuery]);
 
   const loadDayModels = useCallback((agent, date, merge) => {
     if (!date) return;
     refreshDayModels({ agent, mergeSameModels: merge && agent === 'all', scope: { kind: 'day', date }, timezone, sourceId, ...(queryModelRules ? { modelRules: queryModelRules } : {}) });
   }, [refreshDayModels, timezone, queryModelRules, sourceId]);
 
-  // 周期选项被切走(账号换窗口)时收敛回默认 30 天,避免悬空选中
-  useEffect(() => {
-    if (typeof modelRange === 'string' && !cycleRanges.some((range) => range.id === modelRange)) setModelRange(30);
-  }, [cycleRanges, modelRange]);
-
   const loadRangeModels = useCallback((agent, value, merge) => {
-    const cycle = typeof value === 'string' ? cycleRanges.find((range) => range.id === value) : null;
-    const scope = cycle ? { kind: 'since', sinceMs: cycle.sinceMs } : { kind: 'range', days: typeof value === 'number' ? value : 30 };
+    // 周期模式下模型拆分固定为该周期(界面不再提供周期选择),含头不含尾
+    const scope = period
+      ? { kind: 'between', fromMs: period.fromMs, toMs: period.toMs }
+      : { kind: 'range', days: typeof value === 'number' ? value : 30 };
     refreshRangeModels({ agent, mergeSameModels: merge && agent === 'all', scope, timezone, sourceId, ...(queryModelRules ? { modelRules: queryModelRules } : {}) });
-  }, [refreshRangeModels, timezone, queryModelRules, sourceId, cycleRanges]);
+  }, [refreshRangeModels, timezone, queryModelRules, sourceId, period]);
 
   // 进入页面:并行读 sources 与缓存 summary;已启用时后台轻量增量,完成后刷新
   useEffect(() => {
@@ -94,17 +101,17 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
     return () => { enteredRef.current = false; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 档案过滤变化:所有查询换到新的来源口径重读
+  // 档案 / 周期过滤变化:所有查询换到新的统计口径重读
   useEffect(() => {
-    const next = sourceId;
-    if (sourceIdRef.current === next) return;
-    sourceIdRef.current = next;
+    const next = `${sourceId}|${period?.fromMs}|${period?.toMs}`;
+    if (scopeKeyRef.current === next) return;
+    scopeKeyRef.current = next;
     if (!enteredRef.current) return;
-    refreshSources({ sourceId: next });
+    refreshSources({ sourceId });
     loadSummary(selectedAgent);
     if (activeView === 'models') loadRangeModels(selectedAgent, modelRange, mergeSameModels);
     else loadDayModels(selectedAgent, selectedDate, mergeSameModels);
-  }, [sourceId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sourceId, period]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 渠道切换:summary 必刷;当前可见的模型数据跟随刷新
   useEffect(() => {
@@ -152,7 +159,7 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
   }, [mergeSameModels, activeView]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!enteredRef.current || activeView !== 'models') return;
+    if (!enteredRef.current || activeView !== 'models' || period) return;
     loadRangeModels(selectedAgent, modelRange, mergeSameModels);
   }, [modelRange]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -190,7 +197,7 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
     </section>;
   }
 
-  if (!sourceFilter && !enabled && !sources.some((source) => Number(source.records) > 0)) {
+  if (!sourceFilter && !period && !enabled && !sources.some((source) => Number(source.records) > 0)) {
     return <section className={`${embedded ? '' : 'surface-section '}local-cli-page${embedded ? ' embedded' : ''}`}>
       <div className="local-cli-intro-card">
         <span className="local-cli-state-icon"><ShieldCheck size={18} /></span>
@@ -218,11 +225,11 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
         <button type="button" className="outline-button" onClick={refreshAll}><RefreshCw size={13} /> 重试</button></div>;
     }
     if (summaryBlock.loading && !summaryBlock.data) {
-      return <div className="local-cli-state-card loading"><RefreshCw size={17} className="spinning" /><div><b>正在读取本机用量</b><small>聚合近一年 CLI 会话记录</small></div></div>;
+      return <div className="local-cli-state-card loading"><RefreshCw size={17} className="spinning" /><div><b>正在读取本机用量</b><small>{period ? '统计该周期的本机 CLI 记录' : '聚合近一年 CLI 会话记录'}</small></div></div>;
     }
     const hasData = (summaryBlock.data?.summary?.activeDays || 0) > 0;
     if (!hasData) {
-      return <div className="local-cli-state-card"><Database size={18} /><div><b>{sourceFilter ? `档案「${sourceFilter.label}」还没有本机用量记录` : queryModelRules ? `没有找到 ${scopeName || '当前厂商'} 相关的本机用量` : '没有找到可解析的用量记录'}</b><small>{sourceFilter ? '该档案里没有可统计的 Token 记录。' : queryModelRules ? '当前模型规则没有匹配到已扫描的 CLI 记录。' : '已扫描本机 CLI 目录,但没有可统计的 Token 记录;正常使用 CLI 后会自动出现。'}</small></div></div>;
+      return <div className="local-cli-state-card"><Database size={18} /><div><b>{period ? '该期间没有本机用量记录' : sourceFilter ? `档案「${sourceFilter.label}」还没有本机用量记录` : queryModelRules ? `没有找到 ${scopeName || '当前厂商'} 相关的本机用量` : '没有找到可解析的用量记录'}</b><small>{period ? `${period.label} 这段时间没有可统计的 CLI 记录。` : sourceFilter ? '该档案里没有可统计的 Token 记录。' : queryModelRules ? '当前模型规则没有匹配到已扫描的 CLI 记录。' : '已扫描本机 CLI 目录,但没有可统计的 Token 记录;正常使用 CLI 后会自动出现。'}</small></div></div>;
     }
     return activeView === 'heatmap'
       ? <LocalUsageHeatmap
@@ -236,6 +243,7 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
         canMergeModels={canMergeModels}
         mergeSameModels={mergeSameModels}
         onToggleMerge={updateMergeSameModels}
+        periodMode={Boolean(period)}
         resizable={!embedded}
       />
       : <LocalUsageModelBreakdown
@@ -244,7 +252,7 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
         error={rangeModelsBlock.error}
         rangeValue={modelRange}
         onRangeChange={setModelRange}
-        cycleRanges={cycleRanges}
+        fixedRangeLabel={period ? '全部' : null}
         canMergeModels={canMergeModels}
         mergeSameModels={mergeSameModels}
         onToggleMerge={updateMergeSameModels}
@@ -259,7 +267,7 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
     <div className="local-cli-page-head">
       {embedded ? <RelatedModels models={scopeMeta.matchedModels} loading={summaryBlock.loading} /> : <div className="local-cli-page-title">
         <b>本机用量</b>
-        <small>{sourceFilter ? `仅显示档案「${sourceFilter.label}」的用量 · ${lastScanned ? `最后扫描 ${formatLocalDateTime(lastScanned)}` : '尚未完成扫描'}` : `${summaryBlock.data?.archiveScope?.importedSources > 0 ? `本机 + ${summaryBlock.data.archiveScope.importedSources} 个导入来源 · ` : ''}${lastScanned ? `最后扫描 ${formatLocalDateTime(lastScanned)}` : '尚未完成扫描'}${agentNames[selectedAgent] && selectedAgent !== 'all' ? ` · ${agentNames[selectedAgent]}` : ''}`}</small>
+        <small>{period ? `${period.label} · 本机用量` : sourceFilter ? `仅显示档案「${sourceFilter.label}」的用量 · ${lastScanned ? `最后扫描 ${formatLocalDateTime(lastScanned)}` : '尚未完成扫描'}` : `${summaryBlock.data?.archiveScope?.importedSources > 0 ? `本机 + ${summaryBlock.data.archiveScope.importedSources} 个导入来源 · ` : ''}${lastScanned ? `最后扫描 ${formatLocalDateTime(lastScanned)}` : '尚未完成扫描'}${agentNames[selectedAgent] && selectedAgent !== 'all' ? ` · ${agentNames[selectedAgent]}` : ''}`}</small>
       </div>}
       <div className="local-cli-page-actions">
         {sourceFilter && <span className="local-cli-source-chip" title={`仅显示档案「${sourceFilter.label}」的用量`}>

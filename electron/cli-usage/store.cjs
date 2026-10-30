@@ -15,6 +15,13 @@ const SCHEMA_VERSION = '4';
 const AGENT_ORDER = ['zcode', 'kimi', 'claude', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'openclaw', 'hermes', 'dsh'];
 
 const HOUR_BUCKET_FORMATTER_CACHE = new Map();
+
+// 显式日期区间的天数(含两端): startDate/endDate 都是 YYYY-MM-DD,解析按 UTC 零点只求差值
+const periodDayCount = (startDate, endDate) => {
+  const diff = Math.round((Date.parse(endDate) - Date.parse(startDate)) / 86_400_000) + 1;
+  if (!Number.isFinite(diff)) return null;
+  return Math.max(1, Math.min(800, diff));
+};
 // 小时桶标签:目标时区的本地墙钟 YYYY-MM-DDTHH:00(DST 切换日按平移处理,仅展示用途)
 const hourBucketLabel = (timeZone, atMs) => {
   let formatter = HOUR_BUCKET_FORMATTER_CACHE.get(timeZone);
@@ -327,38 +334,40 @@ ON CONFLICT(root_id) DO UPDATE SET agent = excluded.agent, label = excluded.labe
     return Number(row?.records || 0);
   }
 
-  earliestEventMs(agentFilter, modelRules = null, sourceId = null) {
+  // 可选过滤片段(渠道 + 时间边界,含头不含尾):clauses 与 values 保持同序
+  scopedFilters(baseParams, agentFilter, fromMs, toMs) {
+    const clauses = [];
+    const values = [...baseParams];
+    if (agentFilter && agentFilter !== 'all') { clauses.push('agent = ?'); values.push(agentFilter); }
+    if (Number.isSafeInteger(fromMs) && fromMs > 0) { clauses.push('occurred_at_ms >= ?'); values.push(fromMs); }
+    if (Number.isSafeInteger(toMs) && toMs > 0) { clauses.push('occurred_at_ms < ?'); values.push(toMs); }
+    return { whereSql: clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '', values };
+  }
+
+  earliestEventMs(agentFilter, modelRules = null, sourceId = null, fromMs = null, toMs = null) {
     const { table, params } = this.archiveTable(sourceId);
+    const { whereSql, values } = this.scopedFilters(params, agentFilter, fromMs, toMs);
     if (modelRules === null || modelRules === undefined) {
-      const row = agentFilter && agentFilter !== 'all'
-        ? this.db.prepare(`SELECT MIN(occurred_at_ms) AS earliest FROM ${table} WHERE agent = ?`).get(...params, agentFilter)
-        : this.db.prepare(`SELECT MIN(occurred_at_ms) AS earliest FROM ${table}`).get(...params);
+      const row = this.db.prepare(`SELECT MIN(occurred_at_ms) AS earliest FROM ${table}${whereSql}`).get(...values);
       return row?.earliest ? Number(row.earliest) : null;
     }
     const matchesModel = createModelRuleMatcher(modelRules);
-    const filterByAgent = agentFilter && agentFilter !== 'all';
-    const iterator = filterByAgent
-      ? this.db.prepare(`SELECT occurred_at_ms, model, canonical_model_key FROM ${table} WHERE agent = ? ORDER BY occurred_at_ms`).iterate(...params, agentFilter)
-      : this.db.prepare(`SELECT occurred_at_ms, model, canonical_model_key FROM ${table} ORDER BY occurred_at_ms`).iterate(...params);
+    const iterator = this.db.prepare(`SELECT occurred_at_ms, model, canonical_model_key FROM ${table}${whereSql} ORDER BY occurred_at_ms`).iterate(...values);
     for (const row of iterator) {
       if (matchesModel(row.canonical_model_key, row.model)) return Number(row.occurred_at_ms);
     }
     return null;
   }
 
-  totalTokensAll(agentFilter, modelRules = null, sourceId = null) {
+  totalTokensAll(agentFilter, modelRules = null, sourceId = null, fromMs = null, toMs = null) {
     const { table, params } = this.archiveTable(sourceId);
+    const { whereSql, values } = this.scopedFilters(params, agentFilter, fromMs, toMs);
     if (modelRules === null || modelRules === undefined) {
-      const row = agentFilter && agentFilter !== 'all'
-        ? this.db.prepare(`SELECT SUM(total_tokens) AS total FROM ${table} WHERE agent = ?`).get(...params, agentFilter)
-        : this.db.prepare(`SELECT SUM(total_tokens) AS total FROM ${table}`).get(...params);
+      const row = this.db.prepare(`SELECT SUM(total_tokens) AS total FROM ${table}${whereSql}`).get(...values);
       return Number(row?.total || 0);
     }
     const matchesModel = createModelRuleMatcher(modelRules);
-    const filterByAgent = agentFilter && agentFilter !== 'all';
-    const iterator = filterByAgent
-      ? this.db.prepare(`SELECT model, canonical_model_key, total_tokens FROM ${table} WHERE agent = ?`).iterate(...params, agentFilter)
-      : this.db.prepare(`SELECT model, canonical_model_key, total_tokens FROM ${table}`).iterate(...params);
+    const iterator = this.db.prepare(`SELECT model, canonical_model_key, total_tokens FROM ${table}${whereSql}`).iterate(...values);
     let total = 0;
     for (const row of iterator) {
       if (matchesModel(row.canonical_model_key, row.model)) total += Number(row.total_tokens) || 0;
@@ -402,10 +411,16 @@ ON CONFLICT(root_id) DO UPDATE SET agent = excluded.agent, label = excluded.labe
 
   // ---- 聚合:近一年摘要 ---------------------------------------------------
 
-  summary({ agent, timezone, endDate, days = 365, modelRules = null, sourceId = null }) {
-    // endDate 缺省为该时区今天(双保险:facade 的 IPC 层也会先规整)
+  summary({ agent, timezone, endDate, startDate = null, days = 365, modelRules = null, sourceId = null }) {
+    // endDate 缺省为该时区今天(双保险:facade 的 IPC 层也会先规整);
+    // 指定 startDate 时按显式日期区间取天数(浪费周期 → 本机用量视图)
     const effectiveEndDate = endDate || localDateString(timezone);
-    const boundaries = buildDayBoundaries(timezone, effectiveEndDate, days);
+    let effectiveDays = days;
+    if (startDate) {
+      effectiveDays = periodDayCount(startDate, effectiveEndDate);
+      if (effectiveDays === null) throw new Error('无效的日期区间');
+    }
+    const boundaries = buildDayBoundaries(timezone, effectiveEndDate, Math.max(1, effectiveDays));
     const startMs = boundaries[0].startMs;
     const endMs = boundaries[boundaries.length - 1].endMs;
 
@@ -457,13 +472,16 @@ ON CONFLICT(root_id) DO UPDATE SET agent = excluded.agent, label = excluded.labe
     const activeDays = totals.filter((value) => value > 0).length;
     const cacheBase = inputTokens + cacheReadTokens + cacheWriteTokens;
     const cacheReuseRatio = cacheBase > 0 ? cacheReadTokens / cacheBase : null;
-    // 累计口径:全部已索引历史;若最早事件早于窗口起点,说明只覆盖部分区间
-    const allHistoryTokens = this.totalTokensAll(agent, modelRules, sourceId);
-    const earliest = this.earliestEventMs(agent, modelRules, sourceId);
+    // 累计口径:显式日期区间时随区间收敛,只统计该期间;默认近一年窗口则统计全部已索引历史,
+    // 若最早事件早于窗口起点,说明只覆盖部分区间
+    const totalsFromMs = startDate ? startMs : null;
+    const totalsToMs = startDate ? endMs : null;
+    const allHistoryTokens = this.totalTokensAll(agent, modelRules, sourceId, totalsFromMs, totalsToMs);
+    const earliest = this.earliestEventMs(agent, modelRules, sourceId, totalsFromMs, totalsToMs);
 
     return {
       range: { start: boundaries[0].date, end: boundaries[boundaries.length - 1].date, timezone },
-      filter: { agent, timezone, endDate, modelRules, sourceId: sourceId || null },
+      filter: { agent, timezone, endDate, startDate, modelRules, sourceId: sourceId || null },
       archiveScope: { importedSources: Number(this.db.prepare('SELECT COUNT(*) AS count FROM usage_archive_sources WHERE enabled = 1').get().count) },
       matchedModels: this.matchingModels(agent, modelRules, sourceId),
       recordsByAgent: this.matchingRecordsByAgent(modelRules, sourceId),
@@ -508,12 +526,12 @@ ON CONFLICT(root_id) DO UPDATE SET agent = excluded.agent, label = excluded.labe
       const boundaries = buildDayBoundaries(timezone, scope.date, 1);
       startMs = boundaries[0].startMs;
       endMs = boundaries[0].endMs;
-    } else if (scope.kind === 'since') {
-      // 自指定时刻(账号周/月额度周期的起点)至今:起点用精确时刻,终点截到今天结束
-      endDate = localDateString(timezone);
-      startDate = localDateString(timezone, scope.sinceMs);
-      startMs = scope.sinceMs;
-      endMs = buildDayBoundaries(timezone, endDate, 1)[0].endMs;
+    } else if (scope.kind === 'between') {
+      // 显式时间区间(浪费周期 → 本机用量):两侧都是精确时刻,含头不含尾
+      startDate = localDateString(timezone, scope.fromMs);
+      endDate = localDateString(timezone, Math.max(scope.fromMs, scope.toMs - 1));
+      startMs = scope.fromMs;
+      endMs = scope.toMs;
     } else if (scope.days > 0) {
       endDate = localDateString(timezone);
       startDate = null;
