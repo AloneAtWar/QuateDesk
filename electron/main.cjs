@@ -5,6 +5,7 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const { DesktopStore } = require('./storage.cjs');
 const { REMOTE_PORT, createRemoteViewServer } = require('./remote-view.cjs');
+const { DISCOVERY_PORT, startDiscoveryResponder } = require('./discovery-responder.cjs');
 const { queryAccount, authStatusForPollError } = require('./poller.cjs');
 const { clampRetentionDays } = require('./history.cjs');
 const { resolveWasteWindows } = require('./waste.cjs');
@@ -95,6 +96,7 @@ let pollStartedAt = null;
 let pollInProgress = false;
 let remoteViewServer = null;
 let remoteViewError = '';
+let discoveryResponder = null;
 let rendererCrashCount = 0;
 const sentReminders = new Set();
 const providerUsageLoginFlows = new Map();
@@ -167,13 +169,25 @@ const isPrivateIPv4 = (address) => {
   const [first, second] = address.split('.').map(Number);
   return first === 10 || (first === 172 && second >= 16 && second <= 31) || (first === 192 && second === 168);
 };
-const remoteLanUrls = (port) => {
+// 本机全部私网 IPv4（多网卡去重，192.168 优先）：远程访问地址列表与局域网发现应答共用
+const privateIPv4s = () => {
   const addresses = Object.values(os.networkInterfaces()).flatMap((entries) => entries || [])
     .filter((entry) => entry.family === 'IPv4' && !entry.internal && isPrivateIPv4(entry.address))
     .map((entry) => entry.address);
-  const unique = [...new Set(addresses)];
   const priority = (address) => address.startsWith('192.168.') ? 0 : address.startsWith('10.') ? 1 : 2;
-  return unique.sort((a, b) => priority(a) - priority(b)).map((address) => `http://${address}:${port}/remote.html`);
+  return [...new Set(addresses)].sort((a, b) => priority(a) - priority(b));
+};
+const remoteLanUrls = (port) => privateIPv4s().map((address) => `http://${address}:${port}/remote.html`);
+// 局域网发现应答与 /api/hello 的身份自述：与 IP/端口无关的 instanceId 是手机端识别"同一台电脑"的唯一键
+const discoveryInfo = () => {
+  const config = store.loadRemoteAccess();
+  return { id: config.instanceId, name: os.hostname(), port: config.port, addrs: privateIPv4s(), version: app.getVersion() };
+};
+const stopDiscoveryResponder = async () => {
+  if (!discoveryResponder) return;
+  const responder = discoveryResponder;
+  discoveryResponder = null;
+  try { await responder.close(); } catch { /* already closed */ }
 };
 // 远程服务 Host 白名单:本机全部网卡地址 + 回环。非白名单 Host 的 API 请求必须携带有效令牌
 const remoteHostAllowlist = () => {
@@ -192,6 +206,11 @@ async function startRemoteView() {
     config.pairingKey = crypto.randomBytes(32).toString('base64url');
     store.saveRemoteAccess(config);
   }
+  // 生成与 IP/端口无关的实例身份：手机 App 靠它在多网卡/换网络时识别同一台电脑
+  if (!config.instanceId) {
+    config.instanceId = crypto.randomUUID();
+    store.saveRemoteAccess(config);
+  }
   try {
     remoteViewServer = await createRemoteViewServer({
       store,
@@ -200,6 +219,8 @@ async function startRemoteView() {
       authorizeToken: (token, { loopback } = {}) => store.isRemoteTokenAuthorized(token, { loopback }),
       pairDevice: (request) => store.pairRemoteDevice(request),
       pairLocalPreview: () => store.pairLocalPreview(),
+      pairConfirmedDevice: (request) => store.issueRemoteDeviceToken(request),
+      discoveryInfo,
       allowedHosts: remoteHostAllowlist(),
       getHistory: (accountId) => {
         const points = store.loadHistory()[accountId] || [];
@@ -217,11 +238,24 @@ async function startRemoteView() {
   } catch (error) {
     remoteViewError = `本地服务启动失败：${error.message}`;
   }
+  // 局域网发现应答器：UDP 绑定失败不影响 HTTP 服务，手机端仍可手动输入地址
+  await stopDiscoveryResponder();
+  if (remoteViewServer) {
+    try {
+      discoveryResponder = await startDiscoveryResponder({
+        port: DISCOVERY_PORT,
+        getPayload: discoveryInfo,
+        onError: (error) => startupLog(`discovery: ${error.message}`),
+      });
+    } catch (error) {
+      startupLog(`discovery: UDP ${DISCOVERY_PORT} 应答器启动失败（手机端仍可手动输入地址）：${error.message}`);
+    }
+  }
 }
 
 async function remoteViewStatus() {
   const config = store.loadRemoteAccess();
-  return { enabled: config.enabled, running: Boolean(remoteViewServer), error: remoteViewError, pairingKey: config.pairingKey, devices: store.listRemoteDevices(), readOnly: true, localUrl: remoteLocalUrl(config.port), lanUrls: remoteLanUrls(config.port), port: config.port };
+  return { enabled: config.enabled, running: Boolean(remoteViewServer), error: remoteViewError, pairingKey: config.pairingKey, devices: store.listRemoteDevices(), pendingPairings: remoteViewServer?.pendingPairings?.() || [], readOnly: true, localUrl: remoteLocalUrl(config.port), lanUrls: remoteLanUrls(config.port), port: config.port };
 }
 
 // 开机自启由操作系统的登录项管理,作为唯一事实来源,不写入应用状态
@@ -1869,6 +1903,7 @@ function registerIpc() {
       if (remoteViewServer) await new Promise((resolve) => remoteViewServer.close(resolve));
       remoteViewServer = null;
       remoteViewError = '';
+      await stopDiscoveryResponder();
     }
     return remoteViewStatus();
   });
@@ -1897,6 +1932,12 @@ function registerIpc() {
     const previous = store.loadRemoteAccess();
     store.saveRemoteAccess({ ...previous, pairingKey: crypto.randomBytes(32).toString('base64url') });
     return remoteViewStatus();
+  });
+  // 手机 App 4 位配对码：电脑版界面输码确认（准入凭据就是这次人工输入，无需配对密钥）
+  ipcMain.handle('remote:pair-confirm', (_event, code) => {
+    if (!remoteViewServer?.confirmPairingCode) throw new Error('局域网服务未启动，请先启用远程查看');
+    const result = remoteViewServer.confirmPairingCode(code);
+    return { ...result, devices: store.listRemoteDevices() };
   });
   ipcMain.handle('remote:remove-device', (_event, deviceId) => {
     if (typeof deviceId !== 'string' || !deviceId) throw new Error('缺少设备标识');
@@ -2815,6 +2856,7 @@ app.on('before-quit', () => {
   quitting = true;
   startupLog('quit: before-quit');
   remoteViewServer?.close();
+  discoveryResponder?.close();
   if (pollTimer) clearInterval(pollTimer);
   if (updateCheckTimer) clearInterval(updateCheckTimer);
   usageSync?.dispose();

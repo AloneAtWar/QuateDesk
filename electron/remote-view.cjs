@@ -1,11 +1,16 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { resolveWasteWindows } = require('./waste.cjs');
 const { CliUsageService } = require('./cli-usage/index.cjs');
 const { handleApiV1 } = require('./api-v1.cjs');
 
 const REMOTE_PORT = 43187;
+// 手机 App 4 位配对码会话：内存保存、5 分钟有效、最多 8 个并存；批准后 60 秒内可领取
+const PAIRING_SESSION_TTL_MS = 5 * 60_000;
+const PAIRING_SESSION_LIMIT = 8;
+const PAIRING_CLAIM_GRACE_MS = 60_000;
 const WINDOW_FIELDS = ['key', 'remaining', 'used', 'total', 'unit', 'resetAt', 'available', 'amount', 'limitAmount'];
 const HISTORY_FIELDS = ['remaining', 'amount', 'limit', 'unit', 'resetAt'];
 const CONTENT_TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp' };
@@ -156,6 +161,70 @@ const json = (response, status, body) => {
   response.end(JSON.stringify(body));
 };
 
+// 配对码会话仅在内存中存活；过期/已领取的顺手清掉
+const prunePairingSessions = (sessions) => {
+  const now = Date.now();
+  for (const [sessionId, session] of sessions) {
+    if (session.claimed
+      || (session.approvedAt && now > session.approvedAt + PAIRING_CLAIM_GRACE_MS)
+      || now > session.expiresAt) sessions.delete(sessionId);
+  }
+};
+
+const sanitizeDeviceName = (value) => String(value || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60);
+
+const pairingError = (message, status = 400) => Object.assign(new Error(message), { status });
+
+// 手机端发起配对：签发 4 位配对码。同一台手机重复发起时沿用未确认的会话并续期，
+// 避免电脑端同时挂出多条等待；并存会话的配对码互不重复，防止输码时配错对象
+function initiatePairingSession(sessions, body) {
+  prunePairingSessions(sessions);
+  const deviceId = String(body?.id || '');
+  const deviceName = sanitizeDeviceName(body?.name);
+  if (!/^[\w-]{8,128}$/.test(deviceId)) throw pairingError('设备标识无效，请更新手机 App 后重试');
+  if (!deviceName) throw pairingError('请填写设备名称');
+  for (const session of sessions.values()) {
+    if (session.deviceId === deviceId && !session.approvedAt) {
+      session.expiresAt = Date.now() + PAIRING_SESSION_TTL_MS;
+      return { sessionId: session.sessionId, code: session.code, expiresIn: Math.round(PAIRING_SESSION_TTL_MS / 1000) };
+    }
+  }
+  while (sessions.size >= PAIRING_SESSION_LIMIT) {
+    const oldest = [...sessions.entries()].sort(([, a], [, b]) => a.createdAt - b.createdAt)[0];
+    if (!oldest) break;
+    sessions.delete(oldest[0]);
+  }
+  const liveCodes = new Set([...sessions.values()].map((session) => session.code));
+  let code = String(crypto.randomInt(0, 10_000)).padStart(4, '0');
+  while (liveCodes.has(code)) code = String(crypto.randomInt(0, 10_000)).padStart(4, '0');
+  const session = {
+    sessionId: crypto.randomBytes(24).toString('base64url'),
+    code,
+    deviceId,
+    deviceName,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + PAIRING_SESSION_TTL_MS,
+    approvedAt: 0,
+    claimed: false,
+    token: '',
+    server: null,
+  };
+  sessions.set(session.sessionId, session);
+  return { sessionId: session.sessionId, code, expiresIn: Math.round(PAIRING_SESSION_TTL_MS / 1000) };
+}
+
+// 手机端领取：未确认返回 pending；已确认返回令牌与电脑身份信息（一次性，领完即焚）
+function claimPairingSession(sessions, body) {
+  prunePairingSessions(sessions);
+  const session = sessions.get(String(body?.sessionId || ''));
+  if (!session) throw pairingError('配对会话不存在或已过期，请重新发起配对', 404);
+  if (!session.approvedAt) return { status: 'pending' };
+  const payload = { status: 'ok', token: session.token, deviceId: session.deviceId, deviceName: session.deviceName, server: session.server };
+  session.claimed = true;
+  sessions.delete(session.sessionId);
+  return payload;
+}
+
 // 本机用量查询参数 → CliUsageService 校验入参;modelRules 以 JSON 查询参数传入
 const parseModelRulesParam = (url) => {
   const raw = url.searchParams.get('modelRules');
@@ -204,9 +273,32 @@ function handleCliUsage({ pathname, url, request, response, cliUsage }) {
   return json(response, 404, { error: 'not_found' });
 }
 
-function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, pairLocalPreview, getHistory, getCycles, getUsage, queryUsage, refreshAccounts, appVersion, cliUsage, port = REMOTE_PORT, allowedHosts = [] }) {
+function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, pairLocalPreview, pairConfirmedDevice, discoveryInfo, getHistory, getCycles, getUsage, queryUsage, refreshAccounts, appVersion, cliUsage, port = REMOTE_PORT, allowedHosts = [] }) {
   let refreshInFlight = null;
   const hostAllowlist = new Set([...LOOPBACK_HOSTS, ...[].concat(allowedHosts)].map(normalizeHost));
+  const pairingSessions = new Map();
+  const serverInfo = () => (typeof discoveryInfo === 'function' ? discoveryInfo() : {});
+  const withServerInfo = (result) => ({ ...result, server: serverInfo() });
+  // 电脑版界面输入手机屏上的 4 位配对码：匹配会话后直接签发设备令牌，等手机来领取
+  const confirmPairingCode = (code) => {
+    prunePairingSessions(pairingSessions);
+    const normalized = String(code || '').trim();
+    if (!/^\d{4}$/.test(normalized)) throw pairingError('请输入 4 位数字配对码');
+    const session = [...pairingSessions.values()].find((item) => item.code === normalized && !item.approvedAt);
+    if (!session) throw pairingError('配对码无效或已过期，请在手机端重新发起配对');
+    if (typeof pairConfirmedDevice !== 'function') throw pairingError('配对服务不可用', 503);
+    const issued = pairConfirmedDevice({ id: session.deviceId, name: session.deviceName });
+    session.approvedAt = Date.now();
+    session.token = issued.token;
+    session.server = serverInfo();
+    return { deviceName: issued.deviceName || session.deviceName };
+  };
+  const pendingPairings = () => {
+    prunePairingSessions(pairingSessions);
+    return [...pairingSessions.values()].filter((session) => !session.approvedAt)
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map((session) => ({ deviceName: session.deviceName, createdAt: session.createdAt, expiresAt: session.expiresAt }));
+  };
   const server = http.createServer((request, response) => {
     setHeaders(response);
     if (!['GET', 'HEAD', 'PATCH', 'POST'].includes(request.method)) return json(response, 405, { error: 'method_not_supported' });
@@ -229,7 +321,7 @@ function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, pa
               if (!isLoopbackRequest(request) || !LOOPBACK_HOSTS.has(normalizeHost(request.headers.host)) || typeof pairLocalPreview !== 'function') return json(response, 403, { error: 'local_preview_unavailable' });
               return json(response, 200, pairLocalPreview());
             }
-            return json(response, 200, pairDevice(body));
+            return json(response, 200, withServerInfo(pairDevice(body)));
           }
           catch (error) {
             const invalidPayload = /设备标识|设备名称/.test(error.message || '');
@@ -237,6 +329,28 @@ function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, pa
           }
         }).catch((error) => json(response, error.message === 'body_too_large' ? 413 : error.message === 'invalid_json' ? 400 : 500, { error: error.message || 'pairing_failed' }));
         return;
+      }
+      // 手机 App 专用：局域网发现自述 / 4 位配对码会话。免 Bearer 令牌，但仍必须来自
+      // 本机地址 Host（与数据接口同一条 DNS rebinding 防线），准入凭据是配对码/一次性 sessionId
+      if (pathname === '/api/hello' || pathname === '/api/pair/initiate' || pathname === '/api/pair/claim') {
+        if (!hostAllowlist.has(normalizeHost(request.headers.host))) return json(response, 421, { error: 'host_not_allowed' });
+        if (pathname === '/api/hello') {
+          if (request.method !== 'GET') return json(response, 405, { error: 'method_not_supported' });
+          return json(response, 200, { app: 'quota-desk', version: safeText(appVersion, 40), ...serverInfo() });
+        }
+        if (request.method !== 'POST') return json(response, 405, { error: 'method_not_supported' });
+        if (!/^application\/json(?:;|$)/i.test(String(request.headers['content-type'] || ''))) return json(response, 415, { error: 'json_required' });
+        return readJsonBody(request, 4096).then((body) => {
+          try {
+            return json(response, 200, pathname === '/api/pair/initiate'
+              ? initiatePairingSession(pairingSessions, body)
+              : claimPairingSession(pairingSessions, body));
+          }
+          catch (error) {
+            const status = Number(error?.status) || 400;
+            return json(response, status, { error: status === 404 ? 'pairing_session_not_found' : 'pairing_request_invalid', message: error.message || '配对失败' });
+          }
+        }).catch((error) => json(response, error.message === 'body_too_large' ? 413 : error.message === 'invalid_json' ? 400 : 500, { error: error.message || 'pairing_failed' }));
       }
       const providedToken = /^Bearer (\S+)$/.exec(String(request.headers.authorization || ''))?.[1] || '';
       const tokenAuthorized = typeof authorizeToken === 'function' && authorizeToken(providedToken, { loopback: isLoopbackRequest(request) });
@@ -315,6 +429,9 @@ function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, pa
     if (request.method === 'HEAD') return response.end();
     fs.createReadStream(filePath).pipe(response);
   });
+  // 挂到 server 对象上：主进程 IPC（电脑版界面输码确认）与状态轮询直接调用，不改变 resolve 结构
+  server.confirmPairingCode = confirmPairingCode;
+  server.pendingPairings = pendingPairings;
   return new Promise((resolve, reject) => {
     server.once('error', reject);
     // Bind all interfaces so paired devices on the local network can reach the viewer.

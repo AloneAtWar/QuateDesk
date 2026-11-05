@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('quotaDesk', {
   setRemoteViewEnabled: (enabled) => ipcRenderer.invoke('remote:set-enabled', enabled),
   setRemoteViewPort: (port) => ipcRenderer.invoke('remote:set-port', port),
   rotateRemotePairingKey: () => ipcRenderer.invoke('remote:rotate-pairing-key'),
+  confirmRemotePairingCode: (code) => ipcRenderer.invoke('remote:pair-confirm', code),
   removeRemoteViewDevice: (deviceId) => ipcRenderer.invoke('remote:remove-device', deviceId),
   getProviderUsage: (accountId, options) => ipcRenderer.invoke('usage:get', accountId, options),
   connectProviderUsage: (accountId) => ipcRenderer.invoke('usage:connect', accountId),

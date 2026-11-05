@@ -99,6 +99,8 @@ class DesktopStore {
     return {
       enabled: Boolean(saved.enabled),
       pairingKey: decrypt(saved.pairingKey),
+      // 电脑端实例身份：与 IP/端口无关，手机 App 靠它在多网卡/换网络时识别"同一台电脑"
+      instanceId: typeof saved.instanceId === 'string' && /^[\w-]{8,64}$/.test(saved.instanceId) ? saved.instanceId : '',
       // 旧版本会把「本机预览」写进设备列表,读入时直接丢弃,不进配对设备
       devices: Array.isArray(saved.devices) ? saved.devices.filter((device) => device && device.id !== 'local-preview' && typeof device.id === 'string' && /^[\w-]{1,128}$/.test(device.id) && /^[a-f\d]{64}$/i.test(device.tokenHash || '')).map((device) => ({
         id: device.id,
@@ -110,7 +112,7 @@ class DesktopStore {
     };
   }
 
-  saveRemoteAccess({ enabled, pairingKey = '', devices = [], port = REMOTE_PORT }) {
+  saveRemoteAccess({ enabled, pairingKey = '', instanceId = '', devices = [], port = REMOTE_PORT }) {
     if (!safeStorage.isEncryptionAvailable()) throw new Error('系统凭据加密不可用，无法启用远程查看');
     const normalizedPort = Number(port);
     if (!Number.isInteger(normalizedPort) || normalizedPort < 1024 || normalizedPort > 65535) throw new Error('访问端口必须是 1024–65535 之间的整数');
@@ -123,6 +125,7 @@ class DesktopStore {
     writeJsonDurable(this.remoteAccessPath, {
       enabled: Boolean(enabled),
       pairingKey: pairingKey ? safeStorage.encryptString(String(pairingKey)).toString('base64') : '',
+      instanceId: typeof instanceId === 'string' && /^[\w-]{8,64}$/.test(instanceId) ? instanceId : '',
       devices: safeDevices,
       port: normalizedPort,
     });
@@ -156,6 +159,12 @@ class DesktopStore {
     const supplied = Buffer.from(String(pairingKey || ''));
     const expected = Buffer.from(String(config.pairingKey || ''));
     if (!expected.length || supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) throw new Error('配对信息已失效，请在电脑端刷新配对信息后重试');
+    return this.issueRemoteDeviceToken({ id, name });
+  }
+
+  // 4 位配对码流程：授权来自电脑版界面的人工输码确认，签发令牌时无需再校验配对密钥
+  issueRemoteDeviceToken({ id, name }) {
+    const config = this.loadRemoteAccess();
     if (typeof id !== 'string' || !/^[\w-]{8,128}$/.test(id)) throw new Error('设备标识无效，请刷新页面后重新配对');
     const deviceName = String(name || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60);
     if (!deviceName) throw new Error('请填写设备名称');

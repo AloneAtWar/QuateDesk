@@ -36,7 +36,17 @@ function readInitialConnection() {
   const pairingKey = params.get('pair') || '';
   // 安卓 App 会把当前主题拼在链接里(#theme=light|dark),页面启动时直接应用,避免进入后再翻转闪烁
   const themeParam = params.get('theme');
-  if (pairingKey || params.has('access') || params.has('theme')) history.replaceState(null, '', location.pathname + location.search);
+  // 安卓 App 原生配对后把令牌存在手机本地,每次连接通过 #access= 注入:换 IP/端口不丢会话。
+  // fragment 不随 HTTP 请求发送,首帧前写入 localStorage 并立即清掉地址栏
+  const accessToken = params.get('access') || '';
+  if (accessToken) {
+    localStorage.setItem(TOKEN_KEY, accessToken);
+    const deviceId = params.get('did') || '';
+    const deviceName = params.get('dname') || '';
+    if (deviceId) localStorage.setItem(DEVICE_ID_KEY, deviceId);
+    if (deviceName) localStorage.setItem(DEVICE_NAME_KEY, deviceName);
+  }
+  if (pairingKey || accessToken || params.has('theme')) history.replaceState(null, '', location.pathname + location.search);
   return {
     pairingKey,
     theme: themeParam === 'light' || themeParam === 'dark' ? themeParam : null,

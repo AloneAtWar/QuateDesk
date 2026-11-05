@@ -2145,23 +2145,30 @@ function RemoteViewSettings() {
   const [qrOpen, setQrOpen] = useState(false);
   const [selectedLanUrl, setSelectedLanUrl] = useState('');
   const [portDraft, setPortDraft] = useState('');
+  // 手机 App 4 位配对码：输码确认 + 等待确认的手机列表；有等待时轮询加密到 1.5s
+  const [pairCode, setPairCode] = useState('');
+  const [pairFeedback, setPairFeedback] = useState(null);
+  const pendingCountRef = useRef(0);
   useEffect(() => {
     if (!bridge?.getRemoteViewStatus) return undefined;
     let active = true;
+    let timer = 0;
     const refreshStatus = () => bridge.getRemoteViewStatus().then((nextStatus) => {
       if (!active) return;
       setStatus(nextStatus);
       setError('');
+      pendingCountRef.current = Array.isArray(nextStatus?.pendingPairings) ? nextStatus.pendingPairings.length : 0;
     }).catch((reason) => {
       if (active) setError(reason.message || '读取远程查看状态失败');
+    }).finally(() => {
+      if (active) timer = setTimeout(refreshStatus, qrOpen || pendingCountRef.current > 0 ? 1_500 : 5_000);
     });
     refreshStatus();
-    const timer = setInterval(refreshStatus, qrOpen ? 1_500 : 5_000);
-    const onVisible = () => { if (document.visibilityState === 'visible') refreshStatus(); };
+    const onVisible = () => { if (document.visibilityState === 'visible') { clearTimeout(timer); refreshStatus(); } };
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       active = false;
-      clearInterval(timer);
+      clearTimeout(timer);
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [bridge, qrOpen]);
@@ -2172,6 +2179,20 @@ function RemoteViewSettings() {
   const canSavePort = Number.isInteger(portNumber) && portNumber >= 1024 && portNumber <= 65535 && portNumber !== status?.port;
   const pairedDevices = status?.devices || [];
   const hasPairedDevices = pairedDevices.length > 0;
+  const pendingPairings = Array.isArray(status?.pendingPairings) ? status.pendingPairings : [];
+  const confirmPairCode = async () => {
+    const code = pairCode.trim();
+    if (!/^\d{4}$/.test(code) || busy || !bridge?.confirmRemotePairingCode) { if (!/^\d{4}$/.test(code)) setPairFeedback({ ok: false, message: '请输入手机屏幕上显示的 4 位数字配对码' }); return; }
+    setBusy('pair-code'); setPairFeedback(null);
+    try {
+      const result = await bridge.confirmRemotePairingCode(code);
+      setPairFeedback({ ok: true, message: `已与「${result.deviceName || '手机'}」配对成功` });
+      setPairCode('');
+      setStatus(await bridge.getRemoteViewStatus());
+    }
+    catch (reason) { setPairFeedback({ ok: false, message: reason.message || '配对确认失败' }); }
+    finally { setBusy(''); }
+  };
   const action = async (name, operation) => {
     setBusy(name); setError('');
     try { setStatus(await operation()); }
@@ -2226,6 +2247,23 @@ function RemoteViewSettings() {
     {status?.enabled && <>
       <div className={`remote-setting-status ${status.running ? 'ok' : 'fail'}`}><i />{status.running ? `运行中 · 端口 ${status.port}` : '局域网服务未启动'}</div>
       {status.error && <small className="remote-setting-error">{status.error}</small>}
+      {status.running && <div className="remote-pair-code">
+        <div className="remote-pair-code-head"><b>手机端配对码</b><small>手机 App 连接这台电脑时会显示 4 位配对码，在此输入完成配对</small></div>
+        {pendingPairings.length > 0 && <div className="remote-pair-code-pending">
+          <b>{pendingPairings[pendingPairings.length - 1].deviceName}</b>
+          <span>{pendingPairings.length > 1 ? `等 ${pendingPairings.length} 台手机正在等待确认 · ` : '正在等待确认 · '}请在手机屏幕上查看配对码</span>
+        </div>}
+        <div className="remote-pair-code-row">
+          <input
+            type="text" inputMode="numeric" pattern="\d{0,4}" maxLength={4}
+            value={pairCode} aria-label="手机端配对码" placeholder="4 位配对码"
+            onChange={(event) => { setPairCode(event.target.value.replace(/\D/g, '').slice(0, 4)); setPairFeedback(null); }}
+            onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); confirmPairCode(); } }}
+          />
+          <button type="button" className="outline-button remote-port-save" disabled={Boolean(busy) || !/^\d{4}$/.test(pairCode)} onClick={confirmPairCode}>{busy === 'pair-code' ? '确认中…' : '确认配对'}</button>
+        </div>
+        {pairFeedback && <small className={pairFeedback.ok ? 'remote-pair-code-ok' : 'remote-setting-error'} role="alert">{pairFeedback.message}</small>}
+      </div>}
       {status.running && !pairingLink && <div className="remote-setting-hint">暂未发现局域网地址，请确认电脑已连接 Wi-Fi 或以太网。</div>}
       <small className="drawer-help">电脑需保持运行。跨网络访问由你使用的 VPN 或内网穿透提供。</small>
     </>}
