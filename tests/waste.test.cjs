@@ -59,7 +59,7 @@ test('detectCycleClose：resetAt 为数值型毫秒时间戳（Z.ai 场景）→
   assert.deepEqual(detectCycleClose(prevSec, currSec, prevAt, currAt).kind, 'natural');
 });
 
-test('detectCycleClose：resetAt 没变 → 同一周期，即使剩余率回升也不算重置', () => {
+test('detectCycleClose：resetAt 没变 → 配对层面不判定周期结束（回补场景由 extractCycles 挂起确认）', () => {
   const reset = '2026-09-08T02:00:00Z';
   const prevAt = T0 - 5 * 60_000;
   assert.equal(detectCycleClose({ remaining: 40, resetAt: reset }, { remaining: 100, resetAt: reset }, prevAt, T0), null);
@@ -226,6 +226,95 @@ test('extractCycles：monthly natural 的 from 倒推一个日历月', () => {
   assert.equal(cycles[0].end, '2026-10-01T00:00:00.000Z');
 });
 
+test('extractCycles：剩余率回补但 resetAt 没变且持续 → 回补前状态单独立档 early，回补后的短周期自然到期（Kimi 提前回补场景）', () => {
+  // 10/26 04:17（北京时间）Kimi 把周额度从 7.69% 直接回满，resetAt 没动；10/26 09:58 才自然到期
+  const R1 = '2026-10-19T01:58:06.442Z';
+  const R2 = '2026-10-26T01:58:06.442Z';
+  const R3 = '2026-11-02T01:58:06.442Z';
+  const point = (at, remaining, resetAt) => ({ at, windows: { weekly: { remaining, amount: null, limit: null, unit: '%', resetAt } } });
+  const cycles = extractCycles([
+    // 上一周期 10/12 → 10/19 正常到期（剩 0）
+    point('2026-10-19T01:52:00Z', 0, R1),
+    point('2026-10-19T02:02:00Z', 99.36, R2),
+    // 本周期用到 7.69% 后被厂商提前回满
+    point('2026-10-25T20:07:31Z', 7.69, R2),
+    point('2026-10-25T20:12:31Z', 7.69, R2),
+    point('2026-10-25T20:17:30Z', 100, R2),   // 回补，resetAt 没变
+    point('2026-10-25T20:22:30Z', 100, R2),   // 下一观测仍在高位 → 确认真回补
+    point('2026-10-26T01:57:31Z', 99.91, R2), // 自然到期前最后观测
+    point('2026-10-26T02:02:30Z', 99.78, R3), // 新周期
+  ], ['weekly']);
+  assert.equal(cycles.length, 3);
+  // 周期 1：10/12 → 10/19 自然到期，from 按标称周期倒推
+  assert.equal(cycles[0].kind, 'natural');
+  assert.equal(cycles[0].end, R1);
+  assert.equal(cycles[0].remaining, 0);
+  assert.equal(cycles[0].from, '2026-10-12T01:58:06.442Z');
+  // 周期 2：回补前的状态提前结束，浪费 = 回补前的 7.69%（此前被漏记/被回补后的值覆盖）
+  assert.equal(cycles[1].kind, 'early');
+  assert.equal(cycles[1].end, '2026-10-25T20:12:31.000Z');
+  assert.equal(cycles[1].observedAt, '2026-10-25T20:12:31.000Z');
+  assert.equal(cycles[1].remaining, 7.69);
+  assert.equal(cycles[1].reliable, false); // early 一律不计入统计
+  assert.equal(cycles[1].from, R1);
+  // 周期 3：回补后的短周期自然到期，from 从回补时刻起算（不被标称 7 天倒推）
+  assert.equal(cycles[2].kind, 'natural');
+  assert.equal(cycles[2].end, R2);
+  assert.equal(cycles[2].remaining, 99.91);
+  assert.equal(cycles[2].from, '2026-10-25T20:17:30.000Z');
+});
+
+test('extractCycles：剩余率单点突升后弹回原值 → 毛刺作废不归档（Copilot 假数据场景）', () => {
+  // 10/28 19:10 一次轮询返回 remaining=100，20 分钟后精确弹回 0.3：不是回补
+  const R = '2026-11-01T00:00:00Z';
+  const R2 = '2026-12-01T00:00:00Z';
+  const point = (at, remaining, resetAt) => ({ at, windows: { monthly: { remaining, amount: null, limit: null, unit: '%', resetAt } } });
+  const cycles = extractCycles([
+    point('2026-10-28T18:00:00Z', 0.3, R),
+    point('2026-10-28T19:10:14Z', 100, R), // 假数据突升
+    point('2026-10-28T19:30:12Z', 0.3, R), // 弹回原值 → 候选作废
+    point('2026-10-31T23:55:00Z', 0.3, R),
+    point('2026-11-01T00:05:00Z', 100, R2),
+  ], ['monthly']);
+  assert.equal(cycles.length, 1);
+  assert.equal(cycles[0].kind, 'natural');
+  assert.equal(cycles[0].remaining, 0.3);
+  assert.equal(cycles[0].end, '2026-11-01T00:00:00.000Z');
+});
+
+test('extractCycles：稀疏轮询下回补确认点已跨过旧 resetAt → 先归档 early，再归档回补后的自然到期', () => {
+  // 回补发生在两次观测之间，确认时旧 resetAt 已被跨过：两条记录都要有，不能只留一条
+  const R1 = '2026-10-26T01:58:06Z';
+  const R2 = '2026-11-02T01:58:06Z';
+  const point = (at, remaining, resetAt) => ({ at, windows: { weekly: { remaining, amount: null, limit: null, unit: '%', resetAt } } });
+  const cycles = extractCycles([
+    point('2026-10-25T20:12:31Z', 7.69, R1),
+    point('2026-10-25T20:17:30Z', 100, R1),  // 回补
+    point('2026-10-26T02:02:30Z', 99.78, R2), // 确认真回补时已跨过旧 resetAt
+  ], ['weekly']);
+  assert.equal(cycles.length, 2);
+  assert.equal(cycles[0].kind, 'early');
+  assert.equal(cycles[0].remaining, 7.69);
+  assert.equal(cycles[0].end, '2026-10-25T20:12:31.000Z');
+  assert.equal(cycles[1].kind, 'natural');
+  assert.equal(cycles[1].end, '2026-10-26T01:58:06.000Z');
+  assert.equal(cycles[1].remaining, 100); // 回补后档位的最后观测
+  assert.equal(cycles[1].from, '2026-10-25T20:17:30.000Z');
+});
+
+test('extractCycles：滑动窗口剩余率回升（resetAt 没变）不触发回补归档', () => {
+  // five_hour 这类窗口不在周期浪费统计里，剩余率回升是额度正常滚动
+  const R = '2026-10-27T14:58:06Z';
+  const point = (at, remaining, resetAt) => ({ at, windows: { five_hour: { remaining, amount: null, limit: null, unit: '%', resetAt } } });
+  const cycles = extractCycles([
+    point('2026-10-27T14:53:00Z', 61.08, R),
+    point('2026-10-27T14:58:00Z', 100, R),
+    point('2026-10-27T15:03:00Z', 99, '2026-10-27T19:58:06Z'),
+  ], ['five_hour']);
+  assert.equal(cycles.length, 1);
+  assert.equal(cycles[0].kind, 'natural');
+});
+
 test('mergeCycles：按 窗口:类型:结束时间 去重，可安全重复扫描', () => {
   const points = [
     ...weeklyPoints('2026-09-01T02:00:00Z', [90, 60, 40], T0 - 15 * 60_000),
@@ -312,6 +401,18 @@ test('dedupeCycles：相近结束时间的重复记录合并为更可信的一�
   const nextWeek = { ...a, end: '2026-09-28T01:58:05.417Z', observedAt: '2026-09-27T11:00:00Z' };
   assert.equal(dedupeCycles([a, nextWeek]).length, 2);
   assert.deepEqual(dedupeCycles(null), []);
+});
+
+test('dedupeCycles：natural 的 from 只修正早于标称起点的漂移，紧跟提前重置的短周期保留回补起点', () => {
+  // 链式漂移的旧记录（from 比标称早 9 天）→ 修正为 end−7d
+  const drifted = { window: 'weekly', kind: 'natural', end: '2026-10-26T01:58:06Z', from: '2026-10-10T00:00:00Z', observedAt: '2026-10-26T01:57:31Z', remaining: 99.91, reliable: true };
+  assert.equal(dedupeCycles([drifted])[0].from, '2026-10-19T01:58:06.000Z');
+  // 提前重置后 5.7 小时自然到期的短周期：from（回补时刻）晚于标称起点 → 原样保留
+  const stub = { ...drifted, from: '2026-10-25T20:17:30Z' };
+  assert.equal(dedupeCycles([stub])[0].from, '2026-10-25T20:17:30Z');
+  // from 缺失的旧记录仍回填标称起点
+  const missing = { ...drifted, from: undefined };
+  assert.equal(dedupeCycles([missing])[0].from, '2026-10-19T01:58:06.000Z');
 });
 
 test('purgeGhostCycles：与 natural 共享 observedAt 的幽灵 early 被删除，真实提前重置保留', () => {

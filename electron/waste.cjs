@@ -9,6 +9,7 @@ const RELIABLE_FACTOR = 2;          // 最后观测距重置 ≤ 2×轮询中位
 const FALLBACK_POLL_MS = 5 * 60_000;
 const REFILL_EPS = 5;               // 剩余率回升 ≥5 个百分点视为额度回补（重置的必要证据）
 const MERGE_TOL_MS = 6 * 60 * 60_000; // 归档合并时「同一周期」的结束时间容差：不同批次扫描的锚点会差几分钟
+const REFILL_CYCLE_KEYS = ['weekly', 'monthly']; // 回补判定仅限周期型窗口：滑动窗口剩余率回升是正常滚动
 
 // 兼容数值/纯数字字符串的 epoch 时间戳（如 Z.ai 直接返回毫秒数）：≥1e12 按毫秒，否则按秒
 const ts = (value) => {
@@ -32,7 +33,9 @@ const medianGapMs = (points) => {
 // - natural：旧 resetAt 已被两次轮询跨过（含电脑关机断档期间跨过的）且剩余率有回补（或旧值已接近满格，回补不可见）→ 旧周期自然到期，end = 旧 resetAt
 // - early：旧 resetAt 还没到期就被改期且剩余率明显回升 → 厂商提前重置；
 //   真实清零时刻发生在两次轮询之间、观测不到，end ≈ 最后观测时间
-// - resetAt 没变（抖动容差内）、或随轮询同步后移（滑动窗口，步长≈轮询间隔）→ 同一周期
+// - resetAt 没变（抖动容差内）、或随轮询同步后移（滑动窗口，步长≈轮询间隔）→ 同一周期；
+//   例外是「剩余率回补但 resetAt 没变」（Kimi 提前回满额度）——配对层面无法判定，
+//   由 extractCycles 挂起候选并向后看一个观测点确认后才归档
 // - 改期但剩余率没有回升：旧时刻已过 → 厂商推迟了重置；旧时刻未到 → 滑动窗口重新锚定。
 //   两种情况都没有发生重置，同一周期（如整周没用、resetAt=now+7d 一直滑动的窗口）
 // - resetAt 缺失 → 单点无法判定；由 extractCycles 记住最后一个带 resetAt 的快照，恢复后再比对
@@ -90,6 +93,9 @@ const naturalCycleStartMs = (windowKey, endMs) => {
 // 从历史快照提取某账号的周期档案（回填与增量共用：每次全量扫描，靠 mergeCycles 去重）
 // resetAt 暂时缺失的处理：记住最后一个带 resetAt 的快照，等恢复后拿新值与它比较（相同=同周期）；
 // 若直到历史末尾都没恢复，则把「消失」本身认定为一次周期结束——旧 resetAt 已被跨过算自然到期，否则算提前重置
+// 剩余率回补但 resetAt 没变（Kimi 提前回满额度）：厂商不把回补和改期一起下发，resetAt 判据看不到。
+// 此时挂起候选、向后看一个观测点：仍比回补前高 ≥REFILL_EPS → 真回补，周期提前结束（early）；
+// 弹回原值附近 → 单点毛刺（Copilot 假数据），候选作废
 const extractCycles = (points, windowKeys) => {
   const median = medianGapMs(points);
   const records = [];
@@ -98,6 +104,8 @@ const extractCycles = (points, windowKeys) => {
     let lastSeenAtMs = null; // 该窗口最后一个有数据的快照时间（含 resetAt 缺失的）
     let sawMissing = false;  // prev 之后是否出现过 resetAt 缺失的点
     let cycleFromMs = null;
+    let cycleFromEarly = false; // 当前周期是否由提前重置开启：自然到期时不再按标称周期倒推 from
+    let pendingRefill = null;   // 回补候选 { base: 回补前最后稳定点, rise: 回补后的第一个点 }
     for (const point of points || []) {
       const sample = point.windows?.[key];
       const atMs = ts(point.at);
@@ -105,15 +113,43 @@ const extractCycles = (points, windowKeys) => {
       lastSeenAtMs = atMs;
       if (!ts(sample.resetAt)) { if (prev) sawMissing = true; continue; }
       if (!prev) { prev = { sample, atMs }; cycleFromMs = atMs; continue; }
+      // 回补候选裁决：仍比回补前高 → 真回补，归档提前结束并把基线切到回补后的档位
+      if (pendingRefill) {
+        const refillRem = Number(sample.remaining);
+        const baseRem = Number(pendingRefill.base.sample.remaining);
+        if (Number.isFinite(refillRem)) {
+          if (refillRem - baseRem >= REFILL_EPS) {
+            const { base, rise } = pendingRefill;
+            records.push(buildCycleRecord(key, base, cycleFromMs ?? base.atMs, { kind: 'early', end: base.atMs }, median));
+            cycleFromMs = rise.atMs;
+            cycleFromEarly = true;
+            prev = rise; // 回补后的观测与当前点继续配对（可能与自然到期重合）
+          }
+          pendingRefill = null;
+        }
+        // 剩余率缺失：候选继续挂起，先按当前基线配对
+      }
       const close = detectCycleClose(prev.sample, sample, prev.atMs, atMs);
       if (close) {
         const fallbackFromMs = cycleFromMs ?? prev.atMs;
-        const startMs = close.kind === 'natural' ? (naturalCycleStartMs(key, close.end) ?? fallbackFromMs) : fallbackFromMs;
+        const startMs = close.kind === 'natural' && !cycleFromEarly
+          ? (naturalCycleStartMs(key, close.end) ?? fallbackFromMs)
+          : fallbackFromMs;
         records.push(buildCycleRecord(key, prev, startMs, close, median));
         // 新周期的起点：自然到期 = 旧周期结束时刻；提前重置 ≈ 当前观测时间
         cycleFromMs = close.kind === 'natural' ? close.end : atMs;
+        cycleFromEarly = close.kind !== 'natural';
+        pendingRefill = null; // 周期已结束，未决的回补候选作废
       }
       sawMissing = false;
+      // 回补候选：resetAt 没变但剩余率突升 ≥REFILL_EPS；仅周期型窗口（滑动窗口的回升是正常滚动）
+      if (!pendingRefill && REFILL_CYCLE_KEYS.includes(key)
+        && Math.abs(ts(sample.resetAt) - ts(prev.sample.resetAt)) <= RESET_JITTER_MS
+        && Number.isFinite(Number(prev.sample.remaining)) && Number.isFinite(Number(sample.remaining))
+        && Number(sample.remaining) - Number(prev.sample.remaining) >= REFILL_EPS) {
+        pendingRefill = { base: prev, rise: { sample, atMs } };
+        continue; // 回补点先不接入配对链，基线保持在回补前
+      }
       prev = { sample, atMs };
     }
     // resetAt 消失后一直没恢复：归档一次周期结束。end 的取法与恢复后桥接判定一致，日后恢复不会重复归档
@@ -161,7 +197,8 @@ const mergeCycles = (existing, extracted, coveredFromMs = null) => {
 
 // 读取档案时清洗：同一 窗口+类型 结束时间相近的重复记录（早期只增不覆盖的合并留下的）
 // 合并为一条，保留更可信的（reliable 优先，观测点更晚的 end 锚点更准），
-// 并按标称周期修正 natural 记录的起点
+// natural 记录的起点只把早于标称周期的链式漂移修正回来——紧跟提前重置的短周期
+// from 晚于标称起点（= 回补时刻），保留不动
 const dedupeCycles = (cycles) => {
   const list = (cycles || []).slice().sort((a, b) => a.end.localeCompare(b.end) || a.kind.localeCompare(b.kind));
   const out = [];
@@ -179,7 +216,9 @@ const dedupeCycles = (cycles) => {
     if (record.kind !== 'natural') return record;
     const end = Date.parse(record.end);
     const start = Number.isFinite(end) ? naturalCycleStartMs(record.window, end) : null;
-    return start != null ? { ...record, from: new Date(start).toISOString() } : record;
+    if (start == null) return record;
+    const fromMs = Date.parse(record.from);
+    return Number.isFinite(fromMs) && fromMs >= start ? record : { ...record, from: new Date(start).toISOString() };
   });
 };
 
