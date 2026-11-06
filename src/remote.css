@@ -25,17 +25,17 @@ body.remote-page { width: 100%; min-width: 0; }
 .remote-title-action { width: 25px; height: 23px; display: grid; place-items: center; flex: 0 0 auto; padding: 0; border: 1px solid var(--line); border-radius: 6px; color: var(--ink-soft); background: var(--control); }
 .remote-title-action:hover, .remote-title-action.active { color: var(--green-deep); border-color: var(--hover-border); background: var(--green-bg); }
 .remote-settings-page { width: min(100%, 760px); margin: 0 auto; }
-.remote-settings-card { display: grid; gap: 13px; padding: 15px; margin: 0 0 11px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); box-shadow: var(--shadow); }
+.remote-settings-card { display: grid; gap: 13px; padding: 15px; margin: 0 0 11px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }
 .remote-settings-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .remote-settings-card-head > b { font-size: 13px; }
 .remote-settings-card-head > small { color: var(--faint); font-size: 10px; }
 .remote-settings-section { display: grid; grid-template-columns: 88px minmax(0, 1fr); align-items: center; gap: 10px; }
 .remote-settings-section > span { color: var(--muted); font-size: 11px; }
 .remote-setting-options { display: flex; flex-wrap: wrap; gap: 7px; }
-.remote-setting-options button { min-height: 34px; display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink-soft); background: var(--control); font-size: 10px; }
+.remote-setting-options button { min-height: 34px; display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-soft); background: var(--control); font-size: 10px; }
 .remote-setting-options button.active { border-color: var(--focus-border); color: var(--green-deep); background: var(--green-bg); }
 .remote-settings-access p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
-.remote-interactive-badge { padding: 4px 7px; border-radius: 5px; color: var(--green-deep); background: var(--green-bg); font-size: 9px; white-space: nowrap; }
+.remote-interactive-badge { padding: 4px 7px; border-radius: 6px; color: var(--green-deep); background: var(--green-bg); font-size: 9px; white-space: nowrap; }
 /* min-height 不再按「视口−标题栏」硬撑：底部还有「即将刷新」栏等兄弟元素时会把内容
    顶出视口、产生一段没有内容的可滚动空白；改为交给 flex-grow 吃满 .remote-app 的
    剩余空间，标题栏+main+底栏相加正好一屏，内容超长时再自然整页滚动 */
@@ -87,7 +87,7 @@ body.remote-usage-bounded .remote-app { height: 100dvh; }
   .remote-main .provider-usage-summary .provider-stat:last-child:nth-child(odd) { grid-column: 1 / -1; }
   .remote-main .provider-heatmap-head { flex-wrap: wrap; row-gap: 4px; }
 }
-.remote-banner { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 14px; padding: 11px 13px; border-radius: 9px; font-size: 11px; line-height: 1.55; }
+.remote-banner { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 14px; padding: 11px 13px; border-radius: 10px; font-size: 11px; line-height: 1.55; }
 .remote-banner.offline { color: var(--coral-deep); background: var(--coral-bg); }
 .remote-banner svg { flex: 0 0 auto; }
 .remote-loading, .remote-empty { min-height: 250px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--muted); text-align: center; }
@@ -100,8 +100,8 @@ body.remote-usage-bounded .remote-app { height: 100dvh; }
 .remote-pair-page { min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; color: var(--ink); background: radial-gradient(circle at 50% 20%, rgba(103, 197, 163, .14), transparent 50%), var(--bg); }
 .remote-pair-card { width: min(420px, 100%); padding: 30px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow); }
 .remote-pair-top { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 21px; }
-.remote-pair-icon { width: 48px; height: 48px; display: grid; place-items: center; color: var(--green-deep); background: var(--green-bg); border-radius: 13px; }
-.remote-pair-theme { width: 34px; height: 34px; display: grid; place-items: center; color: var(--ink-soft); border: 1px solid var(--line); border-radius: 9px; background: var(--control); }
+.remote-pair-icon { width: 48px; height: 48px; display: grid; place-items: center; color: var(--green-deep); background: var(--green-bg); border-radius: 12px; }
+.remote-pair-theme { width: 34px; height: 34px; display: grid; place-items: center; color: var(--ink-soft); border: 1px solid var(--line); border-radius: 10px; background: var(--control); }
 .remote-eyebrow { color: var(--faint); font: 500 9px/1 'DM Mono', monospace; letter-spacing: .1em; }
 .remote-pair-card h1 { margin: 9px 0; font-size: 26px; line-height: 1.3; letter-spacing: -.045em; }
 .remote-pair-card p { margin: 0 0 24px; color: var(--muted); font-size: 12px; line-height: 1.7; }
@@ -131,7 +131,7 @@ body.remote-usage-bounded .remote-app { height: 100dvh; }
   #remote-root .remote-main .overview-grid { gap: 7px; }
   #remote-root .remote-main .overview-grid > .overview-card { flex: 1 1 calc(50% - 7px); }
   #remote-root .remote-main .overview-grid > .overview-card:last-child:nth-child(odd) { max-width: calc(50% - 3.5px); }
-  .remote-main .overview-card { height: 190px; padding: 6px; border-radius: 9px; }
+  .remote-main .overview-card { height: 190px; padding: 6px; border-radius: 10px; }
   .remote-main .overview-head { gap: 4px; }
   .remote-main .account-identity { gap: 5px; }
   .remote-main .account-identity .provider-logo { width: 21px; height: 21px; flex: 0 0 21px; font-size: 9px; }
@@ -216,13 +216,13 @@ body.remote-usage-bounded .remote-app { height: 100dvh; }
 .remote-settings-toggle b, .remote-settings-field b, .remote-settings-rule-heading b { color: var(--ink-soft); font-size: 11px; font-weight: 600; }
 .remote-settings-toggle small, .remote-settings-field small, .remote-settings-rule-heading small { color: var(--faint); font-size: 9px; line-height: 1.45; }
 .remote-settings-toggle input { width: 18px; height: 18px; flex: 0 0 auto; accent-color: var(--green); }
-.remote-settings-field select { min-width: 115px; height: 34px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink-soft); background: var(--control); font-size: 10px; }
+.remote-settings-field select { min-width: 115px; height: 34px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-soft); background: var(--control); font-size: 10px; }
 .remote-settings-rule-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line-inner); }
 .remote-settings-rule { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 28px; align-items: end; gap: 8px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
 .remote-settings-rule label { display: grid; gap: 5px; min-width: 0; color: var(--faint); font-size: 9px; }
 .remote-settings-rule input { width: 100%; min-width: 0; height: 32px; padding: 0 7px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: var(--control); font-size: 11px; }
 .remote-settings-rule .icon-button { width: 28px; height: 28px; }
-.remote-settings-empty { padding: 12px 8px; border-radius: 7px; color: var(--faint); background: var(--surface-2); text-align: center; font-size: 10px; }
+.remote-settings-empty { padding: 12px 8px; border-radius: 8px; color: var(--faint); background: var(--surface-2); text-align: center; font-size: 10px; }
 .remote-settings-access p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.65; }
 .remote-settings-savebar { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 8px -2px 0; padding: 9px 2px max(9px, env(safe-area-inset-bottom)); background: linear-gradient(180deg, transparent, var(--bg) 18%); }
 .remote-settings-savebar > span { color: var(--faint); font-size: 9px; }
@@ -314,3 +314,8 @@ body.remote-usage-bounded .remote-app { height: 100dvh; }
   .remote-settings-card-head { align-items: flex-start; }
   .remote-settings-card-head > small { max-width: 45%; }
 }
+
+/* ── 质感精修层（与 styles.css 2026-11 升级档同步；本文件后加载，需重申被覆盖的阴影） ── */
+.remote-pair-card { background: linear-gradient(180deg, var(--card-top), var(--surface) 62%); box-shadow: inset 0 1px 0 var(--edge-hi), var(--shadow-pop); }
+.remote-settings-card { box-shadow: inset 0 1px 0 var(--edge-hi), var(--shadow); }
+.remote-banner, .remote-pair-input { box-shadow: inset 0 1px 0 var(--edge-hi); }

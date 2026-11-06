@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChartColumn, Database, Download, Pencil, RefreshCw, Trash2, UploadCloud } from 'lucide-react';
+import { ChartColumn, Database, Download, Pencil, Trash2, UploadCloud } from 'lucide-react';
 import { formatLocalDateTime, formatLocalTokensCompact } from './local-cli-usage-format';
 
 const date = (value) => value ? formatLocalDateTime(value).slice(0, 10) : '—';
@@ -72,7 +72,7 @@ export default function UsageArchivesSettings({ showHeading = true, onViewUsage 
   };
 
   return <section className="drawer-section usage-archives-settings" aria-label="用量档案管理">
-    {(showHeading || bridge?.getUsageArchives) && <div className="drawer-section-title">{showHeading && <><Database size={16} /><span>用量档案</span></>}{bridge?.getUsageArchives && <button type="button" className="row-icon-button" style={{ marginLeft: 'auto' }} disabled={Boolean(busy)} aria-label="刷新档案信息" onClick={load}><RefreshCw size={13} /></button>}</div>}
+    {showHeading && <div className="drawer-section-title"><Database size={16} /><span>用量档案</span></div>}
     <p className="usage-archive-help">本机采集与导入来源分别保存，已启用的来源共同计入用量。重复导入会检查来源和版本，新版更新对应来源，本机来源自动跳过。</p>
     {!bridge?.getUsageArchives ? <p className="usage-archive-help">档案管理需要桌面版应用。</p> : <>
       {loadError && <div className="usage-archive-notice is-error" role="alert">{loadError}<button className="outline-button" onClick={load}>重试</button></div>}
