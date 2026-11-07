@@ -21,4 +21,18 @@
   System::Call 'shell32::SHChangeNotify(i 0x8000000, i 0x1000, i 0, i 0)'
   ; 触发系统重建图标缓存；异步执行，不阻塞静默安装
   Exec '"$SYSDIR\ie4uinit.exe" -show'
+  ; 入站放行局域网发现（UDP 43188）与远程查看（TCP 43187）的流量。
+  ; Windows 首次运行弹窗生成的规则只覆盖弹窗时刻的网络档（常见仅"公用"），
+  ; 而家庭 Wi-Fi 多为"专用"档，防火墙会静默丢弃手机的广播探测包，
+  ; 手机端表现为"局域网找不到电脑"。安装（含静默更新）时统一补全三档全放行；
+  ; 先删同名规则保证重复安装/更新不叠加。非提权安装（按用户安装）时 netsh
+  ; 会失败退出，仅记录日志，不影响安装流程。
+  nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="Quota Desk" program="$appExe"'
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Quota Desk" dir=in action=allow program="$appExe" protocol=UDP profile=any'
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Quota Desk" dir=in action=allow program="$appExe" protocol=TCP profile=any'
+!macroend
+
+!macro customUnInstall
+  ; 卸载时清掉安装期间创建的防火墙放行规则（带程序路径过滤：正式版/测试版并存时互不误删）
+  nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="Quota Desk" program="$INSTDIR\${APP_EXECUTABLE_FILENAME}"'
 !macroend

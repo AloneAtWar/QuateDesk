@@ -6,6 +6,7 @@ const crypto = require('node:crypto');
 const { DesktopStore } = require('./storage.cjs');
 const { REMOTE_PORT, createRemoteViewServer } = require('./remote-view.cjs');
 const { DISCOVERY_PORT, startDiscoveryResponder } = require('./discovery-responder.cjs');
+const { ensureRemoteFirewall } = require('./firewall.cjs');
 const { queryAccount, authStatusForPollError } = require('./poller.cjs');
 const { clampRetentionDays } = require('./history.cjs');
 const { resolveWasteWindows } = require('./waste.cjs');
@@ -250,6 +251,9 @@ async function startRemoteView() {
     } catch (error) {
       startupLog(`discovery: UDP ${DISCOVERY_PORT} 应答器启动失败（手机端仍可手动输入地址）：${error.message}`);
     }
+    // 自检并按需自修 Windows 防火墙入站放行（缺失时 UAC 确认一次），避免手机端
+    // 「局域网找不到电脑」这类被防火墙静默丢弃、App 侧无感知的故障；异步执行不阻塞启动
+    void ensureRemoteFirewall({ log: startupLog, exePath: process.execPath, packaged: app.isPackaged }).catch(() => {});
   }
 }
 
