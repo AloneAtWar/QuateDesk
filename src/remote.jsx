@@ -234,6 +234,18 @@ function App() {
     return () => { delete window.__qdSetTheme; };
   }, []);
   useEffect(() => { localStorage.setItem(MODE_KEY, mode); }, [mode]);
+  // 用量视图(本机用量/额度浪费)与账号详情页锁定整页为视口高度,接上桌面端那套有界高度链:
+  // 弹性区域吃余量、拖拽上限按余量收敛、趋势图按容器高度绘制;看板保持内容驱动、整页滚动。
+  // 详情页不锁时高度链没有上限,趋势图"容器高 − 其它行"量出的高度会自己撑住自己,
+  // 手机竖屏转横屏后图表按旧比例被拉到上千像素。用布局 effect 且排在下面的滚动恢复之前:
+  // 返回看板时先解除锁定、文档恢复原高度,才能滚回原来的位置
+  const usageViewActive = !selectedAccountId && (mode === 'local-usage' || mode === 'waste');
+  const historyViewActive = Boolean(selectedAccountId && snapshot?.accounts?.some((account) => account.id === selectedAccountId));
+  useLayoutEffect(() => {
+    document.body.classList.toggle('remote-usage-bounded', usageViewActive);
+    document.body.classList.toggle('remote-history-bounded', historyViewActive);
+    return () => document.body.classList.remove('remote-usage-bounded', 'remote-history-bounded');
+  }, [usageViewActive, historyViewActive]);
   // 远程页是整页滚动，详情页比看板短：打开时滚动位置会被压回顶部，返回后点过的卡片可能落在屏幕外。
   // 打开时记下看板滚动位置并回到顶部，返回时恢复；放在布局 effect 里，打开账号过渡在 flushSync 提交后、
   // 截取新状态前就已滚到位，卡片才能缩回原处。从视图菜单切走详情页不恢复（那是另一个视图）
@@ -244,13 +256,6 @@ function App() {
     window.scrollTo({ top: boardScrollRef.current, behavior: 'instant' });
     boardScrollRef.current = null;
   }, [selectedAccountId]);
-  // 用量视图(本机用量/额度浪费)锁定整页为视口高度,接上桌面端那套"弹性区域吃余量、
-  // 拖拽上限按余量收敛"的有界高度链;看板/历史等视图保持内容驱动、整页滚动
-  const usageViewActive = !selectedAccountId && (mode === 'local-usage' || mode === 'waste');
-  useEffect(() => {
-    document.body.classList.toggle('remote-usage-bounded', usageViewActive);
-    return () => document.body.classList.remove('remote-usage-bounded');
-  }, [usageViewActive]);
   useEffect(() => {
     if (!token) return undefined;
     let active = true;
@@ -423,7 +428,7 @@ function App() {
   </>;
   return <AppShell variant="remote" controls={shellControls}>
     <TransientToast toast={toast} />
-    <main ref={boardPull.ref} className={`main-shell content-area remote-main${inUsageView ? ' local-usage-mode' : ''}`}>
+    <main ref={boardPull.ref} className={`main-shell content-area remote-main${inUsageView ? ' local-usage-mode' : ''}${selectedAccount ? ' history-mode' : ''}`}>
       <BoardPullRefreshIndicator pull={boardPull} hint="继续下拉刷新" />
       {loading && !snapshot ? <div className="remote-loading"><RefreshCw size={23} className="spinning" /><span>正在读取电脑上的额度</span></div> : snapshot ? <>
         {selectedAccount ? <HistoryView key={selectedAccount.id} account={selectedAccount} provider={selectedProvider} onBack={closeHistory} settings={localCliSettings} setSettings={setLocalCliSettings} onToast={setToast} readOnly wasteWindowsOverride={selectedAccount.wasteWindows} /> : inUsageView ? <StatisticsView mode={inWasteView ? 'waste' : 'local-usage'} showNavigation={false} accounts={accounts} providers={providers} settings={localCliSettings} setSettings={setLocalCliSettings} Logo={Logo} api={bridge} onLocalApi={(api) => { localUsageApiRef.current = api; }} onLocalMeta={setLocalUsageMeta} onWasteApi={(api) => { wasteApiRef.current = api; }} onWasteMeta={setWasteMeta} /> : <>

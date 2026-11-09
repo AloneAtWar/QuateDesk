@@ -65,8 +65,12 @@ body.remote-usage-bounded .remote-app { height: 100dvh; }
    面板吃满剩余视口（不小于 271px），热力图格子与趋势图随面板高度撑开，「返回」
    按钮贴底，下方不再留大片空白。此前该链只写在 max-width:799px 的手机断点里，
    平板（≥800px）落空、面板回落到固定 271px，下半屏全空 */
-.remote-main:has(> .history-view) { display: flex; flex-direction: column; }
-.remote-main:has(> .history-view) > .history-view { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+/* 详情页锁成视口高度（remote.jsx 给 body 挂 remote-history-bounded、给 main 挂 history-mode）：
+   main 吃满标题栏以下的余量，高度链有界，趋势图按容器高度绘制。不锁时链条没有上限，
+   趋势图量出的高度会撑住自己，竖屏转横屏后按旧比例被拉到上千像素 */
+body.remote-history-bounded .remote-app { height: 100dvh; }
+.remote-main.history-mode { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.remote-main.history-mode > .history-view { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .remote-app .history-view > .surface-section { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
 .remote-app .history-view .history-head { flex: 0 0 auto; }
 .remote-app .history-view .history-tabpanel { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
@@ -319,3 +323,59 @@ body.remote-usage-bounded .remote-app { height: 100dvh; }
 .remote-pair-card { background: linear-gradient(180deg, var(--card-top), var(--surface) 62%); box-shadow: inset 0 1px 0 var(--edge-hi), var(--shadow-pop); }
 .remote-settings-card { box-shadow: inset 0 1px 0 var(--edge-hi), var(--shadow); }
 .remote-banner, .remote-pair-input { box-shadow: inset 0 1px 0 var(--edge-hi); }
+
+/* ── 手机横屏（矮视口）：宽度落在平板/桌面断点，但只有 320–500px 高 ──
+   看板改三列（≥900px 宽四列）、卡片高度按视口分两行；详情页与用量视图给出最小画布，
+   放不下时整页轻滚而不是裁掉内容；标题栏与「即将刷新」按触屏尺寸；左右避开刘海/挖孔 */
+@media (orientation: landscape) and (max-height: 500px) {
+  .remote-titlebar { padding-right: max(12px, env(safe-area-inset-right)); padding-left: max(12px, env(safe-area-inset-left)); }
+  .remote-titlebar .control-solo, .remote-title-theme { width: 30px; height: 30px; }
+  .remote-main { padding: 6px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); }
+
+  /* 看板：两行卡片正好占满「标题栏与即将刷新栏之间」的高度，读数多的卡片按内容撑开 */
+  #remote-root .remote-main .overview-grid { gap: 8px; }
+  #remote-root .remote-main .overview-grid > .overview-card,
+  #remote-root .remote-main .overview-grid > .overview-card:last-child:nth-child(odd) { flex: 0 1 calc((100% - 16px) / 3); max-width: calc((100% - 16px) / 3); }
+  .remote-main .overview-card { height: auto; min-height: clamp(128px, calc((100dvh - 104px) / 2), 164px); padding: 9px; border-radius: 11px; }
+  .remote-main .overview-body { gap: 10px; padding: 6px 0 2px; }
+  .remote-main .concentric-rings { width: 64px; height: 64px; }
+  .remote-main .quota-ring { inset: calc(var(--ring-index, 0) * 6px); }
+  .remote-main .quota-ring span { inset: 5px; }
+  .remote-main .ring-core { inset: 19px; }
+  .remote-main .ring-core strong { max-width: 40px; font-size: 9px; }
+  .remote-main .ring-core small { max-width: 40px; overflow: hidden; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
+  .remote-main .ring-core em { max-width: 40px; font-size: 6px; }
+  .remote-main .overview-meters { gap: 6px; min-width: 0; }
+  .remote-main .overview-meter span { font-size: 9px; }
+  .remote-main .overview-meter b { font-size: 10px; }
+  .remote-main .overview-meter small { font-size: 8px; }
+
+  /* 「即将刷新」栏与展开的三队列：触屏尺寸，左右避开刘海 */
+  .remote-app .refresh-bar { min-height: 42px; padding-top: 6px; padding-right: max(clamp(14px, 1.8vw, 30px), env(safe-area-inset-right)); padding-bottom: calc(6px + env(safe-area-inset-bottom)); padding-left: max(clamp(14px, 1.8vw, 30px), env(safe-area-inset-left)); }
+  .remote-app .refresh-queue { padding-right: max(clamp(14px, 1.8vw, 30px), env(safe-area-inset-right)); padding-left: max(clamp(14px, 1.8vw, 30px), env(safe-area-inset-left)); }
+  .remote-app .refresh-queues-toggle { width: 48px; height: 20px; }
+  .remote-app .refresh-queues-toggle::before { inset: -7px 0; }
+  .remote-app .refresh-chip { min-height: 36px; max-width: 170px; padding: 4px 11px; }
+
+  /* 详情页：趋势面板最少 271px（图表 184px 基线 + 详情条、提示与图例），加上页头后放不下时 main 撑高、整页轻滚，
+     图例不再溢出卡片外框 */
+  .remote-main.history-mode { min-height: 350px; }
+  /* 用量视图：锁一屏时热力图被压扁、当日明细与浪费账号表被裁掉；横屏改为给出最小画布、整页可滚 */
+  body.remote-usage-bounded { overflow-y: visible; }
+  .remote-main.local-usage-mode { min-height: 440px; }
+
+  /* 配对页：竖排卡片约 400px 高，横屏放不下、弹出键盘更挤；改为左说明、右表单两栏 */
+  .remote-pair-page { padding: 12px max(16px, env(safe-area-inset-right)) 12px max(16px, env(safe-area-inset-left)); }
+  .remote-pair-card { width: min(700px, 100%); display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); column-gap: 28px; align-items: start; padding: 20px 24px; }
+  .remote-pair-card > * { grid-column: 1; }
+  .remote-pair-card > form { grid-column: 2; grid-row: 1 / span 5; align-self: center; }
+  .remote-pair-top { margin-bottom: 12px; }
+  .remote-pair-icon { width: 40px; height: 40px; border-radius: 11px; }
+  .remote-pair-card h1 { margin: 7px 0; font-size: 21px; }
+  .remote-pair-card p { margin: 0; }
+  .remote-pair-foot { margin-top: 14px; }
+}
+@media (orientation: landscape) and (max-height: 500px) and (min-width: 900px) {
+  #remote-root .remote-main .overview-grid > .overview-card,
+  #remote-root .remote-main .overview-grid > .overview-card:last-child:nth-child(odd) { flex-basis: calc((100% - 24px) / 4); max-width: calc((100% - 24px) / 4); }
+}
