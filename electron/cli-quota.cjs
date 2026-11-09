@@ -332,9 +332,11 @@ async function queryGrokBotUsage(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS,
   if (!Number.isFinite(used)) throw new Error('Grok Bot 用量响应中没有 usagePercent');
   const resetAt = payload?.nextResetTimestampUtc || null;
   const startAt = Date.parse(payload?.currentPeriodStart || '');
-  // 周期起止都可用时按真实时长判窗口（客户端实测为 7 天周期，容错到月）
+  // 周期起止都可用时按真实时长判窗口：客户端实测为 7 天周期，统一计划迁移等会让
+  // currentPeriodStart 中途重置而 resetAt 不变（起止相距不足 7 天），仍按周窗口展示；
+  // 只有相距达到月周期量级（≥20 天）才归为月额度。
   const days = resetAt && Number.isFinite(startAt) ? (Date.parse(resetAt) - startAt) / 86_400_000 : 7;
-  const key = days >= 5.5 && days <= 8.5 ? 'weekly' : 'monthly';
+  const key = days >= 20 ? 'monthly' : 'weekly';
   const remaining = Math.max(0, Math.min(100, 100 - used));
   return [meter(key, remaining, 100, '%', resetAt, { amount: remaining, limitAmount: 100 })];
 }

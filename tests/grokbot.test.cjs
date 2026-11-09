@@ -103,6 +103,19 @@ test('用量查询：usagePercent → weekly 剩余百分比，请求带 checksu
   assert.equal(usageCall.init.headers['x-cursor-client-type'], 'sand');
 });
 
+test('窗口判定：周期被中途重置（起止不足 7 天）仍按周，≥20 天才按月', async () => {
+  const variables = { [SNAPSHOT_KEY]: JSON.stringify(grokBotSnapshot()) };
+  // 实测：统一计划迁移把 currentPeriodStart 刷新到当天，resetAt 仍是原周期终点（相距 2.3 天）
+  const partial = usagePayload({ currentPeriodStart: '2026-11-09T06:39:27.982Z', nextResetTimestampUtc: '2026-11-11T14:32:26.781Z' });
+  const meter = recordMeter().meter;
+  let windows = await queryGrokBotUsage(grokBotFetcher({ usagePayload: partial }), meter, 15_000, { variables });
+  assert.equal(windows[0].key, 'weekly');
+  // 真实月周期（相距 30 天）仍标月额度
+  const monthly = usagePayload({ currentPeriodStart: '2026-10-12T00:00:00.000Z', nextResetTimestampUtc: '2026-11-11T00:00:00.000Z' });
+  windows = await queryGrokBotUsage(grokBotFetcher({ usagePayload: monthly }), meter, 15_000, { variables });
+  assert.equal(windows[0].key, 'monthly');
+});
+
 test('用量查询：access 临期自动先续期再查询（refresh_token 不轮换）', async () => {
   const calls = [];
   const expired = grokBotSnapshot({ access_token: fakeJwt({ sub: 'google-oauth2|user_1', exp: Math.floor(Date.now() / 1000) + 10 }) });
