@@ -4373,7 +4373,12 @@ function App() {
     }
   };
   const updateAccount = async ({ account, name, identity, tags, endpoint, windowKeys, timeoutSeconds, variables, secretVariables }) => {
-    const nextAccounts = accounts.map((item) => item.id === account.id ? { ...item, name, identity, tags, endpoint, variables: variables || {}, windowKeys, timeoutSeconds: clampAccountTimeout(timeoutSeconds) } : item);
+    const nextAccounts = accounts.map((item) => {
+      if (item.id !== account.id) return item;
+      // 标识被用户改过（含清空）就锁定：CLI 账号轮询的自动回填（cliIdentityPatch）从此尊重用户值
+      const identityChanged = identity !== (item.identity ?? '');
+      return { ...item, name, identity, tags, endpoint, variables: variables || {}, windowKeys, timeoutSeconds: clampAccountTimeout(timeoutSeconds), ...(identityChanged ? { identityLocked: true } : {}) };
+    });
     if (bridge) {
       // 凭据创建后不可修改：这里只保存可能更新的密钥变量，credential 传空表示保留原值
       if (Object.keys(secretVariables || {}).length) await bridge.saveCredential(account.id, '', secretVariables || {});

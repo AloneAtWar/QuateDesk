@@ -312,8 +312,8 @@ const sendUpdateStatus = (patch) => {
   }
 };
 
-// 网络连接异常（DNS、断网、超时等）导致的检查失败不算“更新失败”
-const UPDATE_NETWORK_ERROR = /net::|ERR_INTERNET|ERR_NAME|ERR_CONNECTION|ERR_ADDRESS|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNREFUSED|ECONNRESET|ECONNABORTED|getaddrinfo|time(?:d)?\s*out|network|socket hang up|unable to connect|网络|无法连接/i;
+// 网络连接异常（DNS、断网、超时等）导致的检查失败不算“更新失败”；time-out 要带连字符——GitHub 网关超时页面写的是 “Gateway Time-out”，\s* 匹配不到它
+const UPDATE_NETWORK_ERROR = /net::|ERR_INTERNET|ERR_NAME|ERR_CONNECTION|ERR_ADDRESS|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNREFUSED|ECONNRESET|ECONNABORTED|getaddrinfo|time(?:d)?[\s-]*out|network|socket hang up|unable to connect|网络|无法连接/i;
 // 手动检查（设置页/托盘点击“检查更新”）需要明确反馈；自动检查遇到网络异常时静默处理
 let manualUpdateCheck = false;
 // electron-updater 出错时同一个 Error 会先后走 'error' 事件和 promise rejection 两条路，按实例去重避免重复上报
@@ -330,10 +330,13 @@ function reportUpdateError(error) {
   if (error === lastReportedUpdateError) return;
   lastReportedUpdateError = error;
   const raw = error?.message || '';
-  const networkError = UPDATE_NETWORK_ERROR.test(raw);
+  // electron-updater 的 HTTP 错误是带 statusCode 的 HttpError：GitHub 边缘节点瞬时 5xx（502/504 网关超时等）与限流 429 属服务端/链路抖动，按网络异常归类，不把原始 HTML 展示给用户
+  const httpStatus = Number(error?.statusCode);
+  const transientHttpError = (httpStatus >= 500 && httpStatus <= 599) || httpStatus === 429;
+  const networkError = transientHttpError || UPDATE_NETWORK_ERROR.test(raw);
   // 下载一定由用户主动触发，失败必须可见，不走自动检查遇到网络异常时的静默分支
   if (updateStatus.status === 'downloading') {
-    sendUpdateStatus({ status: 'error', errorKind: 'download', version: updateStatus.version, manual: true, message: networkError ? '网络连接异常，下载失败，请稍后重试' : (raw || '下载失败') });
+    sendUpdateStatus({ status: 'error', errorKind: 'download', version: updateStatus.version, manual: true, message: transientHttpError ? `GitHub 下载服务暂时不可用（${httpStatus}），请稍后重试` : networkError ? '网络连接异常，下载失败，请稍后重试' : (raw || '下载失败') });
     return;
   }
   // 已上报的下载失败不被去重漏网的重复报错覆盖成“检查失败”
@@ -343,7 +346,7 @@ function reportUpdateError(error) {
     sendUpdateStatus({ status: 'idle', message: '', manual: false });
     return;
   }
-  sendUpdateStatus({ status: 'error', errorKind: 'check', manual: manualUpdateCheck, message: networkError ? '网络连接异常，无法检查更新，请稍后重试' : (raw || '检查更新失败') });
+  sendUpdateStatus({ status: 'error', errorKind: 'check', manual: manualUpdateCheck, message: transientHttpError ? `GitHub 服务暂时不可用（${httpStatus}），请稍后重试` : networkError ? '网络连接异常，无法检查更新，请稍后重试' : (raw || '检查更新失败') });
 }
 
 function setupAutoUpdater() {
@@ -458,7 +461,8 @@ const persistCliAuthUpdate = (accountId, { kind, next, previous, source }) => {
 };
 
 // CLI 专属适配账号的身份维护：镜像账号（无快照）的标识跟随本机当前登录；
-// 快照账号只在标识为空时自动填一次，用户手填的标识不被覆盖
+// 快照账号只在标识为空时自动补齐。用户在账号编辑里改过标识（含清空，identityLocked）
+// 后以用户值为准不再回填——否则清空的标识每轮轮询都会被登录邮箱「复活」。
 const cliIdentityPatch = (account, kind, secrets) => {
   if (!CLI_KINDS.includes(kind)) return null;
   const resolved = resolveCliAuth(kind, secrets.variables);
@@ -491,7 +495,7 @@ const cliIdentityPatch = (account, kind, secrets) => {
     // 跟随 live 的快照账号仍标记为 snapshot：导入去重 / 升级逻辑按「有无快照」语义判断
     cliAuthSource: (resolved.source === 'live' && account.cliAuthSource === 'snapshot') ? 'snapshot' : resolved.source,
     cliFingerprint: identity.fingerprint,
-    identity: (resolved.source === 'snapshot' && account.identity) ? account.identity : (identity.display || account.identity || ''),
+    identity: (account.identityLocked || (resolved.source === 'snapshot' && account.identity)) ? account.identity : (identity.display || account.identity || ''),
   };
 };
 
