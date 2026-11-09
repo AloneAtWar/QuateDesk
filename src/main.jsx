@@ -911,7 +911,9 @@ function UsageChart({ points, hiddenKeys = [], rangeKey = '1d', onRangeKeyChange
           const style = window.getComputedStyle(node);
           return sum + node.offsetHeight + parseFloat(style.marginTop) + parseFloat(style.marginBottom);
         }, 0);
-      const height = Math.min(1400, Math.max(184, Math.round(root.clientHeight - chrome)));
+      // 下限 120px：桌面窗口与竖屏里趋势区至少 271px，绘图区不会低于 184 基线，这个下限碰不到；
+      // 只有手机横屏（远程页去掉了 271px 下限、App 还占着状态栏）才会按更矮的余量绘制，避免图例被挤出卡片
+      const height = Math.min(1400, Math.max(120, Math.round(root.clientHeight - chrome)));
       if (!Number.isFinite(width) || width < 300) return;
       setChartSize((old) => {
         const next = { width: Math.min(4000, width), height };

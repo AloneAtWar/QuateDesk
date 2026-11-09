@@ -325,18 +325,22 @@ body.remote-history-bounded .remote-app { height: 100dvh; }
 .remote-banner, .remote-pair-input { box-shadow: inset 0 1px 0 var(--edge-hi); }
 
 /* ── 手机横屏（矮视口）：宽度落在平板/桌面断点，但只有 320–500px 高 ──
-   看板改三列（≥900px 宽四列）、卡片高度按视口分两行；详情页与用量视图给出最小画布，
-   放不下时整页轻滚而不是裁掉内容；标题栏与「即将刷新」按触屏尺寸；左右避开刘海/挖孔 */
+   看板改三列（≥900px 宽四列）、卡片按内容撑开；详情页一屏放下，用量视图给出最小画布，
+   放不下时整页轻滚而不是裁掉内容；标题栏与「即将刷新」按触屏尺寸；左右避开刘海/挖孔。
+   安卓 App 的 WebView 铺满全屏，再把状态栏、挖孔、手势条的避让以 `.remote-app{padding:…!important}`
+   注入页面，并强制 `.remote-main{min-height:0!important}`（QuotaDesk-Android MainActivity.webSafeAreaScript）：
+   这里的避让只挂在 .remote-app 上，在 App 里被它的注入整体替换、不会叠成双倍；最小高度用更高优先级的 !important */
 @media (orientation: landscape) and (max-height: 500px) {
-  .remote-titlebar { padding-right: max(12px, env(safe-area-inset-right)); padding-left: max(12px, env(safe-area-inset-left)); }
+  .remote-app { padding-right: env(safe-area-inset-right); padding-left: env(safe-area-inset-left); }
   .remote-titlebar .control-solo, .remote-title-theme { width: 30px; height: 30px; }
-  .remote-main { padding: 6px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); }
+  .remote-main { padding: 6px 12px 8px; }
 
-  /* 看板：两行卡片正好占满「标题栏与即将刷新栏之间」的高度，读数多的卡片按内容撑开 */
-  #remote-root .remote-main .overview-grid { gap: 8px; }
+  /* 看板：卡片按内容撑开（不按视口推算行高：App 显示状态栏时视口高度并不都可用，推算出的行高偏高，
+     第二行会被「即将刷新」栏盖住，读数少的卡片下方还会空出一截），同一行拉成等高 */
+  #remote-root .remote-main .overview-grid { gap: 8px; align-items: stretch; }
   #remote-root .remote-main .overview-grid > .overview-card,
   #remote-root .remote-main .overview-grid > .overview-card:last-child:nth-child(odd) { flex: 0 1 calc((100% - 16px) / 3); max-width: calc((100% - 16px) / 3); }
-  .remote-main .overview-card { height: auto; min-height: clamp(128px, calc((100dvh - 104px) / 2), 164px); padding: 9px; border-radius: 11px; }
+  .remote-main .overview-card { height: auto; min-height: 118px; padding: 9px; border-radius: 11px; }
   .remote-main .overview-body { gap: 10px; padding: 6px 0 2px; }
   .remote-main .concentric-rings { width: 64px; height: 64px; }
   .remote-main .quota-ring { inset: calc(var(--ring-index, 0) * 6px); }
@@ -350,19 +354,28 @@ body.remote-history-bounded .remote-app { height: 100dvh; }
   .remote-main .overview-meter b { font-size: 10px; }
   .remote-main .overview-meter small { font-size: 8px; }
 
-  /* 「即将刷新」栏与展开的三队列：触屏尺寸，左右避开刘海 */
-  .remote-app .refresh-bar { min-height: 42px; padding-top: 6px; padding-right: max(clamp(14px, 1.8vw, 30px), env(safe-area-inset-right)); padding-bottom: calc(6px + env(safe-area-inset-bottom)); padding-left: max(clamp(14px, 1.8vw, 30px), env(safe-area-inset-left)); }
-  .remote-app .refresh-queue { padding-right: max(clamp(14px, 1.8vw, 30px), env(safe-area-inset-right)); padding-left: max(clamp(14px, 1.8vw, 30px), env(safe-area-inset-left)); }
+  /* 「即将刷新」栏与展开的三队列：触屏尺寸（左右避让已由 .remote-app 承担） */
+  .remote-app .refresh-bar { min-height: 42px; padding-top: 6px; padding-bottom: calc(6px + env(safe-area-inset-bottom)); }
   .remote-app .refresh-queues-toggle { width: 48px; height: 20px; }
   .remote-app .refresh-queues-toggle::before { inset: -7px 0; }
   .remote-app .refresh-chip { min-height: 36px; max-width: 170px; padding: 4px 11px; }
 
-  /* 详情页：趋势面板最少 271px（图表 184px 基线 + 详情条、提示与图例），加上页头后放不下时 main 撑高、整页轻滚，
-     图例不再溢出卡片外框 */
-  .remote-main.history-mode { min-height: 350px; }
+  /* 详情页：四个面板去掉竖屏的 271px 下限、跟随可用高度，页头收紧、隐藏「滚轮 / 双指缩放」提示行，
+     趋势图按余量绘制（图表下限 120px，见 main.jsx 趋势图测量），App 显示状态栏时也一屏放下；
+     main 留 250px 兜底（图表下限 + 页头、详情条与图例），更矮的屏幕整页轻滚，不再把图例裁到卡片外 */
+  .remote-app .history-view .trend-view,
+  .remote-app .history-view .waste-view,
+  .remote-app .history-view .local-cli-page.embedded,
+  .remote-app .history-view .provider-usage-view { min-height: 0; }
+  .remote-app .history-view .history-head { padding: 6px 12px 5px; }
+  .remote-app .history-view .trend-view .chart-tools { display: none; }
+  #remote-root .remote-main.history-mode { min-height: 250px !important; }
+  /* 「本机」页签的统计行、热力图标题与当日模型都是定高，余量全压在热力图上：面板至少 250px（约 312px 的 main），
+     热力图 7 行格子才不被裁掉；其它页签不受影响，仍一屏放下 */
+  #remote-root .remote-main.history-mode:has(.history-tabpanel > .local-cli-page) { min-height: 312px !important; }
   /* 用量视图：锁一屏时热力图被压扁、当日明细与浪费账号表被裁掉；横屏改为给出最小画布、整页可滚 */
   body.remote-usage-bounded { overflow-y: visible; }
-  .remote-main.local-usage-mode { min-height: 440px; }
+  #remote-root .remote-main.local-usage-mode { min-height: 440px !important; }
 
   /* 配对页：竖排卡片约 400px 高，横屏放不下、弹出键盘更挤；改为左说明、右表单两栏 */
   .remote-pair-page { padding: 12px max(16px, env(safe-area-inset-right)) 12px max(16px, env(safe-area-inset-left)); }
