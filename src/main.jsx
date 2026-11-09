@@ -316,14 +316,14 @@ const clearAccountTransitionNames = () => {
   accountTransitionState.tagged.forEach((el) => { el.style.viewTransitionName = ''; });
   accountTransitionState.tagged = [];
 };
-// 标题栏单独成组，看板后退缩小时它保持不动。只在过渡期间挂名：常驻的过渡名会让标题栏自成层叠与磨砂背景的根，
+// 标题栏单独成组（桌面 .app-shell 与远程页 .remote-app 两种外壳），看板后退缩小时它保持不动。只在过渡期间挂名：常驻的过渡名会让标题栏自成层叠与磨砂背景的根，
 // 视图菜单的下拉层会被趋势页控件盖住、磨砂也取不到下面的画面
 const setTitlebarTransitionName = (on) => {
   const prev = accountTransitionState.titlebar;
   if (prev) prev.style.viewTransitionName = '';
   accountTransitionState.titlebar = null;
   if (!on) return;
-  const titlebar = document.querySelector('.app-shell > .titlebar');
+  const titlebar = document.querySelector('.app-shell > .titlebar, .remote-app > .titlebar');
   if (!titlebar) return;
   titlebar.style.viewTransitionName = 'qd-titlebar';
   accountTransitionState.titlebar = titlebar;
@@ -367,6 +367,35 @@ function runAccountTransition(update, { from, to, direction, scale = 1 }) {
     clearAccountTransitionNames();
     setTitlebarTransitionName(false);
     delete root.dataset.accountTransition;
+  });
+}
+
+// 打开 / 返回额度趋势（桌面主窗口与远程页共用）：开启动画时用共享元素过渡，被点的卡片放大成趋势页，返回时缩回看板上的原卡片。
+// setAccountId：同步切换当前账号（null＝回看板）；animate / speed 取自设置，远程页没有这两项设置，按默认开启、标准速度
+const historySectionEl = () => document.querySelector('.history-view > .surface-section');
+const historySourceEl = (id) => document.querySelector(`[data-history-source="${CSS.escape(id)}"]`);
+export function openAccountHistory(account, sourceEl, { setAccountId, animate = true, speed } = {}) {
+  if (!animate) { setAccountId(account.id); return; }
+  runAccountTransition(() => setAccountId(account.id), {
+    direction: 'open',
+    scale: accountAnimationScale(speed),
+    from: () => (sourceEl?.isConnected ? sourceEl : historySourceEl(account.id)),
+    to: historySectionEl,
+  });
+}
+export function closeAccountHistory(accountId, { setAccountId, animate = true, speed } = {}) {
+  if (!animate || !accountId) { setAccountId(null); return; }
+  runAccountTransition(() => setAccountId(null), {
+    direction: 'close',
+    scale: accountAnimationScale(speed),
+    from: historySectionEl,
+    to: () => {
+      const el = historySourceEl(accountId);
+      // 原卡片不在视口里时先滚到可见，再缩回去
+      const rect = el?.getBoundingClientRect();
+      if (rect && (rect.bottom < 0 || rect.top > window.innerHeight)) el.scrollIntoView({ block: 'nearest' });
+      return el;
+    },
   });
 }
 
@@ -4725,33 +4754,9 @@ function App() {
   };
   const historyAccount = historyAccountId ? accounts.find((item) => item.id === historyAccountId) : null;
   // 打开 / 返回额度趋势：开启动画时用共享元素过渡，被点的卡片放大成趋势页，返回时缩回看板上的原卡片
-  const historySectionEl = () => document.querySelector('.history-view > .surface-section');
-  const historySourceEl = (id) => document.querySelector(`[data-history-source="${CSS.escape(id)}"]`);
-  const openHistory = (account, sourceEl) => {
-    if (!motionAllowed(settings.accountOpenAnimation)) { setHistoryAccountId(account.id); return; }
-    runAccountTransition(() => setHistoryAccountId(account.id), {
-      direction: 'open',
-      scale: accountAnimationScale(settings.accountAnimationSpeed),
-      from: () => (sourceEl?.isConnected ? sourceEl : historySourceEl(account.id)),
-      to: historySectionEl,
-    });
-  };
-  const closeHistory = () => {
-    const id = historyAccountId;
-    if (!motionAllowed(settings.accountOpenAnimation) || !id) { setHistoryAccountId(null); return; }
-    runAccountTransition(() => setHistoryAccountId(null), {
-      direction: 'close',
-      scale: accountAnimationScale(settings.accountAnimationSpeed),
-      from: historySectionEl,
-      to: () => {
-        const el = historySourceEl(id);
-        // 原卡片不在视口里时先滚到可见，再缩回去
-        const rect = el?.getBoundingClientRect();
-        if (rect && (rect.bottom < 0 || rect.top > window.innerHeight)) el.scrollIntoView({ block: 'nearest' });
-        return el;
-      },
-    });
-  };
+  const historyNavigation = { setAccountId: setHistoryAccountId, animate: motionAllowed(settings.accountOpenAnimation), speed: settings.accountAnimationSpeed };
+  const openHistory = (account, sourceEl) => openAccountHistory(account, sourceEl, historyNavigation);
+  const closeHistory = () => closeAccountHistory(historyAccountId, historyNavigation);
 
   const handleGlobalRefresh = () => {
     if (!inUsageView) { refreshAll(); return; }

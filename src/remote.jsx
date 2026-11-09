@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AlertCircle, ArrowUpRight, Clock3, KeyRound, LockKeyhole, Moon, RefreshCw, ShieldCheck, Sun, WifiOff } from 'lucide-react';
-import { formatChecked, HistoryView, Logo, StatusView, UpcomingRefreshBar } from './main.jsx';
+import { closeAccountHistory, formatChecked, HistoryView, Logo, openAccountHistory, StatusView, UpcomingRefreshBar } from './main.jsx';
 import StatisticsView from './statistics/StatisticsView';
 import { AppShell } from './app-shell';
 import { useBoardPullRefresh } from './use-board-pull-refresh';
@@ -234,6 +234,16 @@ function App() {
     return () => { delete window.__qdSetTheme; };
   }, []);
   useEffect(() => { localStorage.setItem(MODE_KEY, mode); }, [mode]);
+  // 远程页是整页滚动，详情页比看板短：打开时滚动位置会被压回顶部，返回后点过的卡片可能落在屏幕外。
+  // 打开时记下看板滚动位置并回到顶部，返回时恢复；放在布局 effect 里，打开账号过渡在 flushSync 提交后、
+  // 截取新状态前就已滚到位，卡片才能缩回原处。从视图菜单切走详情页不恢复（那是另一个视图）
+  const boardScrollRef = useRef(null);
+  useLayoutEffect(() => {
+    if (selectedAccountId) { window.scrollTo({ top: 0, behavior: 'instant' }); return; }
+    if (boardScrollRef.current == null) return;
+    window.scrollTo({ top: boardScrollRef.current, behavior: 'instant' });
+    boardScrollRef.current = null;
+  }, [selectedAccountId]);
   // 用量视图(本机用量/额度浪费)锁定整页为视口高度,接上桌面端那套"弹性区域吃余量、
   // 拖拽上限按余量收敛"的有界高度链;看板/历史等视图保持内容驱动、整页滚动
   const usageViewActive = !selectedAccountId && (mode === 'local-usage' || mode === 'waste');
@@ -359,6 +369,12 @@ function App() {
   const providers = snapshot?.providers || providerCatalog;
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
   const selectedProvider = providers.find((provider) => provider.id === selectedAccount?.providerId);
+  // 与桌面端同一套打开账号过渡：卡片放大成额度趋势、返回时缩回原卡片（远程页无动画设置，固定开启、标准速度）
+  const openHistory = (account, sourceEl) => {
+    boardScrollRef.current = window.scrollY;
+    openAccountHistory(account, sourceEl, { setAccountId: setSelectedAccountId });
+  };
+  const closeHistory = () => closeAccountHistory(selectedAccountId, { setAccountId: setSelectedAccountId });
   const readOnly = true;
   const inLocalUsageView = mode === 'local-usage' && !selectedAccountId;
   const inWasteView = mode === 'waste' && !selectedAccountId;
@@ -402,7 +418,7 @@ function App() {
   const shellControls = <>
     <span className="last-checked" title={inLocalUsageView ? '最后一次本机用量扫描时间' : inWasteView ? '最后一次历史周期读取时间' : '最后一次额度检查时间'}><Clock3 size={11} />{inLocalUsageView ? (localUsageMeta?.lastScannedAt ? formatChecked(localUsageMeta.lastScannedAt) : '未扫描') : inWasteView ? (wasteMeta?.loadedAt ? formatChecked(wasteMeta.loadedAt) : '未读取') : lastSync ? formatChecked(lastSync) : '尚未检查'}</span>
     <button type="button" className="control-solo" onClick={inUsageView ? refreshStatistics : refreshAccounts} disabled={boardRefreshing || statisticsLoading || (inWasteView && wasteMeta?.loading)} title={inLocalUsageView ? '重新扫描本机用量' : inWasteView ? '重新读取历史浪费' : '立即刷新全部账号'} aria-label={inLocalUsageView ? '重新扫描本机用量' : inWasteView ? '重新读取历史浪费' : '立即刷新全部账号'}><RefreshCw size={13} className={boardRefreshing || statisticsLoading || (inLocalUsageView && localUsageMeta?.scanning) || (inWasteView && wasteMeta?.loading) ? 'spinning' : ''} /></button>
-    <ViewMenu current={mode} open={viewMenuOpen} onOpenChange={setViewMenuOpen} onChange={(key) => { setSelectedAccountId(null); setMode(key); }} />
+    <ViewMenu current={mode} open={viewMenuOpen} onOpenChange={setViewMenuOpen} onChange={(key) => { boardScrollRef.current = null; setSelectedAccountId(null); setMode(key); }} />
     <button type="button" className="remote-title-theme" onClick={() => setTheme((old) => old === 'dark' ? 'light' : 'dark')} aria-label={theme === 'dark' ? '切换亮色主题' : '切换暗色主题'}>{theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}</button>
   </>;
   return <AppShell variant="remote" controls={shellControls}>
@@ -410,12 +426,12 @@ function App() {
     <main ref={boardPull.ref} className={`main-shell content-area remote-main${inUsageView ? ' local-usage-mode' : ''}`}>
       <BoardPullRefreshIndicator pull={boardPull} hint="继续下拉刷新" />
       {loading && !snapshot ? <div className="remote-loading"><RefreshCw size={23} className="spinning" /><span>正在读取电脑上的额度</span></div> : snapshot ? <>
-        {selectedAccount ? <HistoryView key={selectedAccount.id} account={selectedAccount} provider={selectedProvider} onBack={() => setSelectedAccountId(null)} settings={localCliSettings} setSettings={setLocalCliSettings} onToast={setToast} readOnly wasteWindowsOverride={selectedAccount.wasteWindows} /> : inUsageView ? <StatisticsView mode={inWasteView ? 'waste' : 'local-usage'} showNavigation={false} accounts={accounts} providers={providers} settings={localCliSettings} setSettings={setLocalCliSettings} Logo={Logo} api={bridge} onLocalApi={(api) => { localUsageApiRef.current = api; }} onLocalMeta={setLocalUsageMeta} onWasteApi={(api) => { wasteApiRef.current = api; }} onWasteMeta={setWasteMeta} /> : <>
-          <StatusView accounts={accounts} providers={providers} mode={mode} readOnly onOpenHistory={(account) => setSelectedAccountId(account.id)} lastSync={lastSync} reminderRules={snapshot.settings?.alerts === false ? [] : snapshot.settings?.reminderRules || []} testResults={{}} />
+        {selectedAccount ? <HistoryView key={selectedAccount.id} account={selectedAccount} provider={selectedProvider} onBack={closeHistory} settings={localCliSettings} setSettings={setLocalCliSettings} onToast={setToast} readOnly wasteWindowsOverride={selectedAccount.wasteWindows} /> : inUsageView ? <StatisticsView mode={inWasteView ? 'waste' : 'local-usage'} showNavigation={false} accounts={accounts} providers={providers} settings={localCliSettings} setSettings={setLocalCliSettings} Logo={Logo} api={bridge} onLocalApi={(api) => { localUsageApiRef.current = api; }} onLocalMeta={setLocalUsageMeta} onWasteApi={(api) => { wasteApiRef.current = api; }} onWasteMeta={setWasteMeta} /> : <>
+          <StatusView accounts={accounts} providers={providers} mode={mode} readOnly onOpenHistory={openHistory} lastSync={lastSync} reminderRules={snapshot.settings?.alerts === false ? [] : snapshot.settings?.reminderRules || []} testResults={{}} />
         </>}
       </> : !loading && <div className="remote-empty"><WifiOff size={23} /><strong>暂时无法读取额度</strong><span>请确认电脑正在运行并可通过配对地址访问</span></div>}
     </main>
-    {snapshot && !selectedAccount && !inUsageView && accounts.length > 0 && snapshot.settings?.showUpcomingRefresh !== false && <UpcomingRefreshBar accounts={accounts} providers={providers} onOpenHistory={(account) => setSelectedAccountId(account.id)} />}
+    {snapshot && !selectedAccount && !inUsageView && accounts.length > 0 && snapshot.settings?.showUpcomingRefresh !== false && <UpcomingRefreshBar accounts={accounts} providers={providers} onOpenHistory={openHistory} />}
   </AppShell>;
 }
 
