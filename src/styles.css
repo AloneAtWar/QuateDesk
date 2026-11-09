@@ -2121,3 +2121,38 @@ body.row-resizing, body.row-resizing * { cursor: row-resize !important; user-sel
 
 /* 抽屉恢复全高（用户确认保留原有全高形态；第六轮的收底撤销） */
 .settings-drawer { bottom: 0; max-height: none; border-bottom: 0; border-radius: 0; }
+
+/* 两处动画是否播放由设置开关决定（未设置时跟随系统「动画效果」），在 JS 里判断，这里不再按 prefers-reduced-motion 关闭。
+   打开账号：卡片放大成额度趋势（View Transitions，过渡名由 runAccountTransition 临时挂上）。
+   外框随位置与尺寸变形并浮起，前后两张快照都按原尺寸贴左上角显示、不拉伸；账号名与图标单独接力；看板轻微后退淡出。
+   曲线前段不过陡，让放大过程看得见：标准档打开约 .36s，返回约 .29s */
+:root { --account-vt-ease: cubic-bezier(.2, 0, 0, 1); --account-vt-scale: 1; }
+/* 时长和延迟都乘以 --account-vt-scale（设置里的三档速度：快 .72 / 标准 1 / 慢 1.45，由 runAccountTransition 写入） */
+::view-transition-group(qd-account) { animation-duration: calc(.36s * var(--account-vt-scale, 1)); animation-timing-function: var(--account-vt-ease); border-radius: 14px; overflow: clip; background: var(--surface); box-shadow: var(--shadow-pop); }
+::view-transition-old(qd-account), ::view-transition-new(qd-account) { width: 100%; height: 100%; object-fit: none; object-position: left top; }
+::view-transition-old(qd-account) { animation: qd-account-fade-out calc(.15s * var(--account-vt-scale, 1)) ease-in both; }
+::view-transition-new(qd-account) { animation: qd-account-fade-in calc(.22s * var(--account-vt-scale, 1)) calc(.11s * var(--account-vt-scale, 1)) ease-out both; }
+::view-transition-group(qd-account-id) { animation-duration: calc(.36s * var(--account-vt-scale, 1)); animation-timing-function: var(--account-vt-ease); }
+/* 账号名一行在卡片里和趋势页里的宽度不同：快照保持原尺寸贴左对齐，只移动不缩放，避免文字被放大 */
+::view-transition-old(qd-account-id), ::view-transition-new(qd-account-id) { width: 100%; height: 100%; object-fit: none; object-position: left center; }
+::view-transition-old(root) { animation: qd-board-recede calc(.28s * var(--account-vt-scale, 1)) var(--account-vt-ease) both; }
+::view-transition-new(root) { animation: qd-account-fade-in calc(.21s * var(--account-vt-scale, 1)) calc(.1s * var(--account-vt-scale, 1)) ease-out both; }
+:root[data-account-transition='close']::view-transition-group(qd-account), :root[data-account-transition='close']::view-transition-group(qd-account-id) { animation-duration: calc(.29s * var(--account-vt-scale, 1)); }
+:root[data-account-transition='close']::view-transition-old(qd-account) { animation-duration: calc(.13s * var(--account-vt-scale, 1)); }
+:root[data-account-transition='close']::view-transition-new(qd-account) { animation-duration: calc(.18s * var(--account-vt-scale, 1)); animation-delay: calc(.08s * var(--account-vt-scale, 1)); }
+:root[data-account-transition='close']::view-transition-old(root) { animation: qd-account-fade-out calc(.15s * var(--account-vt-scale, 1)) ease-in both; }
+:root[data-account-transition='close']::view-transition-new(root) { animation: qd-board-return calc(.29s * var(--account-vt-scale, 1)) var(--account-vt-ease) both; }
+@keyframes qd-account-fade-out { to { opacity: 0; } }
+@keyframes qd-board-recede { to { opacity: 0; transform: scale(.97); } }
+@keyframes qd-board-return { from { opacity: 0; transform: scale(.97); } }
+@keyframes qd-account-fade-in { from { opacity: 0; } }
+
+/* 浮窗切换账号：外框不动，内容纵向滚动；--roll-dir 为 1 时新内容从下方滚上来、旧内容向上滚走，-1 反向 */
+.widget-roll { position: relative; width: 100%; height: 100%; }
+.widget-roll-ghost { position: absolute; inset: 0; overflow: hidden; border-radius: 6px; pointer-events: none; }
+.widget-roll-ghost:empty { display: none; }
+.widget-roll-ghost > .widget-row { background: transparent !important; border-color: transparent !important; box-shadow: none !important; animation: widget-roll-out .22s cubic-bezier(.4, 0, 1, 1) forwards; }
+.widget-roll-ghost .widget-account { animation: none !important; }
+.widget-roll[data-roll] > .widget-row > * { animation: widget-roll-in .32s .04s var(--ease-out) both; }
+@keyframes widget-roll-in { from { transform: translateY(calc(var(--roll-dir, 1) * var(--roll-distance, 100%))); opacity: 0; } }
+@keyframes widget-roll-out { 65% { opacity: 0; } to { transform: translateY(calc(var(--roll-dir, 1) * -1 * var(--roll-distance, 100%))); opacity: 0; } }

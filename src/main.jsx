@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { createPortal } from 'react-dom';
+import { createPortal, flushSync } from 'react-dom';
 import {
   AppWindow, AlertCircle, Bell, BellOff, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronLeft, ChevronRight, CircleGauge, CircleStop, Clock3, Cloud, Copy, Database, Download, Eye, ExternalLink, Globe, HelpCircle, History, LayoutGrid,
   Ellipsis, Flame, KeyRound, Monitor, Play, Plus, Power, RefreshCw, Rows3, Settings2, ShieldCheck, SlidersHorizontal, Square, Bot,
@@ -260,6 +260,76 @@ const normalizeSettings = (value = {}) => {
     widgetHeight: undefined,
   };
 };
+
+const prefersReducedMotion = () => Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+// 动画开关（accountOpenAnimation / widgetSwitchAnimation）三态：没设置过＝跟随系统「动画效果」（系统关了就不播），
+// 用户在设置里打开＝始终播放，关闭＝始终不播
+const motionAllowed = (setting) => setting === true || (setting !== false && !prefersReducedMotion());
+// 打开账号动画三档速度：时长倍数。标准档＝打开约 .36s、返回约 .29s；快约 .26s / .21s；慢约 .52s / .42s
+const ACCOUNT_ANIMATION_SPEEDS = { fast: 0.72, normal: 1, slow: 1.45 };
+const accountAnimationScale = (speed) => ACCOUNT_ANIMATION_SPEEDS[speed] ?? 1;
+
+// 打开账号的共享元素过渡（View Transitions）：被点的卡片放大成额度趋势页，账号名与图标原位接力；返回时缩回原卡片。
+// 过渡名只在过渡期间挂到前后两个状态里代表同一账号的元素上，结束即清掉，保证同一时刻唯一。
+const ACCOUNT_TRANSITION_NAMES = [[null, 'qd-account'], ['.account-identity', 'qd-account-id']];
+const accountTransitionState = { tagged: [], titlebar: null, generation: 0 };
+const clearAccountTransitionNames = () => {
+  accountTransitionState.tagged.forEach((el) => { el.style.viewTransitionName = ''; });
+  accountTransitionState.tagged = [];
+};
+// 标题栏单独成组，看板后退缩小时它保持不动。只在过渡期间挂名：常驻的过渡名会让标题栏自成层叠与磨砂背景的根，
+// 视图菜单的下拉层会被趋势页控件盖住、磨砂也取不到下面的画面
+const setTitlebarTransitionName = (on) => {
+  const prev = accountTransitionState.titlebar;
+  if (prev) prev.style.viewTransitionName = '';
+  accountTransitionState.titlebar = null;
+  if (!on) return;
+  const titlebar = document.querySelector('.app-shell > .titlebar');
+  if (!titlebar) return;
+  titlebar.style.viewTransitionName = 'qd-titlebar';
+  accountTransitionState.titlebar = titlebar;
+};
+const tagAccountTransition = (root) => {
+  if (!root) return;
+  for (const [selector, name] of ACCOUNT_TRANSITION_NAMES) {
+    const el = selector ? root.querySelector(selector) : root;
+    if (!el) continue;
+    el.style.viewTransitionName = name;
+    accountTransitionState.tagged.push(el);
+  }
+};
+// update：同步改状态；from / to：分别返回过渡前、过渡后代表该账号的元素（找不到时只做整页淡化）
+function runAccountTransition(update, { from, to, direction, scale = 1 }) {
+  clearAccountTransitionNames();
+  setTitlebarTransitionName(false);
+  const generation = ++accountTransitionState.generation;
+  if (typeof document.startViewTransition !== 'function' || document.visibilityState === 'hidden') { update(); return; }
+  const root = document.documentElement;
+  let transition;
+  try {
+    tagAccountTransition(from?.());
+    setTitlebarTransitionName(true);
+    root.dataset.accountTransition = direction;
+    root.style.setProperty('--account-vt-scale', String(scale));
+    transition = document.startViewTransition(() => {
+      clearAccountTransitionNames();
+      flushSync(update);
+      if (generation === accountTransitionState.generation) tagAccountTransition(to?.());
+    });
+  } catch {
+    clearAccountTransitionNames();
+    setTitlebarTransitionName(false);
+    delete root.dataset.accountTransition;
+    update();
+    return;
+  }
+  transition.finished.catch(() => {}).finally(() => {
+    if (generation !== accountTransitionState.generation) return;
+    clearAccountTransitionNames();
+    setTitlebarTransitionName(false);
+    delete root.dataset.accountTransition;
+  });
+}
 
 const providerWebsite = (provider) => {
   const url = String(provider?.website || '').trim();
@@ -578,7 +648,7 @@ function ResetTimeline({ accounts, providers }) {
 }
 
 function PriorityRow({ account, meter, provider, reminderRules, onOpenHistory }) {
-  return <div className="priority-row clickable" role="button" tabIndex={0} title="点击查看额度趋势" onClick={() => onOpenHistory?.(account)} onKeyDown={(event) => { if (event.key === 'Enter') onOpenHistory?.(account); }}>
+  return <div className="priority-row clickable" data-history-source={account.id} role="button" tabIndex={0} title="点击查看额度趋势" onClick={(event) => onOpenHistory?.(account, event.currentTarget)} onKeyDown={(event) => { if (event.key === 'Enter') onOpenHistory?.(account, event.currentTarget); }}>
     <AccountIdentity account={account} provider={provider} />
     <div className="priority-meter"><div className="meter-track"><span className="meter-fill" style={{ width: `${meter.remaining}%` }} /></div><b>{formatAmount(meter)}</b></div>
     <div className="priority-reset"><Clock3 size={13} /><span title={formatResetAbsolute(meter.resetAt)}>{formatReset(meter.resetAt)}</span><RuleMarks meter={meter} rules={reminderRules} /></div>
@@ -627,7 +697,7 @@ function WindowsView({ accounts, providers, reminderRules, embedded = false, onO
       <div className="windows-list">{sorted.map((account) => {
         const provider = providers.find((item) => item.id === account.providerId);
         const relogin = account.authStatus === 'reauth_required' ? reloginChannel(provider, account) : null;
-        return <div className="account-window-row clickable" key={account.id} role="button" tabIndex={0} title="点击查看额度趋势" onClick={() => onOpenHistory?.(account)} onKeyDown={(event) => { if (event.key === 'Enter') onOpenHistory?.(account); }}>
+        return <div className="account-window-row clickable" key={account.id} data-history-source={account.id} role="button" tabIndex={0} title="点击查看额度趋势" onClick={(event) => onOpenHistory?.(account, event.currentTarget)} onKeyDown={(event) => { if (event.key === 'Enter') onOpenHistory?.(account, event.currentTarget); }}>
           <div className="account-side"><AccountIdentity account={account} provider={provider} /><div className={`account-status ${account.status}`}><span className="status-dot" />{account.status === 'warning' ? '需处理' : '正常'}<small>{formatChecked(account.lastChecked)}</small></div>{relogin && <button type="button" className="text-button relogin-link" title={relogin.title} onClick={(event) => { event.stopPropagation(); onRelogin?.(account); }}><RefreshCw size={11} />{relogin.action}</button>}<AccountRuleMarks account={account} rules={reminderRules} /></div>
           <div className="account-meters">{account.windows.map((meter) => <MeterBar key={meter.key} meter={meter} />)}</div>
         </div>;
@@ -1850,7 +1920,7 @@ function HistoryView({ account, provider, onBack, onProviderUsageState, settings
 // 已停用账号卡片：档案式展示——不渲染实时进度环与重置倒计时（那些数字冻结在停用时刻，
 // 以“现状”口吻展示会误导），只保留停用时间与停用时长两条静态信息；启用入口在设置的账号行
 function DisabledAccountCard({ account, provider, onOpenHistory }) {
-  return <div className="overview-card disabled clickable" role="button" tabIndex={0} title="点击查看停用前的历史数据" onClick={() => onOpenHistory?.(account)} onKeyDown={(event) => { if (event.key === 'Enter') onOpenHistory?.(account); }}>
+  return <div className="overview-card disabled clickable" data-history-source={account.id} role="button" tabIndex={0} title="点击查看停用前的历史数据" onClick={(event) => onOpenHistory?.(account, event.currentTarget)} onKeyDown={(event) => { if (event.key === 'Enter') onOpenHistory?.(account, event.currentTarget); }}>
     <div className="overview-head"><AccountIdentity account={account} provider={provider} /></div>
     <div className="overview-body disabled-card-body">
       <div className="disabled-copy">
@@ -1912,12 +1982,13 @@ function OverviewCard({ account, provider, feedback, onOpenHistory, onRelogin, o
   const open = () => {
     if (skipClickRef?.current) { skipClickRef.current = false; return; }
     if (selectionIn(cardRef.current)) return;
-    onOpenHistory?.(account);
+    onOpenHistory?.(account, cardRef.current);
   };
   const desc = [...(account.windows || [])].sort((a, b) => (durationOrder[b.key] || 9) - (durationOrder[a.key] || 9)).slice(0, 4);
   return <div
     ref={cardRef}
     data-account-id={account.id}
+    data-history-source={account.id}
     className={`overview-card ${account.status} clickable${lifting ? ' dragging' : ''}${overId === account.id && dragId && dragId !== account.id ? ' drag-over' : ''}`}
     role="button" tabIndex={0}
     title={canDrag ? '点击查看额度趋势 · 按住空白处拖动排序' : '点击查看额度趋势'}
@@ -2097,7 +2168,7 @@ function UpcomingRefreshTrack({ items, providers, onOpenHistory, labelId, showCy
           const label = windowCatalog[meter.key]?.label || meter.key;
           const tone = refreshChipTone(account, meter);
           const percent = meter.unit === '%' && Number.isFinite(Number(meter.remaining)) ? `${Math.round(meter.remaining)}%` : '';
-          return <button type="button" className="refresh-chip" key={`${account.id}-${meter.key}`} title={`${account.name} · ${label}${percent ? ` · 剩余 ${percent}` : ''} · ${formatResetAbsolute(meter.resetAt)}`} aria-label={`${account.name} · ${label}${percent ? ` · 剩余 ${percent}` : ''} · ${formatReset(meter.resetAt)}`} onClick={() => onOpenHistory?.(account)}>
+          return <button type="button" className="refresh-chip" key={`${account.id}-${meter.key}`} title={`${account.name} · ${label}${percent ? ` · 剩余 ${percent}` : ''} · ${formatResetAbsolute(meter.resetAt)}`} aria-label={`${account.name} · ${label}${percent ? ` · 剩余 ${percent}` : ''} · ${formatReset(meter.resetAt)}`} onClick={(event) => onOpenHistory?.(account, event.currentTarget)}>
             <Logo provider={provider} size="xs" interactive={false} /><span>{account.name}</span>{showCycle && <em>{label}</em>}{percent && <b className={tone}>{percent}</b>}<small>{formatResetCompact(meter.resetAt)}</small>
           </button>;
         })}
@@ -2346,6 +2417,8 @@ function SharedSettingsPanel({ variant = 'desktop', desktopSection = 'all', show
     <section className="drawer-section">{showHeading && <div className="drawer-section-title"><SunMoon size={16} /><span>外观显示</span></div>}
       <div className="setting-select"><span><b>界面主题</b></span><select value={values.theme === 'light' ? 'light' : 'dark'} onChange={(event) => update((old) => ({ ...old, theme: event.target.value }))}><option value="dark">暗色</option><option value="light">亮色</option></select></div>
       <Toggle checked={values.showUpcomingRefresh !== false} onChange={(value) => update((old) => ({ ...old, showUpcomingRefresh: value }))} label="显示即将刷新" />
+      <Toggle checked={motionAllowed(values.accountOpenAnimation)} onChange={(value) => update((old) => ({ ...old, accountOpenAnimation: value }))} label="打开账号动画" description="点击账号时卡片放大成额度趋势，返回时缩回原位" />
+      {motionAllowed(values.accountOpenAnimation) && <div className="setting-select"><span><b>动画速度</b></span><select value={ACCOUNT_ANIMATION_SPEEDS[values.accountAnimationSpeed] ? values.accountAnimationSpeed : 'normal'} onChange={(event) => update((old) => ({ ...old, accountAnimationSpeed: event.target.value }))}><option value="fast">快</option><option value="normal">标准</option><option value="slow">慢</option></select></div>}
     </section>
     </>}
   </>;
@@ -2460,7 +2533,7 @@ function SettingsDrawer({ variant = 'desktop', accounts, providers, settings, se
       id: 'widget', category: 'appearance', title: '浮窗样式与轮换', icon: Monitor,
       summary: `${settings.widget ? '已开启' : '已关闭'} · 大小 ${Math.round(clampWidgetScale(settings.widgetScale) * 100)}% · 长度 ${Math.round(clampWidgetLength(settings.widgetLength) * 100)}%`,
       help: <TitleHelp>长度只调整横向宽度（60%–150%）。浮窗会展示账号的全部额度窗口（含 1M）；空间不足时会逐级收起：标签先缩成小圆点再隐藏，倒计时按周期从长到短逐个隐藏，最后才收起最长周期的额度。只有一个额度窗口的账号通常不用收起任何内容；名称放不下时会显示省略号，悬停可查看完整内容。</TitleHelp>,
-      content: <section className="drawer-section"><Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" description="固定在桌面顶层，双击展开主窗口" /><Toggle checked={settings.widgetAutoScroll !== false} onChange={(value) => setSettings((old) => ({ ...old, widgetAutoScroll: value }))} label="自动轮换账号" description="关闭后固定当前账号，滚轮仍可切换" /><label className="size-slider"><span>大小</span><input type="range" min={80} max={300} step={5} value={Math.round(clampWidgetScale(settings.widgetScale) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetScale: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetScale(settings.widgetScale) * 100)}%</b></label><label className="size-slider"><span>长度</span><input type="range" min={Math.round(WIDGET_MIN_LENGTH * 100)} max={Math.round(WIDGET_MAX_LENGTH * 100)} step={5} value={Math.round(clampWidgetLength(settings.widgetLength) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetLength: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetLength(settings.widgetLength) * 100)}%</b></label><button type="button" className="text-button widget-reset" onClick={() => setSettings((old) => ({ ...old, widgetScale: 0.9, widgetLength: 0.9 }))}>恢复默认大小与长度</button><div className="widget-setting-preview"><div style={{ width: Math.round(WIDGET_BASE_SIZE.width * clampWidgetLength(settings.widgetLength)), maxWidth: '100%', margin: '0 auto' }}>{(() => { const previewAccount = accounts.find((item) => !item.disabled) ?? accounts[0]; return <WidgetRow account={previewAccount} provider={providers.find((item) => item.id === previewAccount?.providerId)} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} />; })()}</div></div><button className="primary-button full" onClick={() => setSettings((old) => ({ ...old, widgetPreview: true }))}><Eye size={15} /> 预览并调整</button></section>,
+      content: <section className="drawer-section"><Toggle checked={settings.widget} onChange={(value) => setSettings((old) => ({ ...old, widget: value }))} label="显示桌面浮窗" description="固定在桌面顶层，双击展开主窗口" /><Toggle checked={settings.widgetAutoScroll !== false} onChange={(value) => setSettings((old) => ({ ...old, widgetAutoScroll: value }))} label="自动轮换账号" description="关闭后固定当前账号，滚轮仍可切换" /><Toggle checked={motionAllowed(settings.widgetSwitchAnimation)} onChange={(value) => setSettings((old) => ({ ...old, widgetSwitchAnimation: value }))} label="切换动画" description="切换账号时纵向滚动，方向跟随滚轮" /><label className="size-slider"><span>大小</span><input type="range" min={80} max={300} step={5} value={Math.round(clampWidgetScale(settings.widgetScale) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetScale: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetScale(settings.widgetScale) * 100)}%</b></label><label className="size-slider"><span>长度</span><input type="range" min={Math.round(WIDGET_MIN_LENGTH * 100)} max={Math.round(WIDGET_MAX_LENGTH * 100)} step={5} value={Math.round(clampWidgetLength(settings.widgetLength) * 100)} onChange={(event) => setSettings((old) => ({ ...old, widgetLength: Number(event.target.value) / 100 }))} /><b>{Math.round(clampWidgetLength(settings.widgetLength) * 100)}%</b></label><button type="button" className="text-button widget-reset" onClick={() => setSettings((old) => ({ ...old, widgetScale: 0.9, widgetLength: 0.9 }))}>恢复默认大小与长度</button><div className="widget-setting-preview"><div style={{ width: Math.round(WIDGET_BASE_SIZE.width * clampWidgetLength(settings.widgetLength)), maxWidth: '100%', margin: '0 auto' }}>{(() => { const previewAccount = accounts.find((item) => !item.disabled) ?? accounts[0]; return <WidgetRow account={previewAccount} provider={providers.find((item) => item.id === previewAccount?.providerId)} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} />; })()}</div></div><button className="primary-button full" onClick={() => setSettings((old) => ({ ...old, widgetPreview: true }))}><Eye size={15} /> 预览并调整</button></section>,
     },
     {
       id: 'accounts', category: 'accounts', title: '账号与凭据', icon: ShieldCheck,
@@ -3063,18 +3136,52 @@ function WidgetApp() {
   // 停用账号不在浮窗轮播：只统计未停用的；全部停用时显示占位（和「还没有账号」的占位区分开）
   const activeAccounts = (accounts || []).filter((item) => !item.disabled);
   const activeCount = activeAccounts.length;
-  useEffect(() => { if (settings.widgetAutoScroll === false) return undefined; const timer = setInterval(() => { if (Date.now() - lastWheelAt.current < 10000) return; setIndex((value) => (value + 1) % Math.max(activeCount, 1)); }, 6000); return () => clearInterval(timer); }, [activeCount, settings.widgetAutoScroll]);
-  const cycleAccount = (direction) => { lastWheelAt.current = Date.now(); setIndex((value) => (value + direction + Math.max(activeCount, 1)) % Math.max(activeCount, 1)); };
+  // 切换动画：外框不动，内容纵向滚动；方向跟随滚轮（向下＝下一个从下方滚上来）。
+  // 切换前把当前这一行克隆成残影，切换后残影向外滚走、新内容滚进来；连续切换时从新位置重新开始
+  const rollRef = useRef(null);
+  const ghostRef = useRef(null);
+  const rollTimerRef = useRef(0);
+  const pendingRollRef = useRef(null);
+  const switchAnimationRef = useRef(undefined);
+  switchAnimationRef.current = settings.widgetSwitchAnimation;
+  const prepareRoll = (direction) => {
+    pendingRollRef.current = null;
+    if (!motionAllowed(switchAnimationRef.current)) return;
+    const row = rollRef.current?.querySelector(':scope > .widget-row:not(.widget-placeholder)');
+    if (!row) return;
+    const ghost = row.cloneNode(true);
+    ghost.removeAttribute('title');
+    pendingRollRef.current = { direction, ghost, distance: row.offsetHeight };
+  };
+  useEffect(() => { if (settings.widgetAutoScroll === false) return undefined; const timer = setInterval(() => { if (Date.now() - lastWheelAt.current < 10000) return; if (activeCount > 1) prepareRoll(1); setIndex((value) => (value + 1) % Math.max(activeCount, 1)); }, 6000); return () => clearInterval(timer); }, [activeCount, settings.widgetAutoScroll]);
+  const cycleAccount = (direction) => { lastWheelAt.current = Date.now(); if (activeCount > 1) prepareRoll(direction); setIndex((value) => (value + direction + Math.max(activeCount, 1)) % Math.max(activeCount, 1)); };
   const account = activeAccounts[index % Math.max(activeCount, 1)];
+  const accountId = account?.id;
+  useLayoutEffect(() => {
+    const pending = pendingRollRef.current;
+    pendingRollRef.current = null;
+    const roll = rollRef.current;
+    const ghostHost = ghostRef.current;
+    if (!pending || !accountId || !roll || !ghostHost) return;
+    clearTimeout(rollTimerRef.current);
+    roll.removeAttribute('data-roll');
+    roll.style.setProperty('--roll-distance', `${pending.distance}px`);
+    roll.style.setProperty('--roll-dir', String(pending.direction));
+    ghostHost.replaceChildren(pending.ghost);
+    void roll.offsetWidth; // 重新触发关键帧：连续切换时从头播放
+    roll.setAttribute('data-roll', '');
+    rollTimerRef.current = setTimeout(() => { roll.removeAttribute('data-roll'); ghostHost.replaceChildren(); }, 420);
+  }, [accountId]);
+  useEffect(() => () => clearTimeout(rollTimerRef.current), []);
   const provider = providers.find((item) => item.id === account?.providerId);
   const startDrag = (event) => { if (event.button !== 0) return; dragRef.current = { active: true, moved: false, x: event.screenX, y: event.screenY }; event.currentTarget.setPointerCapture?.(event.pointerId); };
   const moveDrag = (event) => { const drag = dragRef.current; if (!drag.active) return; const deltaX = event.screenX - drag.x; const deltaY = event.screenY - drag.y; if (!deltaX && !deltaY) return; drag.moved ||= Math.abs(deltaX) + Math.abs(deltaY) > 2; drag.x = event.screenX; drag.y = event.screenY; window.quotaDesk?.moveWidget(deltaX, deltaY, event.screenX, event.screenY); };
   const stopDrag = () => { dragRef.current.active = false; };
-  return <div className="widget-window-shell" title="拖动移动，双击展开，滚轮切换账号，右键打开菜单" onWheel={(event) => cycleAccount(event.deltaY > 0 ? 1 : -1)} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag} onDoubleClick={() => { if (!dragRef.current.moved) window.quotaDesk?.openMainWindow(); }}><WidgetScaledRow scale={clampWidgetScale(settings.widgetScale)} length={clampWidgetLength(settings.widgetLength)}>{account
+  return <div className="widget-window-shell" title="拖动移动，双击展开，滚轮切换账号，右键打开菜单" onWheel={(event) => cycleAccount(event.deltaY > 0 ? 1 : -1)} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag} onDoubleClick={() => { if (!dragRef.current.moved) window.quotaDesk?.openMainWindow(); }}><WidgetScaledRow scale={clampWidgetScale(settings.widgetScale)} length={clampWidgetLength(settings.widgetLength)}><div className="widget-roll" ref={rollRef}>{account
         ? <WidgetRow account={account} provider={provider} compact tagLimit={Number(settings.widgetTagLimit ?? 2)} length={clampWidgetLength(settings.widgetLength)} />
         : accounts === null ? null
         : accounts.length === 0 ? <div className="widget-row widget-placeholder"><span className="widget-placeholder-icon"><Plus size={11} /></span><span>还没有账号 · 双击去添加</span></div>
-        : <div className="widget-row widget-placeholder"><CircleStop size={12} /><span>所有账号均已停用</span></div>}</WidgetScaledRow></div>;
+        : <div className="widget-row widget-placeholder"><CircleStop size={12} /><span>所有账号均已停用</span></div>}<div className="widget-roll-ghost" ref={ghostRef} aria-hidden="true" /></div></WidgetScaledRow></div>;
 }
 
 function ImportCcswitchModal({ onClose, onApplied }) {
@@ -4502,6 +4609,34 @@ function App() {
     if (state.runtime) setRuntime(state.runtime);
   };
   const historyAccount = historyAccountId ? accounts.find((item) => item.id === historyAccountId) : null;
+  // 打开 / 返回额度趋势：开启动画时用共享元素过渡，被点的卡片放大成趋势页，返回时缩回看板上的原卡片
+  const historySectionEl = () => document.querySelector('.history-view > .surface-section');
+  const historySourceEl = (id) => document.querySelector(`[data-history-source="${CSS.escape(id)}"]`);
+  const openHistory = (account, sourceEl) => {
+    if (!motionAllowed(settings.accountOpenAnimation)) { setHistoryAccountId(account.id); return; }
+    runAccountTransition(() => setHistoryAccountId(account.id), {
+      direction: 'open',
+      scale: accountAnimationScale(settings.accountAnimationSpeed),
+      from: () => (sourceEl?.isConnected ? sourceEl : historySourceEl(account.id)),
+      to: historySectionEl,
+    });
+  };
+  const closeHistory = () => {
+    const id = historyAccountId;
+    if (!motionAllowed(settings.accountOpenAnimation) || !id) { setHistoryAccountId(null); return; }
+    runAccountTransition(() => setHistoryAccountId(null), {
+      direction: 'close',
+      scale: accountAnimationScale(settings.accountAnimationSpeed),
+      from: historySectionEl,
+      to: () => {
+        const el = historySourceEl(id);
+        // 原卡片不在视口里时先滚到可见，再缩回去
+        const rect = el?.getBoundingClientRect();
+        if (rect && (rect.bottom < 0 || rect.top > window.innerHeight)) el.scrollIntoView({ block: 'nearest' });
+        return el;
+      },
+    });
+  };
 
   const handleGlobalRefresh = () => {
     if (!inUsageView) { refreshAll(); return; }
@@ -4572,9 +4707,9 @@ function App() {
         const result = await bridge.applyCcswitchImport(keys);
         if (result?.state) { setAccounts(result.state.accounts || []); setProviders(result.state.providers || []); setLastSync(result.state.lastSync || new Date().toISOString()); if (result.state.runtime) setRuntime(result.state.runtime); }
         setToast({ id: Date.now(), ok: result?.imported > 0, message: result?.imported > 0 ? `已从 cc-switch 导入 ${result.imported} 个账号` : '没有导入新账号（凭据都已存在）' });
-      }} onDeleteAccount={deleteAccount} onFinish={finishOnboarding} /> : accounts.length === 0 ? <EmptyWorkspace onAddAccount={() => setModal('account')} onOpenSettings={() => setSettingsOpen(true)} onImport={window.quotaDesk?.scanCcswitchImport ? () => setModal('import-ccswitch') : undefined} /> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={() => setHistoryAccountId(null)} onProviderUsageState={applyProviderUsageState} settings={settings} setSettings={setSettings} onToast={setToast} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={(account) => setHistoryAccountId(account.id)} onReorderAccounts={reorderAccounts} sortWeights={{ fiveHourRemaining: settings.periodSort5hRemaining, otherRemaining: settings.periodSortLongRemaining }} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const kind = reloginChannel(provider)?.kind || 'kimi'; setModal({ type: `${kind}-relogin`, account }); }} />}</div>
+      }} onDeleteAccount={deleteAccount} onFinish={finishOnboarding} /> : accounts.length === 0 ? <EmptyWorkspace onAddAccount={() => setModal('account')} onOpenSettings={() => setSettingsOpen(true)} onImport={window.quotaDesk?.scanCcswitchImport ? () => setModal('import-ccswitch') : undefined} /> : historyAccount ? <HistoryView account={historyAccount} provider={providers.find((item) => item.id === historyAccount.providerId)} onBack={closeHistory} onProviderUsageState={applyProviderUsageState} settings={settings} setSettings={setSettings} onToast={setToast} /> : <StatusView accounts={accounts} providers={providers} reminderRules={settings.alerts === false ? [] : settings.reminderRules} mode={overviewMode} onModeChange={setOverviewMode} runtime={runtime} onTestAccount={testAccount} testingAccountId={testingAccountId} testResults={testResults} onOpenSettings={() => setSettingsOpen(true)} lastSync={lastSync} onRefresh={refreshAll} refreshing={refreshing} onOpenHistory={openHistory} onReorderAccounts={reorderAccounts} sortWeights={{ fiveHourRemaining: settings.periodSort5hRemaining, otherRemaining: settings.periodSortLongRemaining }} onRelogin={(account) => { const provider = providers.find((item) => item.id === account.providerId); const kind = reloginChannel(provider)?.kind || 'kimi'; setModal({ type: `${kind}-relogin`, account }); }} />}</div>
     </main>
-    {settings.showUpcomingRefresh !== false && !inUsageView && !onboardOpen && !historyAccount && accounts.length > 0 && <UpcomingRefreshBar accounts={accounts} providers={providers} onOpenHistory={(account) => setHistoryAccountId(account.id)} />}
+    {settings.showUpcomingRefresh !== false && !inUsageView && !onboardOpen && !historyAccount && accounts.length > 0 && <UpcomingRefreshBar accounts={accounts} providers={providers} onOpenHistory={openHistory} />}
     {settingsOpen && <SettingsDrawer accounts={accounts} providers={providers} settings={settings} setSettings={setSettings} onClose={() => setSettingsOpen(false)} openModal={setModal} onDeleteAccount={deleteAccount} onToggleAccountDisabled={toggleAccountDisabled} onTestAccount={testAccount} testingAccountId={testingAccountId} onEditProvider={editProvider} autoLaunch={autoLaunch} onToggleAutoLaunch={toggleAutoLaunch} appVersion={appVersion} update={update} onOpenUpdate={() => setUpdateOpen(true)} onCheckUpdate={onCheckUpdate} onClearHistory={clearHistory} runtime={runtime} onExportData={exportData} onImportData={importData} dataBusy={dataBusy} onViewUsageArchive={(source) => { setSettingsOpen(false); setHistoryAccountId(null); setOverviewMode('local-usage'); setLocalUsageSource(source); }} onReopenOnboarding={() => { setSettingsOpen(false); setHistoryAccountId(null); setOnboardOpen(true); }} onOpenDevTools={bridge?.toggleDevTools ? () => bridge.toggleDevTools() : null} />}
     {confirmState && <ConfirmModal confirm={confirmState} onClose={() => setConfirmState(null)} />}
     {updateOpen && update && <UpdateModal update={update} version={appVersion} onIgnore={ignoreUpdate} onClose={() => setUpdateOpen(false)} />}
