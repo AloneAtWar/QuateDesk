@@ -876,6 +876,8 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .waste-col.early .waste-bar { background: color-mix(in srgb, var(--amber) 16%, transparent); border: 1px dotted var(--amber); border-bottom: 0; }
 /* 进行中的当前周期：青色虚线框 */
 .waste-col.now .waste-bar { background: color-mix(in srgb, var(--cyan) 15%, transparent); border: 1px dashed var(--cyan); border-bottom: 0; }
+/* 周期中途被厂商提前回满：柱顶琥珀色描边，浪费按回补那一刻的剩余计 */
+.waste-col.refill .waste-bar { box-shadow: inset 0 2px 0 var(--amber); }
 .waste-col.hot .waste-bar { filter: brightness(1.35); }
 .waste-avg { position: absolute; left: 10px; right: 10px; height: 0; border-top: 1px dashed var(--amber); pointer-events: none; }
 .waste-avg em { position: absolute; left: 0; top: -9px; padding: 0 4px; color: var(--amber); background: var(--surface-2); font-size: 9px; font-style: normal; }
@@ -887,6 +889,7 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .waste-legend i { width: 11px; height: 8px; border-radius: 4px; }
 .waste-legend i.swatch-early { background: color-mix(in srgb, var(--amber) 16%, transparent); border: 1px dotted var(--amber); }
 .waste-legend i.swatch-now { background: color-mix(in srgb, var(--cyan) 15%, transparent); border: 1px dashed var(--cyan); }
+.waste-legend i.swatch-refill { box-shadow: inset 0 2px 0 var(--amber); }
 .chart-legend .legend-right { margin-left: auto; color: var(--faint); }
 
 /* ── 账号停用 ── */

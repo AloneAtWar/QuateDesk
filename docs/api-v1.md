@@ -127,7 +127,7 @@ Each row has shape `{ key, displayName, agents[], tokens{…}, requests, session
 | `account` | No | Aggregate view | Passing it returns that account's cycle-by-cycle details |
 | Time parameters | No | `last=31d` | Filtered by cycle end time `end` |
 
-Measurement (consistent with the desktop waste view): each cycle counts its own total quota as 1 share, `totalWasteShares = Σ remaining/100`; **only cycles with `reliable=true` and `kind=natural` are counted toward the average** (`averageRemaining`, unit %), cycles ending early / being unreliable are only included in the cycle count. When `account` is passed, each account also includes a `cycles[]` detail row (`counted` marking whether it is counted in statistics).
+Measurement (consistent with the desktop waste view): each cycle counts its own total quota as 1 share, `totalWasteShares = Σ remaining/100`; **only cycles with `reliable=true` and `kind=natural` are counted toward the average** (`averageRemaining`, unit %), cycles ending early / being unreliable are only included in the cycle count. When `account` is passed, each account also includes a `cycles[]` detail row (`counted` marking whether it is counted in statistics). If the vendor refilled the quota mid-cycle without moving `resetAt` (e.g. Kimi), the cycle still runs to its scheduled reset, `remaining` is the share left at the moment of the refill, and `refill` (`{ at, count, remaining, observedAt }`, otherwise `null`) notes when the refill happened and how much of the bonus quota was left when the cycle ended; the bonus is never counted.
 
 ## Common Q&A Call Chains
 

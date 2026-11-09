@@ -673,6 +673,13 @@ const detailCycles = (records) => records.map((record) => ({
   gapMs: numOrNull(record.cycle.gapMs),
   reliable: record.cycle.reliable === true,
   counted: record.counted,
+  // 周期中途被厂商提前回满（resetAt 不变）：remaining 是回补那一刻的剩余，附赠额度到期剩余只作附注
+  refill: record.cycle.refill ? {
+    at: record.cycle.refill.at || null,
+    count: numOrNull(record.cycle.refill.count),
+    remaining: numOrNull(record.cycle.refill.remaining),
+    observedAt: record.cycle.refill.observedAt || null,
+  } : null,
 }));
 
 async function wasteHandler({ deps, url, time }) {

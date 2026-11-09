@@ -1309,11 +1309,13 @@ function WasteView({ account, wasteWindows, onViewLocalUsage, onViewProviderUsag
       <span>剩余 <b>{cycle.remaining}%</b> 未用</span>
       <span><span title={formatResetAbsolute(cycle.end)}>{formatResetCompact(cycle.end)} 后重置</span> · 记录 {formatChartStamp(account.lastChecked)}</span>
     </>;
-    const observed = <span>记录于 <b>{formatChartStamp(cycle.observedAt)}</b></span>;
+    const observed = <span>{cycle.refill ? '回补前记录于' : '记录于'} <b>{formatChartStamp(cycle.observedAt)}</b></span>;
     const amount = hasRealQuotaNumbers(cycle.amount, cycle.limit) ? <span>剩 <b>{formatChartNumber(cycle.amount)} / {formatChartNumber(cycle.limit)}</b></span> : null;
+    // 周期中途被厂商提前回满（resetAt 不变）：浪费取回补那一刻的剩余，回补后的附赠额度只作附注
+    const refillNote = cycle.refill ? <span className="warn">⚡ {formatChartStamp(cycle.refill.at)} 提前回满{cycle.refill.count > 1 ? ` ${cycle.refill.count} 次` : ''} · 额外 {formatWasteGap(new Date(cycle.end).getTime() - new Date(cycle.refill.at).getTime())} · 到期剩 {Math.round(cycle.refill.remaining)}%（不计入）</span> : null;
     if (cycle.kind === 'early') return <><span className="when">{range} 周期</span><span className="warn">⚡ 厂商提前重置：剩余 {Math.round(cycle.remaining)}% 被清零</span>{observed}</>;
-    if (!cycle.reliable) return <><span className="when">{range} 周期</span><span>浪费 <b>≤{Math.round(cycle.remaining)}%</b></span>{amount}{observed}<span className="warn">可能失真：距重置约 {formatWasteGap(cycle.gapMs)}</span></>;
-    return <><span className="when">{range} 周期</span><span>浪费 <b>{Math.round(cycle.remaining)}%</b></span>{amount}{observed}</>;
+    if (!cycle.reliable) return <><span className="when">{range} 周期</span><span>浪费 <b>≤{Math.round(cycle.remaining)}%</b></span>{amount}{observed}<span className="warn">可能失真：距{cycle.refill ? '回补' : '重置'}约 {formatWasteGap(cycle.gapMs)}</span>{refillNote}</>;
+    return <><span className="when">{range} 周期</span><span>浪费 <b>{Math.round(cycle.remaining)}%</b></span>{amount}{observed}{refillNote}</>;
   };
   // 周期过多柱宽触底时横向拖动平移；未移动就抬起视为点击（命中柱子选中/切换，点空白取消）
   const startDrag = (event) => {
@@ -1433,8 +1435,8 @@ function WasteView({ account, wasteWindows, onViewLocalUsage, onViewProviderUsag
         {empty && !nowCycle && <div className="waste-empty-hint"><span>还没有已完成的周期</span><span>第一个周期重置后自动生成统计</span></div>}
         {shown.map((cycle, index) => {
           const key = cycleKey(cycle, index);
-          const classes = ['waste-col', cycle.now ? 'now' : cycle.kind === 'early' ? 'early' : !cycle.reliable ? 'bad' : '', hover === cycle || selectedKey === key ? 'hot' : ''].filter(Boolean).join(' ');
-          const tip = `${formatWasteDay(displayFrom(cycle))} → ${formatWasteDay(cycle.end)}${cycle.now ? '（进行中）' : ` · 浪费 ${Math.round(cycle.remaining)}%`}`;
+          const classes = ['waste-col', cycle.now ? 'now' : cycle.kind === 'early' ? 'early' : !cycle.reliable ? 'bad' : '', cycle.refill ? 'refill' : '', hover === cycle || selectedKey === key ? 'hot' : ''].filter(Boolean).join(' ');
+          const tip = `${formatWasteDay(displayFrom(cycle))} → ${formatWasteDay(cycle.end)}${cycle.now ? '（进行中）' : ` · 浪费 ${Math.round(cycle.remaining)}%${cycle.refill ? ' · 中途提前回满' : ''}`}`;
           return <div key={key} className={classes} data-key={key} title={tip} onMouseEnter={() => setHover(cycle)} onMouseLeave={() => setHover(null)} onContextMenu={(event) => openContextMenu(event, cycle)}>
             <div className="waste-bar" style={{ height: `${Math.max(2, Math.min(100, cycle.remaining))}%` }} />
           </div>;
@@ -1450,6 +1452,7 @@ function WasteView({ account, wasteWindows, onViewLocalUsage, onViewProviderUsag
         <span><i style={{ background: CHART_COLORS[curWindow] }} />浪费率</span>
         <span><i style={{ background: `repeating-linear-gradient(-45deg, ${softColor} 0 3px, transparent 3px 6px)`, border: '1px solid var(--line-strong)' }} />可能失真</span>
         <span><i className="swatch-early" />提前重置</span>
+        {windowCycles.some((cycle) => cycle.refill) && <span><i className="swatch-refill" style={{ background: CHART_COLORS[curWindow] }} />中途回满</span>}
         <span><i className="swatch-now" />进行中</span>
         <span className="legend-right">{windowCycles.length - good.length} 个周期不计入平均</span>
       </>}</div>

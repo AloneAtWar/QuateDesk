@@ -397,6 +397,10 @@ function createRemoteViewServer({ store, distDir, authorizeToken, pairDevice, pa
           kind: ['natural', 'early'].includes(cycle?.kind) ? cycle.kind : 'unknown', observedAt: safeText(cycle?.observedAt, 40),
           remaining: safeNumber(cycle?.remaining), amount: safeNumber(cycle?.amount), limit: safeNumber(cycle?.limit),
           gapMs: safeNumber(cycle?.gapMs), reliable: Boolean(cycle?.reliable),
+          refill: cycle?.refill ? {
+            at: safeText(cycle.refill.at, 40), count: safeNumber(cycle.refill.count),
+            remaining: safeNumber(cycle.refill.remaining), observedAt: safeText(cycle.refill.observedAt, 40),
+          } : null,
         })) });
       }
       if (pathname === '/api/usage') {

@@ -94,8 +94,35 @@ const naturalCycleStartMs = (windowKey, endMs) => {
 // resetAt 暂时缺失的处理：记住最后一个带 resetAt 的快照，等恢复后拿新值与它比较（相同=同周期）；
 // 若直到历史末尾都没恢复，则把「消失」本身认定为一次周期结束——旧 resetAt 已被跨过算自然到期，否则算提前重置
 // 剩余率回补但 resetAt 没变（Kimi 提前回满额度）：厂商不把回补和改期一起下发，resetAt 判据看不到。
-// 此时挂起候选、向后看一个观测点：仍比回补前高 ≥REFILL_EPS → 真回补，周期提前结束（early）；
-// 弹回原值附近 → 单点毛刺（Copilot 假数据），候选作废
+// 此时挂起候选、向后看一个观测点：仍比回补前高 ≥REFILL_EPS → 真回补；弹回原值附近 → 单点毛刺（Copilot 假数据），候选作废。
+// 真回补不结束周期：原定重置照常到来，见 refilledCycleRecords
+
+// 回补周期归档。回补后到原定重置之间只剩几个小时，这段附赠额度到期时几乎满格，
+// 单独成档会被记成「整周浪费 100%」。原定重置自然到来时把回补前后合成一个周期：
+// 浪费取回补那一刻的剩余（本周期额度真正没用掉的部分，回补前一个轮询间隔内观测到，精度与自然到期相当），
+// 回补后的附赠额度只记在 refill 附注里、不计入统计。
+// 回补后又被厂商提前改期结束的周期不完整，退回两条 early 记录（均不计入）
+const refilledCycleRecords = (windowKey, refill, last, close, medianMs) => {
+  const { base, rise } = refill;
+  if (close.kind !== 'natural') return [
+    buildCycleRecord(windowKey, base, refill.fromMs, { kind: 'early', end: base.atMs }, medianMs),
+    buildCycleRecord(windowKey, last, rise.atMs, close, medianMs),
+  ];
+  const startMs = refill.fromEarly ? refill.fromMs : (naturalCycleStartMs(windowKey, close.end) ?? refill.fromMs);
+  const gapMs = Math.max(0, rise.atMs - base.atMs); // 真实回补时刻落在 base 与 rise 两次观测之间
+  return [{
+    ...buildCycleRecord(windowKey, base, startMs, close, medianMs),
+    gapMs,
+    reliable: gapMs <= RELIABLE_FACTOR * medianMs,
+    refill: {
+      at: new Date(rise.atMs).toISOString(),
+      count: refill.count,
+      remaining: Number(last.sample.remaining) || 0,
+      observedAt: new Date(last.atMs).toISOString(),
+    },
+  }];
+};
+
 const extractCycles = (points, windowKeys) => {
   const median = medianGapMs(points);
   const records = [];
@@ -106,6 +133,15 @@ const extractCycles = (points, windowKeys) => {
     let cycleFromMs = null;
     let cycleFromEarly = false; // 当前周期是否由提前重置开启：自然到期时不再按标称周期倒推 from
     let pendingRefill = null;   // 回补候选 { base: 回补前最后稳定点, rise: 回补后的第一个点 }
+    let refill = null;          // 本周期已确认的回补 { base, rise, fromMs, fromEarly, count }，原定重置到来时合并归档
+    const closeCycle = (last, close) => {
+      if (refill) { records.push(...refilledCycleRecords(key, refill, last, close, median)); return; }
+      const fallbackFromMs = cycleFromMs ?? last.atMs;
+      const startMs = close.kind === 'natural' && !cycleFromEarly
+        ? (naturalCycleStartMs(key, close.end) ?? fallbackFromMs)
+        : fallbackFromMs;
+      records.push(buildCycleRecord(key, last, startMs, close, median));
+    };
     for (const point of points || []) {
       const sample = point.windows?.[key];
       const atMs = ts(point.at);
@@ -113,16 +149,15 @@ const extractCycles = (points, windowKeys) => {
       lastSeenAtMs = atMs;
       if (!ts(sample.resetAt)) { if (prev) sawMissing = true; continue; }
       if (!prev) { prev = { sample, atMs }; cycleFromMs = atMs; continue; }
-      // 回补候选裁决：仍比回补前高 → 真回补，归档提前结束并把基线切到回补后的档位
+      // 回补候选裁决：仍比回补前高 → 真回补，记住回补前状态（同周期多次回补只认第一次），基线切到回补后的档位
       if (pendingRefill) {
         const refillRem = Number(sample.remaining);
         const baseRem = Number(pendingRefill.base.sample.remaining);
         if (Number.isFinite(refillRem)) {
           if (refillRem - baseRem >= REFILL_EPS) {
             const { base, rise } = pendingRefill;
-            records.push(buildCycleRecord(key, base, cycleFromMs ?? base.atMs, { kind: 'early', end: base.atMs }, median));
-            cycleFromMs = rise.atMs;
-            cycleFromEarly = true;
+            if (refill) refill.count += 1;
+            else refill = { base, rise, fromMs: cycleFromMs ?? base.atMs, fromEarly: cycleFromEarly, count: 1 };
             prev = rise; // 回补后的观测与当前点继续配对（可能与自然到期重合）
           }
           pendingRefill = null;
@@ -131,15 +166,12 @@ const extractCycles = (points, windowKeys) => {
       }
       const close = detectCycleClose(prev.sample, sample, prev.atMs, atMs);
       if (close) {
-        const fallbackFromMs = cycleFromMs ?? prev.atMs;
-        const startMs = close.kind === 'natural' && !cycleFromEarly
-          ? (naturalCycleStartMs(key, close.end) ?? fallbackFromMs)
-          : fallbackFromMs;
-        records.push(buildCycleRecord(key, prev, startMs, close, median));
+        closeCycle(prev, close);
         // 新周期的起点：自然到期 = 旧周期结束时刻；提前重置 ≈ 当前观测时间
         cycleFromMs = close.kind === 'natural' ? close.end : atMs;
         cycleFromEarly = close.kind !== 'natural';
         pendingRefill = null; // 周期已结束，未决的回补候选作废
+        refill = null;
       }
       sawMissing = false;
       // 回补候选：resetAt 没变但剩余率突升 ≥REFILL_EPS；仅周期型窗口（滑动窗口的回升是正常滚动）
@@ -158,7 +190,8 @@ const extractCycles = (points, windowKeys) => {
       const close = prevReset <= lastSeenAtMs + RESET_JITTER_MS
         ? { kind: 'natural', end: prevReset }
         : { kind: 'early', end: prev.atMs };
-      records.push(buildCycleRecord(key, prev, cycleFromMs ?? prev.atMs, close, median));
+      if (refill) closeCycle(prev, close);
+      else records.push(buildCycleRecord(key, prev, cycleFromMs ?? prev.atMs, close, median));
     }
   }
   return records.sort((a, b) => a.end.localeCompare(b.end));
@@ -185,8 +218,10 @@ const mergeCycles = (existing, extracted, coveredFromMs = null) => {
   const kept = (existing || []).filter((record) => {
     const match = nearMatch(record);
     if (match) {
-      if (record.reliable === true && match.reliable !== true) downgraded.add(match);
-      return record.reliable === true && match.reliable !== true;
+      // 新记录合并了回补（旧档案是回补后的短周期）属于口径修正而非降级，一律覆盖
+      const keepOld = record.reliable === true && match.reliable !== true && !(match.refill && !record.refill);
+      if (keepOld) downgraded.add(match);
+      return keepOld;
     }
     const observed = Date.parse(record.observedAt);
     return !(coveredFromMs != null && Number.isFinite(observed) && observed >= coveredFromMs);
@@ -223,6 +258,8 @@ const dedupeCycles = (cycles) => {
 };
 
 const preferCycle = (candidate, current) => {
+  // 合并了回补的记录取代同一结束时刻的回补后短周期（旧口径留下的）
+  if (Boolean(candidate.refill) !== Boolean(current.refill)) return Boolean(candidate.refill);
   if (candidate.reliable === true && current.reliable !== true) return true;
   if (current.reliable === true && candidate.reliable !== true) return false;
   return (Date.parse(candidate.observedAt || '') || 0) >= (Date.parse(current.observedAt || '') || 0);
