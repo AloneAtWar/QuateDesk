@@ -74,7 +74,7 @@ body.remote-usage-bounded .remote-app { height: 100dvh; }
 .remote-app .history-view .waste-view,
 .remote-app .history-view .local-cli-page.embedded { flex: 1 1 auto; height: auto; min-height: 271px; }
 /* 用量视图面板独立上限（与桌面端一致）：格子封顶后更高的面板只会留框内空区 */
-.remote-app .history-view .provider-usage-view { flex: 1 1 auto; height: auto; min-height: 271px; max-height: 960px; }
+.remote-app .history-view .provider-usage-view { flex: 1 1 auto; height: auto; min-height: 271px; }
 /* 连接引导/加载/错误等状态视图不跟随面板拉伸，保持紧凑高度（与桌面端一致） */
 .remote-app .history-view .provider-usage-state { height: 271px; }
 

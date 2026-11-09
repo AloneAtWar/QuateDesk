@@ -261,10 +261,49 @@ const normalizeSettings = (value = {}) => {
   };
 };
 
-const prefersReducedMotion = () => Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
-// 动画开关（accountOpenAnimation / widgetSwitchAnimation）三态：没设置过＝跟随系统「动画效果」（系统关了就不播），
-// 用户在设置里打开＝始终播放，关闭＝始终不播
-const motionAllowed = (setting) => setting === true || (setting !== false && !prefersReducedMotion());
+// 动画开关（accountOpenAnimation / historyTabAnimation / widgetSwitchAnimation）默认开启，不跟随系统「动画效果」；
+// 只有用户在设置里关掉（存了 false）才不播
+const motionAllowed = (setting) => setting !== false;
+// 历史页页签切换：内容区按页签顺序左右滑动（往右边的页签切＝新内容从右侧滑入、旧内容向左退出）。
+// 只给内容区挂过渡名；页面其余部分（含分段控件的选中块）直接显示新状态，不做整页淡化，避免选中块出现残影。
+// 过渡期间 Chromium 把所有点击都交给根元素，连点页签会丢；这里把落在页签按钮上的点击转给按钮，新过渡接替旧过渡
+let historyTabTransitionGeneration = 0;
+function runHistoryTabTransition(update, { panel, direction, scale = 1 }) {
+  if (typeof document.startViewTransition !== 'function' || document.visibilityState === 'hidden' || !panel) { update(); return; }
+  const root = document.documentElement;
+  const generation = ++historyTabTransitionGeneration;
+  const redirectClick = (event) => {
+    if (event.target !== root) return;
+    const button = [...document.querySelectorAll('.history-tabs[role="tablist"] > button')].find((el) => {
+      const rect = el.getBoundingClientRect();
+      return event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
+    });
+    if (!button) return;
+    event.stopPropagation();
+    button.click();
+  };
+  const cleanup = () => {
+    document.removeEventListener('click', redirectClick, true);
+    if (generation !== historyTabTransitionGeneration) return;
+    panel.style.viewTransitionName = '';
+    delete root.dataset.historyTabTransition;
+  };
+  let transition;
+  try {
+    panel.style.viewTransitionName = 'qd-history-panel';
+    root.dataset.historyTabTransition = '';
+    root.style.setProperty('--account-vt-scale', String(scale));
+    root.style.setProperty('--tab-dir', String(direction));
+    document.addEventListener('click', redirectClick, true);
+    transition = document.startViewTransition(() => { flushSync(update); });
+  } catch {
+    cleanup();
+    update();
+    return;
+  }
+  transition.finished.catch(() => {}).finally(cleanup);
+}
+
 // 打开账号动画三档速度：时长倍数。标准档＝打开约 .36s、返回约 .29s；快约 .26s / .21s；慢约 .52s / .42s
 const ACCOUNT_ANIMATION_SPEEDS = { fast: 0.72, normal: 1, slow: 1.45 };
 const accountAnimationScale = (speed) => ACCOUNT_ANIMATION_SPEEDS[speed] ?? 1;
@@ -1760,37 +1799,103 @@ function ProviderUsageView({ account, provider, onState, readOnly = false, perio
   </div>;
 }
 
-// 历史视图切换下拉：趋势/用量/本机/浪费四个入口常驻；不可用的入口保留在列表里但不可选，
-// 悬停 title 说明原因；触屏没有悬停，点按置灰项时弹 toast 提示（菜单尺寸保持不变）
-function HistoryViewSwitch({ tabs, view, onChange, domId, panelId, onToast }) {
-  const [open, setOpen] = useState(false);
-  const close = () => setOpen(false);
-  const onKeyDown = (event) => { if (event.key === 'Escape') { event.stopPropagation(); close(); } };
-  const active = tabs.find((tab) => tab.key === view) || tabs[0];
-  return <>
-    {open && <div className="history-switch-dismiss" aria-hidden="true" onClick={close} />}
-    <div className={`history-switch-anchor${open ? ' open' : ''}`} onKeyDown={onKeyDown}>
-      <button type="button" className="history-switch-toggle" onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="true" title="切换视图">{active.label}<ChevronDown size={12} /></button>
-      {open && <div className="history-switch-menu" role="tablist" aria-label="账号历史视图">
+// 历史视图页签：页头右侧一组无框文字页签，一次点击直达，绿色短下划线滑到当前项。
+// 页头太窄放不下时（窄窗口、手机，或以后入口变多）整组收成一个下拉框「本机 ▾」：按钮显示当前项，点开列出全部入口。
+// 放不放得下＝页签自然宽度 vs 页头可用宽度（最多占约六成，并给返回键与账号名留出位置），随页头宽度实时切换。
+// 入口常驻：不可用的置灰不消失（换账号时位置不跳），悬停 title 说明原因，点按弹 toast。←/→、Home/End 在可用入口间切换
+const HISTORY_TABS_MAX_SHARE = 0.62;
+const HISTORY_TABS_RESERVE_PX = 260;
+function HistoryViewTabs({ tabs, view, onChange, domId, panelId, onToast, animate = true }) {
+  const stripRef = useRef(null);
+  const navRef = useRef(null);
+  const measureRef = useRef(null);
+  const indicatorRef = useRef(null);
+  const toggleRef = useRef(null);
+  const placedKeyRef = useRef('');
+  const [compact, setCompact] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const activeTab = tabs.find((tab) => tab.key === view) || tabs[0];
+  const labelsKey = tabs.map((tab) => tab.label).join('|');
+  useLayoutEffect(() => {
+    const head = stripRef.current?.parentElement;
+    if (!head) return undefined;
+    let alive = true;
+    const check = () => {
+      const measure = measureRef.current;
+      if (!alive || !measure) return;
+      const style = getComputedStyle(head);
+      const inner = head.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      const available = Math.min(inner * HISTORY_TABS_MAX_SHARE, inner - HISTORY_TABS_RESERVE_PX);
+      setCompact(measure.offsetWidth > available);
+    };
+    check();
+    document.fonts?.ready?.then(check);
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(check);
+    observer?.observe(head);
+    return () => { alive = false; observer?.disconnect(); };
+  }, [labelsKey]);
+  useEffect(() => { if (!compact) setMenuOpen(false); }, [compact]);
+  // 下划线跟随当前项；首次出现、宽度或入口变化、关闭动画时直接放到位，其余情况滑过去
+  useLayoutEffect(() => {
+    const nav = navRef.current;
+    const indicator = indicatorRef.current;
+    const target = nav?.querySelector('[aria-selected="true"]');
+    if (!nav || !indicator || !target) { placedKeyRef.current = ''; return; }
+    const layoutKey = `${labelsKey}|${nav.clientWidth}`;
+    const instant = !animate || placedKeyRef.current !== layoutKey;
+    if (instant) indicator.style.transition = 'none';
+    indicator.style.opacity = '1';
+    indicator.style.width = `${target.offsetWidth - 16}px`;
+    indicator.style.transform = `translateX(${target.offsetLeft + 8}px)`;
+    if (instant) { void indicator.offsetWidth; indicator.style.transition = ''; }
+    placedKeyRef.current = layoutKey;
+  });
+  const choose = (tab) => {
+    if (tab.reason) {
+      // 下拉菜单保持打开，方便直接换一个可用的视图
+      onToast?.({ id: Date.now(), ok: false, message: `「${tab.label}」暂不可用：${tab.reason}` });
+      return;
+    }
+    setMenuOpen(false);
+    if (tab.key !== activeTab.key) onChange(tab.key);
+  };
+  const onKeyDown = (event) => {
+    if (event.key === 'Escape' && menuOpen) { event.stopPropagation(); setMenuOpen(false); toggleRef.current?.focus(); return; }
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key) || event.target.closest('.history-tabs-menu')) return;
+    const enabled = tabs.filter((tab) => !tab.reason);
+    const index = enabled.findIndex((tab) => tab.key === activeTab.key);
+    const next = event.key === 'Home' ? enabled[0] : event.key === 'End' ? enabled.at(-1) : enabled[index + (event.key === 'ArrowRight' ? 1 : -1)];
+    if (!next) return;
+    event.preventDefault();
+    choose(next);
+    requestAnimationFrame(() => (navRef.current?.querySelector(`[data-tab-key="${next.key}"]`) || toggleRef.current)?.focus());
+  };
+  return <div ref={stripRef} className={`history-tabs-strip${compact ? ' compact' : ''}${menuOpen ? ' open' : ''}`} onKeyDown={onKeyDown}>
+    <div className="history-tabs history-tabs-measure" ref={measureRef} aria-hidden="true">{tabs.map((tab) => <button type="button" tabIndex={-1} key={tab.key}>{tab.label}</button>)}</div>
+    {compact ? <>
+      {menuOpen && <div className="main-view-menu-dismiss" aria-hidden="true" onClick={() => setMenuOpen(false)} />}
+      <button type="button" ref={toggleRef} className="history-tabs-toggle" id={`${domId}-tab-${activeTab.key}`} aria-haspopup="true" aria-expanded={menuOpen} aria-controls={`${domId}-tabs-menu`} title="切换视图" onClick={() => setMenuOpen(!menuOpen)}>{activeTab.label}<ChevronDown size={12} /></button>
+      {menuOpen && <div className="main-view-menu history-tabs-menu" id={`${domId}-tabs-menu`} role="menu" aria-label="账号历史视图">
         {tabs.map((tab) => {
           const disabled = Boolean(tab.reason);
-          return <button type="button" role="tab" key={tab.key} id={`${domId}-tab-${tab.key}`} aria-controls={panelId} aria-selected={view === tab.key} aria-disabled={disabled || undefined}
-            className={`${view === tab.key ? 'active' : ''}${disabled ? ' disabled' : ''}`} title={disabled ? `暂不可用：${tab.reason}` : tab.label}
-            onClick={() => {
-              if (disabled) {
-                // 菜单保持打开，方便直接换一个可用的视图
-                onToast?.({ id: Date.now(), ok: false, message: `「${tab.label}」暂不可用：${tab.reason}` });
-                return;
-              }
-              onChange(tab.key);
-              close();
-            }}>
-            {tab.label}{!disabled && <span>{view === tab.key && <Check size={12} />}</span>}
+          const active = tab.key === activeTab.key;
+          return <button type="button" role="menuitemradio" key={tab.key} aria-checked={active} aria-disabled={disabled || undefined}
+            className={`${active ? 'active' : ''}${disabled ? ' disabled' : ''}`} title={disabled ? `暂不可用：${tab.reason}` : tab.label} onClick={() => choose(tab)}>
+            {tab.label}{!disabled && <span>{active && <Check size={12} />}</span>}
           </button>;
         })}
       </div>}
-    </div>
-  </>;
+    </> : <div className="history-tabs" role="tablist" aria-label="账号历史视图" ref={navRef}>
+      {tabs.map((tab) => {
+        const disabled = Boolean(tab.reason);
+        const active = tab.key === activeTab.key;
+        return <button type="button" role="tab" key={tab.key} id={`${domId}-tab-${tab.key}`} data-tab-key={tab.key} aria-controls={panelId} aria-selected={active}
+          aria-disabled={disabled || undefined} tabIndex={active ? 0 : -1} className={`${active ? 'active' : ''}${disabled ? ' disabled' : ''}`}
+          title={disabled ? `暂不可用：${tab.reason}` : tab.label} onClick={() => choose(tab)}>{tab.label}</button>;
+      })}
+      <span className="history-tabs-indicator" ref={indicatorRef} aria-hidden="true" />
+    </div>}
+  </div>;
 }
 
 function HistoryView({ account, provider, onBack, onProviderUsageState, settings, setSettings, readOnly = false, wasteWindowsOverride, onToast }) {
@@ -1879,12 +1984,21 @@ function HistoryView({ account, provider, onBack, onProviderUsageState, settings
     { key: 'local-usage', label: '本机', reason: localUsageDisabledReason },
     { key: 'waste', label: '浪费', reason: wasteDisabledReason },
   ];
+  // 用户点选页签时按页签顺序决定滑动方向；入口失效时的自动回退（setView）不播动画
+  const tabPanelRef = useRef(null);
+  const changeView = (next) => {
+    if (next === view) return;
+    if (!motionAllowed(settings?.historyTabAnimation)) { setView(next); return; }
+    const order = historyTabs.map((tab) => tab.key);
+    const direction = order.indexOf(next) > order.indexOf(view) ? 1 : -1;
+    runHistoryTabTransition(() => setView(next), { panel: tabPanelRef.current, direction, scale: accountAnimationScale(settings?.accountAnimationSpeed) });
+  };
   // Esc 返回看板：菜单打开、弹窗内、表单控件聚焦时留给它们自己处理
   useEffect(() => {
     if (!onBack) return undefined;
     const onKey = (event) => {
       if (event.key !== 'Escape') return;
-      if (event.target.closest?.('select, input, textarea, [contenteditable], .history-switch-anchor.open, .modal-backdrop')) return;
+      if (event.target.closest?.('select, input, textarea, [contenteditable], .history-tabs-strip.open, .modal-backdrop')) return;
       onBack();
     };
     document.addEventListener('keydown', onKey);
@@ -1901,9 +2015,9 @@ function HistoryView({ account, provider, onBack, onProviderUsageState, settings
           <b>{localPeriod.label}</b>
           <button type="button" onClick={() => setLocalPeriod(null)} title="关闭周期过滤，查看全部数据" aria-label="关闭周期过滤"><X size={10} /></button>
         </span>}
-        <HistoryViewSwitch tabs={historyTabs} view={view} onChange={setView} domId={historyDomId} panelId={historyPanelId} onToast={onToast} />
+        <HistoryViewTabs tabs={historyTabs} view={view} onChange={changeView} domId={historyDomId} panelId={historyPanelId} onToast={onToast} animate={motionAllowed(settings?.historyTabAnimation)} />
       </div>
-      <div className={`history-tabpanel${showLocalUsage ? ' local-usage-tabpanel' : ''}`} role="tabpanel" id={historyPanelId} aria-labelledby={`${historyDomId}-tab-${view}`}>{showProviderUsage ? <ProviderUsageView account={account} provider={provider} onState={onProviderUsageState} readOnly={readOnly} periodFilter={localPeriod} /> : showLocalUsage ? <LocalCliUsageView settings={settings} setSettings={setSettings} modelRules={localAnalysis.modelRules} scopeName={provider?.name || '当前厂商'} periodFilter={localPeriod} embedded /> : showWaste ? <WasteView account={account} wasteWindows={wasteWindows} onViewLocalUsage={showLocalUsageEntry ? (period) => { setLocalPeriod(period); setView('local-usage'); } : undefined} onViewProviderUsage={showProviderUsageEntry ? (period) => { setLocalPeriod(period); setView('provider-usage'); } : undefined} onViewTrend={(period) => { setLocalPeriod(period); setView('trend'); }} /> : <div className="trend-view">
+      <div ref={tabPanelRef} className={`history-tabpanel${showLocalUsage ? ' local-usage-tabpanel' : ''}`} role="tabpanel" id={historyPanelId} aria-labelledby={`${historyDomId}-tab-${view}`}>{showProviderUsage ? <ProviderUsageView account={account} provider={provider} onState={onProviderUsageState} readOnly={readOnly} periodFilter={localPeriod} /> : showLocalUsage ? <LocalCliUsageView settings={settings} setSettings={setSettings} modelRules={localAnalysis.modelRules} scopeName={provider?.name || '当前厂商'} periodFilter={localPeriod} embedded /> : showWaste ? <WasteView account={account} wasteWindows={wasteWindows} onViewLocalUsage={showLocalUsageEntry ? (period) => { setLocalPeriod(period); setView('local-usage'); } : undefined} onViewProviderUsage={showProviderUsageEntry ? (period) => { setLocalPeriod(period); setView('provider-usage'); } : undefined} onViewTrend={(period) => { setLocalPeriod(period); setView('trend'); }} /> : <div className="trend-view">
         {points === null ? <div className="settings-empty chart-empty">正在读取历史记录…</div>
           : trendPoints.length === 0 ? <div className="settings-empty chart-empty">{localPeriod ? `该期间（${localPeriod.label}）没有趋势记录` : '暂无历史数据，每次成功刷新额度后都会记录一条'}</div>
             : <UsageChart points={trendPoints} hiddenKeys={hiddenKeys} rangeKey={rangeKey} onRangeKeyChange={setRangeKey} fixedRangeLabel={localPeriod?.label || null} onToast={onToast} />}
@@ -2418,7 +2532,8 @@ function SharedSettingsPanel({ variant = 'desktop', desktopSection = 'all', show
       <div className="setting-select"><span><b>界面主题</b></span><select value={values.theme === 'light' ? 'light' : 'dark'} onChange={(event) => update((old) => ({ ...old, theme: event.target.value }))}><option value="dark">暗色</option><option value="light">亮色</option></select></div>
       <Toggle checked={values.showUpcomingRefresh !== false} onChange={(value) => update((old) => ({ ...old, showUpcomingRefresh: value }))} label="显示即将刷新" />
       <Toggle checked={motionAllowed(values.accountOpenAnimation)} onChange={(value) => update((old) => ({ ...old, accountOpenAnimation: value }))} label="打开账号动画" description="点击账号时卡片放大成额度趋势，返回时缩回原位" />
-      {motionAllowed(values.accountOpenAnimation) && <div className="setting-select"><span><b>动画速度</b></span><select value={ACCOUNT_ANIMATION_SPEEDS[values.accountAnimationSpeed] ? values.accountAnimationSpeed : 'normal'} onChange={(event) => update((old) => ({ ...old, accountAnimationSpeed: event.target.value }))}><option value="fast">快</option><option value="normal">标准</option><option value="slow">慢</option></select></div>}
+      <Toggle checked={motionAllowed(values.historyTabAnimation)} onChange={(value) => update((old) => ({ ...old, historyTabAnimation: value }))} label="页签切换动画" description="趋势、用量、本机、浪费之间切换时内容左右滑动" />
+      {(motionAllowed(values.accountOpenAnimation) || motionAllowed(values.historyTabAnimation)) && <div className="setting-select"><span><b>动画速度</b><small>打开账号与页签切换共用</small></span><select value={ACCOUNT_ANIMATION_SPEEDS[values.accountAnimationSpeed] ? values.accountAnimationSpeed : 'normal'} onChange={(event) => update((old) => ({ ...old, accountAnimationSpeed: event.target.value }))}><option value="fast">快</option><option value="normal">标准</option><option value="slow">慢</option></select></div>}
     </section>
     </>}
   </>;
