@@ -29,13 +29,14 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
   // 周期过滤:{ fromMs, toMs, label };非法区间视为没有
   const period = periodFilter && Number.isFinite(periodFilter.fromMs) && Number.isFinite(periodFilter.toMs) && periodFilter.fromMs < periodFilter.toMs
     ? periodFilter : null;
-  // 周期 → 日期区间(热力图按天聚合,取周期覆盖的本地日期,含两端)
+  // 周期 → 日期区间(热力图按天聚合,取周期覆盖的本地日期,含两端);
+  // 同时带上精确毫秒边界,让期间累计与模型拆分(between)同口径,整天换算不吞周期外的用量
   const periodQuery = useMemo(() => {
     if (!period) return null;
     const startDate = localDateStringOf(period.fromMs);
     const endDate = localDateStringOf(Math.min(period.toMs, Date.now()));
     if (!startDate || !endDate || startDate > endDate) return null;
-    return { startDate, endDate };
+    return { startDate, endDate, fromMs: period.fromMs, toMs: period.toMs };
   }, [period]);
   const {
     sources: sourcesBlock, summary: summaryBlock, dayModels: dayModelsBlock, rangeModels: rangeModelsBlock, scanning,
@@ -72,7 +73,7 @@ export default function LocalCliUsageView({ settings, setSettings, onApi, onMeta
   // ---- 数据加载 -----------------------------------------------------------
 
   const loadSummary = useCallback((agent) => {
-    refreshSummary({ agent, timezone, sourceId, ...(periodQuery ? { startDate: periodQuery.startDate, endDate: periodQuery.endDate } : {}), ...(queryModelRules ? { modelRules: queryModelRules } : {}) });
+    refreshSummary({ agent, timezone, sourceId, ...(periodQuery || {}), ...(queryModelRules ? { modelRules: queryModelRules } : {}) });
   }, [refreshSummary, timezone, queryModelRules, sourceId, periodQuery]);
 
   const loadDayModels = useCallback((agent, date, merge) => {

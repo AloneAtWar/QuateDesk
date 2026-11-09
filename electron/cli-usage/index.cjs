@@ -141,10 +141,23 @@ class CliUsageService {
       if (query.startDate > endDate) throw new CliUsageError('无效的日期区间');
       startDate = query.startDate;
     }
+    // 精确时间边界(与日期区间并用):把整天窗口收敛到周期真实起止,含头不含尾,
+    // 上界不允许伸到未来;与模型查询的 between 校验同口径
+    let exactFromMs = null;
+    let exactToMs = null;
+    if ((query.fromMs !== undefined && query.fromMs !== null)
+      || (query.toMs !== undefined && query.toMs !== null)) {
+      const fromMs = Number(query.fromMs);
+      const toMs = Number(query.toMs);
+      if (!Number.isSafeInteger(fromMs) || !Number.isSafeInteger(toMs)
+        || fromMs <= 0 || fromMs >= toMs || toMs > Date.now() + 86_400_000) throw new CliUsageError('无效的时间区间');
+      exactFromMs = fromMs;
+      exactToMs = toMs;
+    }
     let modelRules;
     try { modelRules = normalizeModelRules(query.modelRules); }
     catch (error) { throw new CliUsageError(error.message); }
-    return { agent, timezone, endDate, startDate, modelRules, sourceId: CliUsageService.normalizeSourceId(query.sourceId) };
+    return { agent, timezone, endDate, startDate, fromMs: exactFromMs, toMs: exactToMs, modelRules, sourceId: CliUsageService.normalizeSourceId(query.sourceId) };
   }
 
   static normalizeModelsQuery(raw) {

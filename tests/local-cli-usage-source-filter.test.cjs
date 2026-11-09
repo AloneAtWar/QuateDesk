@@ -111,6 +111,35 @@ test('summary 显式日期区间:天数桶与累计口径都随区间收敛', (t
   assert.equal(full.days.length, 30);
 });
 
+test('summary 精确边界:整天窗口收敛到 [fromMs, toMs),期间累计与模型拆分同口径', (t) => {
+  const store = fixture(t, 'qd-src-exact-');
+  const dateOf = (ms) => localDateString('UTC', ms);
+  const base = Date.UTC(2026, 9, 20); // 2026-10-20 00:00Z
+  const fromMs = base + 3 * 3_600_000; // 周期起点:10-20 03:00(非零点时刻)
+  const toMs = base + DAY + 21 * 3_600_000; // 周期重置:10-21 21:00(区间终点,不含)
+  store.upsertEvents([
+    event('head', { inputTokens: 10, occurredAtMs: base + 3_600_000, model: 'glm-4.7' }), // 首日内、周期起点之前(上一周期的尾巴)
+    event('at-start', { inputTokens: 100, occurredAtMs: fromMs }),
+    event('mid', { inputTokens: 50, occurredAtMs: base + DAY + 6 * 3_600_000 }),
+    event('tail', { inputTokens: 7, occurredAtMs: toMs, model: 'glm-4.7' }), // 末日内、周期结束之后(下一周期的开头)
+  ]);
+  const report = store.summary({
+    agent: 'all', timezone: 'UTC', days: 30,
+    startDate: dateOf(fromMs), endDate: dateOf(toMs - 1), fromMs, toMs,
+  });
+  // 期间累计只含周期内的部分,与模型拆分 between 完全一致
+  assert.equal(report.summary.totalTokens, tokens(100) + tokens(50));
+  assert.equal(report.summary.totalTokens, modelsTotal(store, { scope: { kind: 'between', fromMs, toMs } }));
+  // 边界日的日桶同样收敛:首日桶不含周期前、末日桶不含周期后
+  assert.deepEqual(report.days.map((day) => day.date), [dateOf(fromMs), dateOf(toMs - 1)]);
+  assert.equal(report.days[0].totalTokens, tokens(100));
+  assert.equal(report.days[1].totalTokens, tokens(50));
+  // 只传日期区间不传精确边界时维持整天口径:头尾两段被圈进期间累计(旧行为留作对照)
+  const whole = store.summary({ agent: 'all', timezone: 'UTC', days: 30, startDate: dateOf(fromMs), endDate: dateOf(toMs - 1) });
+  assert.equal(whole.summary.totalTokens, tokens(10) + tokens(100) + tokens(50) + tokens(7));
+  assert.equal(whole.days[0].totalTokens, tokens(10) + tokens(100));
+});
+
 test('facade 校验:between 区间与档案来源 ID 的合法输入', () => {
   const base = { agent: 'all', timezone: 'UTC' };
   const between = CliUsageService.normalizeModelsQuery({ ...base, scope: { kind: 'between', fromMs: now - 5 * DAY, toMs: now } });
@@ -122,6 +151,15 @@ test('facade 校验:between 区间与档案来源 ID 的合法输入', () => {
   assert.throws(() => CliUsageService.normalizeSummaryQuery({ ...base, startDate: '2030-01-01' }), /日期区间/);
   assert.throws(() => CliUsageService.normalizeSummaryQuery({ ...base, startDate: 'bad' }), /无效的日期/);
   assert.equal(CliUsageService.normalizeSummaryQuery({ ...base, startDate: '2026-10-01' }).startDate, '2026-10-01');
+  // summary 的精确边界:成对出现、含头不含尾、上界不伸到未来
+  const exact = CliUsageService.normalizeSummaryQuery({ ...base, startDate: '2026-10-01', fromMs: now - 5 * DAY, toMs: now });
+  assert.equal(exact.fromMs, now - 5 * DAY);
+  assert.equal(exact.toMs, now);
+  assert.equal(CliUsageService.normalizeSummaryQuery({ ...base }).fromMs, null);
+  assert.equal(CliUsageService.normalizeSummaryQuery({ ...base }).toMs, null);
+  assert.throws(() => CliUsageService.normalizeSummaryQuery({ ...base, fromMs: now, toMs: now - DAY }), /时间区间/);
+  assert.throws(() => CliUsageService.normalizeSummaryQuery({ ...base, fromMs: now - DAY }), /时间区间/);
+  assert.throws(() => CliUsageService.normalizeSummaryQuery({ ...base, fromMs: now - DAY, toMs: now + 10 * DAY }), /时间区间/);
   const withSource = CliUsageService.normalizeModelsQuery({ ...base, scope: { kind: 'range', days: 7 }, sourceId: '0b74a3f0-1234-4abc-9def-0123456789ab' });
   assert.equal(withSource.sourceId, '0b74a3f0-1234-4abc-9def-0123456789ab');
   assert.equal(CliUsageService.normalizeModelsQuery({ ...base, scope: { kind: 'range', days: 7 } }).sourceId, null);

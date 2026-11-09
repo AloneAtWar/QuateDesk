@@ -411,7 +411,7 @@ ON CONFLICT(root_id) DO UPDATE SET agent = excluded.agent, label = excluded.labe
 
   // ---- 聚合:近一年摘要 ---------------------------------------------------
 
-  summary({ agent, timezone, endDate, startDate = null, days = 365, modelRules = null, sourceId = null }) {
+  summary({ agent, timezone, endDate, startDate = null, fromMs = null, toMs = null, days = 365, modelRules = null, sourceId = null }) {
     // endDate 缺省为该时区今天(双保险:facade 的 IPC 层也会先规整);
     // 指定 startDate 时按显式日期区间取天数(浪费周期 → 本机用量视图)
     const effectiveEndDate = endDate || localDateString(timezone);
@@ -423,6 +423,10 @@ ON CONFLICT(root_id) DO UPDATE SET agent = excluded.agent, label = excluded.labe
     const boundaries = buildDayBoundaries(timezone, effectiveEndDate, Math.max(1, effectiveDays));
     const startMs = boundaries[0].startMs;
     const endMs = boundaries[boundaries.length - 1].endMs;
+    // 精确时间边界(浪费周期):日桶仍按整天铺,但统计窗口收敛到 [fromMs, toMs)
+    // 含头不含尾,与模型拆分的 between 口径一致;边界日的桶只累计周期内的部分
+    const queryFromMs = Number.isSafeInteger(fromMs) && fromMs > 0 ? Math.max(startMs, fromMs) : startMs;
+    const queryToMs = Number.isSafeInteger(toMs) && toMs > 0 ? Math.min(endMs, toMs) : endMs;
 
     const buckets = boundaries.map((boundary) => ({
       date: boundary.date, startMs: boundary.startMs, endMs: boundary.endMs,
@@ -442,7 +446,7 @@ ON CONFLICT(root_id) DO UPDATE SET agent = excluded.agent, label = excluded.labe
     const iterate = filterByAgent
       ? this.db.prepare(`SELECT agent, occurred_at_ms, session_key, model, canonical_model_key, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, total_tokens FROM ${table} WHERE agent = ? AND occurred_at_ms >= ? AND occurred_at_ms < ? ORDER BY occurred_at_ms`)
       : this.db.prepare(`SELECT agent, occurred_at_ms, session_key, model, canonical_model_key, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, total_tokens FROM ${table} WHERE occurred_at_ms >= ? AND occurred_at_ms < ? ORDER BY occurred_at_ms`);
-    const params = filterByAgent ? [...tableParams, agent, startMs, endMs] : [...tableParams, startMs, endMs];
+    const params = filterByAgent ? [...tableParams, agent, queryFromMs, queryToMs] : [...tableParams, queryFromMs, queryToMs];
 
     let index = 0;
     for (const row of iterate.iterate(...params)) {
@@ -472,16 +476,16 @@ ON CONFLICT(root_id) DO UPDATE SET agent = excluded.agent, label = excluded.labe
     const activeDays = totals.filter((value) => value > 0).length;
     const cacheBase = inputTokens + cacheReadTokens + cacheWriteTokens;
     const cacheReuseRatio = cacheBase > 0 ? cacheReadTokens / cacheBase : null;
-    // 累计口径:显式日期区间时随区间收敛,只统计该期间;默认近一年窗口则统计全部已索引历史,
-    // 若最早事件早于窗口起点,说明只覆盖部分区间
-    const totalsFromMs = startDate ? startMs : null;
-    const totalsToMs = startDate ? endMs : null;
+    // 累计口径:显式日期区间时随区间收敛,只统计该期间(含精确边界);默认近一年窗口则统计
+    // 全部已索引历史,若最早事件早于窗口起点,说明只覆盖部分区间
+    const totalsFromMs = startDate ? queryFromMs : null;
+    const totalsToMs = startDate ? queryToMs : null;
     const allHistoryTokens = this.totalTokensAll(agent, modelRules, sourceId, totalsFromMs, totalsToMs);
     const earliest = this.earliestEventMs(agent, modelRules, sourceId, totalsFromMs, totalsToMs);
 
     return {
       range: { start: boundaries[0].date, end: boundaries[boundaries.length - 1].date, timezone },
-      filter: { agent, timezone, endDate, startDate, modelRules, sourceId: sourceId || null },
+      filter: { agent, timezone, endDate, startDate, fromMs: Number.isSafeInteger(fromMs) ? fromMs : null, toMs: Number.isSafeInteger(toMs) ? toMs : null, modelRules, sourceId: sourceId || null },
       archiveScope: { importedSources: Number(this.db.prepare('SELECT COUNT(*) AS count FROM usage_archive_sources WHERE enabled = 1').get().count) },
       matchedModels: this.matchingModels(agent, modelRules, sourceId),
       recordsByAgent: this.matchingRecordsByAgent(modelRules, sourceId),
