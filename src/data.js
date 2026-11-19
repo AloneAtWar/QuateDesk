@@ -69,6 +69,13 @@ export const adapterRegistry = {
     auth: 'none',
     windows: ['gemini_pro', 'gemini_flash', 'gemini_flash_lite'],
   },
+  antigravity: {
+    id: 'antigravity',
+    label: 'Antigravity',
+    endpoint: '',
+    auth: 'none',
+    windows: ['agy_gemini_5h', 'agy_gemini_7d', 'agy_claudegpt_5h', 'agy_claudegpt_7d'],
+  },
   copilot: {
     id: 'copilot',
     label: 'GitHub Copilot',
@@ -95,6 +102,8 @@ export const builtinLocalAnalysisDefaults = {
   mimo: { enabled: true, modelRules: [{ mode: 'regex', value: '^mimo(?:-|$)' }] },
   claude: { enabled: true, modelRules: [{ mode: 'regex', value: '^claude(?:-|$)' }] },
   gemini: { enabled: true, modelRules: [{ mode: 'regex', value: '^gemini(?:-|$)' }] },
+  // Antigravity 会话里既有 Gemini 也有 Claude / GPT-OSS 模型（与 gemini、claude 渠道重叠属预期）
+  antigravity: { enabled: true, modelRules: [{ mode: 'regex', value: '^(?:gemini|claude|gpt-oss)' }] },
 };
 
 const localAnalysisDefault = (id) => {
@@ -114,6 +123,7 @@ export const providerCatalog = [
   { id: 'claude', name: 'Claude', legalName: 'Claude Code', monogram: 'C', tone: 'coral', adapter: 'claude', logo: './logos/claude.jpg', website: 'https://claude.com/claude-code', localAnalysis: localAnalysisDefault('claude') },
   { id: 'codex', name: 'Codex', legalName: 'OpenAI Codex', monogram: 'O', tone: 'mint', adapter: 'codex', logo: './logos/codex.svg', website: 'https://developers.openai.com/codex/', localAnalysis: localAnalysisDefault('codex') },
   { id: 'gemini', name: 'Gemini', legalName: 'Gemini CLI', monogram: 'G', tone: 'sky', adapter: 'gemini', logo: './logos/gemini.svg', website: 'https://gemini.google.com/', localAnalysis: localAnalysisDefault('gemini') },
+  { id: 'antigravity', name: 'Antigravity', legalName: 'Google Antigravity', monogram: 'A', tone: 'sky', adapter: 'antigravity', logo: './logos/antigravity.svg', website: 'https://antigravity.google/', localAnalysis: localAnalysisDefault('antigravity') },
   { id: 'kimi-subscription', name: 'Kimi 订阅', legalName: 'Kimi for Coding 订阅', monogram: 'K', tone: 'sky', adapter: 'kimi', logo: './logos/kimi.png', website: 'https://www.kimi.com/', localAnalysis: localAnalysisDefault('kimi-subscription') },
   { id: 'copilot', name: 'GitHub Copilot', legalName: 'GitHub Copilot 订阅', monogram: 'G', tone: 'slate', adapter: 'copilot', logo: './logos/copilot.svg', website: 'https://github.com/features/copilot' },
 ];
@@ -130,6 +140,12 @@ export const windowCatalog = {
   gemini_pro: { key: 'gemini_pro', label: 'Gemini Pro', short: 'Pro', group: 'Gemini', color: 'sky' },
   gemini_flash: { key: 'gemini_flash', label: 'Gemini Flash', short: 'Flash', group: 'Gemini', color: 'cyan' },
   gemini_flash_lite: { key: 'gemini_flash_lite', label: 'Flash Lite', short: 'Lite', group: 'Gemini', color: 'mint' },
+  // Antigravity 的池窗口：静态 key 只覆盖两个家族池；单模型特例池（如 Gemini 4 Argon）
+  // 走动态 key（agy_pool_*），label 随 meter 下发，渲染端用 meter.label 兜底
+  agy_gemini_5h: { key: 'agy_gemini_5h', label: 'Gemini 池 5h', short: 'Gem 5h', group: 'Antigravity', color: 'cyan' },
+  agy_gemini_7d: { key: 'agy_gemini_7d', label: 'Gemini 池 7d', short: 'Gem 7d', group: 'Antigravity', color: 'sky' },
+  agy_claudegpt_5h: { key: 'agy_claudegpt_5h', label: 'Claude/GPT 5h', short: 'C·G 5h', group: 'Antigravity', color: 'coral' },
+  agy_claudegpt_7d: { key: 'agy_claudegpt_7d', label: 'Claude/GPT 7d', short: 'C·G 7d', group: 'Antigravity', color: 'amber' },
 };
 
 export const initialAccounts = [

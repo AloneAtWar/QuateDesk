@@ -544,6 +544,7 @@ const builtinLogos = {
   claude: './logos/claude.jpg',
   codex: './logos/codex.svg',
   gemini: './logos/gemini.svg',
+  antigravity: './logos/antigravity.svg',
   copilot: './logos/copilot.svg',
 };
 // 内置厂商的默认官网；仅在厂商从未设置过官网时补齐，用户清空后不再强制回填
@@ -559,6 +560,7 @@ const builtinWebsites = {
   claude: 'https://claude.com/claude-code',
   codex: 'https://developers.openai.com/codex/',
   gemini: 'https://gemini.google.com/',
+  antigravity: 'https://antigravity.google/',
   copilot: 'https://github.com/features/copilot',
 };
 // 专属适配类内置厂商（凭据来自本机 CLI / 官方接口），历史 state 里没有的加载/保存时补齐
@@ -573,6 +575,8 @@ const ensureCliProviders = (providers) => {
     { id: 'claude', name: 'Claude', legalName: 'Claude Code', monogram: 'C', tone: 'coral', adapter: 'claude', logo: './logos/claude.jpg' },
     { id: 'codex', name: 'Codex', legalName: 'OpenAI Codex', monogram: 'O', tone: 'mint', adapter: 'codex', logo: './logos/codex.svg' },
     { id: 'gemini', name: 'Gemini', legalName: 'Gemini CLI', monogram: 'G', tone: 'sky', adapter: 'gemini', logo: './logos/gemini.svg' },
+    // Antigravity：Gemini CLI 的官方继任者，额度是「池 × 周期」双层（Gemini / Claude&GPT 池）
+    { id: 'antigravity', name: 'Antigravity', legalName: 'Google Antigravity', monogram: 'A', tone: 'sky', adapter: 'antigravity', logo: './logos/antigravity.svg' },
     { id: 'kimi-subscription', name: 'Kimi 订阅', legalName: 'Kimi for Coding 订阅', monogram: 'K', tone: 'sky', adapter: 'kimi', logo: './logos/kimi.png' },
     { id: 'copilot', name: 'GitHub Copilot', legalName: 'GitHub Copilot 订阅', monogram: 'G', tone: 'slate', adapter: 'copilot', logo: './logos/copilot.svg' },
   ];

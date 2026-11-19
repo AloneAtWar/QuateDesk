@@ -4,6 +4,8 @@
 > 目标平台：ZCode、Kimi Code、Claude Code、OpenAI Codex  
 > 结论：建议新增独立的全局“本机用量”视图，直接只读解析本机会话数据，不把本地统计混入现有账号额度或官方用量。
 
+> 规范治理（2026-11-09，本轮用户确认）：本文件保留历史提案、技术方案与交接记录；现行界面约定以根目录 [DESIGN.md](../../../DESIGN.md) 为准。下文所有“标题栏第四个本机用量图标”和“模型列表固定高度（含 236px、2 行与 50 行等高）”的 UI 要求已失效：当前从标题栏「···」菜单进入本机用量；模型表随实际行数结束，多行在内部滚动。热力图与模型拆分切换时页面外框稳定，不等于表格固定高度。文中的旧接入代码、CSS 骨架和 V6 图稿仅保留为历史资料，不作为当前 UI 实施或验收依据。
+
 ## 1. 决策摘要
 
 ### 产品决策
@@ -426,7 +428,7 @@ type CliUsageAdapter = {
 
 ## 7. 产品与界面设计
 
-### 7.1 入口
+### 7.1 入口（历史第四图标方案，已失效）
 
 标题栏 `.overview-controls` 的全局视图切换新增第四个按钮，放在“周期明细”右侧，tooltip 为“本机用量”，使用柱形图图标：
 
@@ -514,7 +516,9 @@ type CliUsageAdapter = {
 - Token 总量与所选范围内的占比。
 - 新输入、缓存读取、缓存写入、输出四段构成条；无法分类的差额在 tooltip 中列为“其他”。
 
-模型列表使用固定高度的纵向滚动容器，直接向下滚动查看全部模型，不提供“查看全部 N 个模型”按钮。滚动条占用容器内部预留轨道或以 overlay 绘制：只有内容超出时才显示，但列表边框、列宽和页面高度始终不变。表头与 Token 构成图例固定在滚动区外，不随列表滚走。
+历史高度方案（已失效）：模型列表使用固定高度的纵向滚动容器，直接向下滚动查看全部模型，不提供“查看全部 N 个模型”按钮。滚动条占用容器内部预留轨道或以 overlay 绘制：只有内容超出时才显示，但列表边框、列宽和页面高度始终不变。表头与 Token 构成图例固定在滚动区外，不随列表滚走。
+
+现行高度规则见 [DESIGN.md](../../../DESIGN.md)：模型表随实际行数结束，多行在内部滚动；保持页面外框稳定，不把少量数据拉成固定高度空表。（本轮治理用户确认，2026-11-09）
 
 合并规则：
 
@@ -677,7 +681,7 @@ tests/
 
 不要继续把所有新组件写进已经很长的 `src/main.jsx`。`main.jsx` 只保留全局入口、顶层状态和 `LocalCliUsageView` 挂载。
 
-### 14.2 顶部全局入口
+### 14.2 顶部全局入口（历史第四图标方案，已失效）
 
 现有标题栏的 `.overview-controls` 有 `rings / rows / periods` 三个按钮。紧跟 `periods` 增加第四个按钮：
 
@@ -719,6 +723,8 @@ overviewMode === 'local-usage'
 - 主进程合并并发扫描；重复点击只复用当前扫描 Promise，不能启动多个 Worker。
 
 ### 14.3 前端组件树
+
+下方组件树保留历史结构，其中“纵向固定高度模型滚动区”已由 [DESIGN.md](../../../DESIGN.md) 的随行数结束、超出后内部滚动规则替代；不据此恢复固定表高。
 
 ```text
 LocalCliUsageView
@@ -832,6 +838,8 @@ const effectiveMergeSameModels = canMergeModels && settings.localCliUsage.mergeS
 
 ### 14.7 模型拆分视图
 
+本节下方“模型行在固定高度容器内”“2 行和 50 行外框尺寸相同”是已失效的历史高度方案；现行表格高度与滚动规则以 [DESIGN.md](../../../DESIGN.md) 为准。数据、排序与合并方案保留原记录。
+
 模型视图不渲染四张统计卡。标题右侧控件顺序：
 
 ```text
@@ -852,6 +860,8 @@ const effectiveMergeSameModels = canMergeModels && settings.localCliUsage.mergeS
 - 使用 `overflow-y: auto; scrollbar-gutter: stable;`，有 2 行和 50 行时外框尺寸、列宽和页面高度一致。
 
 ### 14.8 建议 CSS 骨架
+
+以下代码保留历史示例；其中 `.local-cli-model-list` 的 `height: 236px; min-height: 236px` 已失效，不应用于现行界面。页面外框稳定与模型表随行数结束分别按 [DESIGN.md](../../../DESIGN.md) 执行。
 
 数值可以在实现时按 520×470 固定窗口微调，但结构不要改变：
 
@@ -928,6 +938,8 @@ scanLocalCliUsage: () => ipcRenderer.invoke('cliUsage:scan'),
 
 ### 14.12 实施顺序与提交边界
 
+以下是当时的实施记录；第 6 项的“顶部第四视图”已由「···」菜单入口替代，不再执行旧入口方案。
+
 建议接手 Agent 按以下顺序推进，每一步都保持应用可构建：
 
 1. 定义 normalized event、SQLite schema、adapter registry 和四组 fixture。
@@ -940,6 +952,8 @@ scanLocalCliUsage: () => ipcRenderer.invoke('cliUsage:scan'),
 8. 完成暗色/亮色与 520×470 固定窗口视觉验收，再运行 `npm test` 和 `npm run build`。
 
 ### 14.13 完成定义
+
+以下是历史验收清单；“第四个本机用量按钮”与“和 V6 概念图结构一致”不再作为当前 UI 验收条件，入口、模型表高度和页面外框以 [DESIGN.md](../../../DESIGN.md) 为准。
 
 交付前逐项确认：
 

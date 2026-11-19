@@ -2,7 +2,7 @@
 
 `/api/v1/*` is a read-only JSON interface provided by the desktop app for **local or LAN agents/scripts**, used to answer analytical questions like "analyze my current usage", "how did I use it today", "token consumption over a recent period". It shares the same port and token system as the remote viewing web page (the old `/api/*` contract remains unchanged and is dedicated to the remote page / Android App; v1 is a separate contract).
 
-CLI usage reports include local collected records and enabled imported usage archives. Imported sources are managed in desktop Settings → Other → Usage archives; each source contributes one complete snapshot. Session/project identifiers are namespaced by origin, and disabling/deleting an imported source removes its contribution from these reports. Agent detection status and scan times still describe the local scanner.
+CLI usage reports include local collected records and enabled imported usage archives. Imported sources are managed in desktop Settings → Data → Usage archives; each source contributes one complete snapshot. Session/project identifiers are namespaced by origin, and disabling/deleting an imported source removes its contribution from these reports. Agent detection status and scan times still describe the local scanner.
 
 - All endpoints are **GET only**; the interface never exposes credentials, conversation content, or absolute paths.
 - On the same machine, an agent can obtain a token directly from the loopback address without a pairing code (see below); LAN / other machines need to use a pairing code to pair as a "device".

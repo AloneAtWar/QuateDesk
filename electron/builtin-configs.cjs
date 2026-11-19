@@ -76,6 +76,11 @@ const builtinConfigs = {
   claude: { windows: ['five_hour', 'weekly'], wasteWindows: ['weekly'], adapterMode: 'claude', auth: 'none', credentialRequired: false },
   codex: { windows: ['five_hour', 'weekly', 'monthly'], wasteWindows: ['weekly', 'monthly'], adapterMode: 'codex', auth: 'none', credentialRequired: false },
   gemini: { windows: ['gemini_pro', 'gemini_flash', 'gemini_flash_lite'], wasteWindows: [], adapterMode: 'gemini', auth: 'none', credentialRequired: false },
+  // Antigravity（Gemini CLI 的官方继任者）：专属适配（cli-quota.cjs queryAntigravityQuota）。
+  // 额度是「池 × 周期」双层：分组池（Gemini / Claude & GPT，每池 5h + 7d，另有单模型
+  // 特例池走动态窗口）+ 逐模型 5h 读数；凭据复用 Antigravity 桌面版登录
+  // （Windows 凭据管理器 gemini:antigravity）或导入的账号快照
+  antigravity: { windows: ['agy_gemini_5h', 'agy_gemini_7d', 'agy_claudegpt_5h', 'agy_claudegpt_7d'], wasteWindows: [], adapterMode: 'antigravity', auth: 'none', credentialRequired: false },
   // Kimi 官方订阅：同一渠道双登录方式。扫码登录（快照凭据）走专属适配
   // （cli-quota.cjs queryKimiWebQuota），含 5 小时 / 7 天 / 月订阅额度；
   // API Key 登录（poller.cjs queryKimiApiKeyQuota）查 api.kimi.com 用量端点，

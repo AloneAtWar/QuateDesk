@@ -516,8 +516,51 @@ export function Logo({ provider, size = 'md', interactive = true }) {
   >{provider?.logo && !failed ? <img src={provider.logo} alt="" onError={() => setFailed(true)} /> : provider?.monogram || '?'}</span>;
 }
 
+// 动态窗口（Antigravity 的单模型特例池 agy_pool_* 等）不在 windowCatalog 里，
+// label 由适配器随 meter 下发；目录条目优先，meter.label 兜底
+const windowLabel = (meter) => meter?.label || windowCatalog[meter?.key]?.label || meter?.key || '';
+
+// Antigravity 的池分组展示：同一池的 5h/7d 窗口合并为一行（Gemini 池、Claude/GPT 池、
+// Gemini 4 Argon 特例池各一行），行内按周期并列读数——5 个窗口平铺会把卡片撑爆
+const agyPoolGroupOf = (key) => {
+  if (key.startsWith('agy_gemini')) return 'agy_gemini';
+  if (key.startsWith('agy_claudegpt')) return 'agy_claudegpt';
+  if (/^agy_pool_.+_(5h|7d)$/.test(key)) return key.replace(/_(5h|7d)$/, '');
+  return null;
+};
+const AGY_POOL_GROUP_LABELS = { agy_gemini: 'Gemini 池', agy_claudegpt: 'Claude/GPT 池' };
+const agyPoolGroupRows = (windows) => {
+  const rows = [];
+  const byPool = new Map();
+  for (const meter of windows || []) {
+    const pool = agyPoolGroupOf(meter.key);
+    if (!pool) continue;
+    let row = byPool.get(pool);
+    if (!row) {
+      row = { pool, label: AGY_POOL_GROUP_LABELS[pool] || String(meter.label || pool).replace(/ · (5 小时|7 天)$/, ''), windows: [] };
+      byPool.set(pool, row);
+      rows.push(row);
+    }
+    row.windows.push(meter);
+  }
+  for (const row of rows) row.windows.sort((a, b) => (durationOrder[a.key] || 9) - (durationOrder[b.key] || 9));
+  return rows;
+};
+const agyCycleShort = (meter) => (/_5h$/.test(meter.key) ? '5h' : /_7d$/.test(meter.key) ? '7d' : windowCatalog[meter.key]?.short || meter.key);
+// Antigravity 的环视图：一池一环，优先周窗口（7d）；免费视图回落没有 Gemini 周窗口时用该池 5h
+const agyPoolRingWindows = (windows) => agyPoolGroupRows(windows)
+  .map((row) => row.windows.find((meter) => /_7d$/.test(meter.key)) || row.windows[0]);
+// 「即将刷新」芯片上的池短标：同账号的多条池记录会并排出现在同一条周期队列里，必须可区分
+const agyPoolShortTag = (meter) => {
+  const short = windowCatalog[meter.key]?.short;
+  if (short) return short;
+  const cycle = /_5h$/.test(meter.key) ? '5h' : /_7d$/.test(meter.key) ? '7d' : '';
+  const name = String(meter.label || '').replace(/ · (5 小时|7 天)$/, '') || '池';
+  return cycle ? `${(/argon/i.test(name) ? 'Argon' : name)} ${cycle}` : name;
+};
+
 function MeterBar({ meter, compact = false }) {
-  const label = windowCatalog[meter.key]?.label || meter.key;
+  const label = windowLabel(meter);
   return <div className={`meter-line ${compact ? 'compact' : ''} ${meter.available === false ? 'unavailable' : ''}`}>
     <div className="meter-line-head">
       <span className="meter-name">{label}</span>
@@ -555,10 +598,13 @@ function RuleMarks({ meter, rules = [] }) {
   return matched.length ? <span className="rule-marks">{matched.map((rule) => { const text = rule.label || `${rule.beforeMinutes} 分钟内刷新 · ≥${rule.minRemaining}%`; return <TagPill key={rule.id} tone="warm" title={text}>{text}</TagPill>; })}</span> : null;
 }
 
-const durationOrder = { five_hour: 1, daily: 2, weekly: 3, monthly: 4, yearly: 4.6, mimo_plan: 4.5, balance: 5 };
+// Antigravity 池窗口排入既有周期序列：5h 池紧跟 five_hour、7d 池紧跟 weekly，
+// 环心默认展示最短周期（最先重置的量级）
+const durationOrder = { five_hour: 1, daily: 2, weekly: 3, monthly: 4, yearly: 4.6, mimo_plan: 4.5, balance: 5, agy_gemini_5h: 1.1, agy_claudegpt_5h: 1.2, agy_gemini_7d: 3.1, agy_claudegpt_7d: 3.2 };
 function ConcentricRings({ account }) {
-  const meters = [...(account.windows || [])].sort((a, b) => (durationOrder[b.key] || 9) - (durationOrder[a.key] || 9)).slice(0, 4);
-  const smallest = meters.reduce((current, meter) => !current || (durationOrder[meter.key] || 9) < (durationOrder[current.key] || 9) ? meter : current, null);
+  // 未知周期 key（Antigravity 的动态特例池等）兜底 99：排在已知周期之后，超 4 环时先被裁
+  const meters = [...(account.windows || [])].sort((a, b) => ((durationOrder[b.key] || 99) - (durationOrder[a.key] || 99))).slice(0, 4);
+  const smallest = meters.reduce((current, meter) => !current || (durationOrder[meter.key] || 99) < (durationOrder[current.key] || 99) ? meter : current, null);
   const [hoveredKey, setHoveredKey] = useState(null);
   // 触屏没有悬停：点中心读数逐个切换窗口。环本体不挂点击——环盘占卡片大半，
   // 拦截点击会让手机上点卡片打不开趋势页
@@ -576,7 +622,7 @@ function ConcentricRings({ account }) {
   };
   return <div className="concentric-rings" aria-label={`${meters.length} 个额度窗口`}>
     {meters.map((meter, index) => <div className={`quota-ring ring-${index} ${active?.key === meter.key ? 'is-active' : ''}`} key={meter.key} style={{ '--progress': `${Math.max(0, Math.min(100, Number(meter.remaining || 0))) * 3.6}deg` }} onMouseEnter={() => setHoveredKey(meter.key)} onMouseLeave={() => setHoveredKey(null)}><span /></div>)}
-    <div className={`ring-core ${unavailable ? 'unavailable' : ''}`} role={meters.length > 1 ? 'button' : undefined} tabIndex={meters.length > 1 ? 0 : undefined} aria-label={meters.length > 1 ? '查看各窗口剩余额度' : undefined} onClick={meters.length > 1 ? cycleWindow : undefined} onKeyDown={meters.length > 1 ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); cycleWindow(event); } } : undefined}><strong>{unavailable ? '不可用' : active ? formatAmount(active) : '—'}</strong><small>{active ? windowCatalog[active.key]?.label || active.key : '暂无窗口'}</small></div>
+    <div className={`ring-core ${unavailable ? 'unavailable' : ''}`} role={meters.length > 1 ? 'button' : undefined} tabIndex={meters.length > 1 ? 0 : undefined} aria-label={meters.length > 1 ? '查看各窗口剩余额度' : undefined} onClick={meters.length > 1 ? cycleWindow : undefined} onKeyDown={meters.length > 1 ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); cycleWindow(event); } } : undefined}><strong>{unavailable ? '不可用' : active ? formatAmount(active) : '—'}</strong><small>{active ? windowLabel(active) : '暂无窗口'}</small></div>
   </div>;
 }
 
@@ -650,7 +696,7 @@ function ResetTimeline({ accounts, providers }) {
     return {
       name: point.account.name,
       providerName: provider?.name || '',
-      label: windowCatalog[point.meter.key]?.label || point.meter.key,
+      label: windowLabel(point.meter),
       amount: formatAmount(point.meter),
       absolute: (d.getMonth() + 1) + '/' + d.getDate() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()),
       relative: formatReset(point.meter.resetAt),
@@ -702,7 +748,7 @@ function ResetTimeline({ accounts, providers }) {
           const x = Math.max(10, Math.round(toX(point.at)));
           const showLabel = x - lastLabelX >= 72;
           if (showLabel) lastLabelX = x;
-          const label = windowCatalog[point.meter.key]?.label || point.meter.key;
+          const label = windowLabel(point.meter);
           const d = new Date(point.at);
           const near = point.at - now <= NEAR_HOURS * 3600e3;
           const timeLabel = near ? pad(d.getHours()) + ':' + pad(d.getMinutes()) : (d.getMonth() + 1) + '/' + d.getDate() + ' ' + pad(d.getHours()) + '时';
@@ -746,7 +792,7 @@ function PriorityView({ accounts, providers, reminderRules, onOpenHistory }) {
   return <div className="view-stack">
     <ResetTimeline accounts={accounts} providers={providers} />
     {grouped.map(([key, rows]) => <section className="surface-section" key={key}>
-      <div className="section-heading"><div><h2>{windowCatalog[key]?.label || key}</h2></div><span className="section-count">{rows.length} 个账号</span><button type="button" className="icon-button faint section-toggle" title={collapsed[key] ? '展开' : '收起'} onClick={() => setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }))}>{collapsed[key] ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</button></div>
+      <div className="section-heading"><div><h2>{rows[0]?.meter?.label || windowCatalog[key]?.label || key}</h2></div><span className="section-count">{rows.length} 个账号</span><button type="button" className="icon-button faint section-toggle" title={collapsed[key] ? '展开' : '收起'} onClick={() => setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }))}>{collapsed[key] ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</button></div>
       {!collapsed[key] && <div className="priority-list">{rows.map(({ account, meter }) => <PriorityRow key={`${account.id}-${meter.key}`} account={account} meter={meter} provider={providers.find((item) => item.id === account.providerId)} reminderRules={reminderRules} onOpenHistory={onOpenHistory} />)}</div>}
     </section>)}
   </div>;
@@ -2173,11 +2219,26 @@ function OverviewCard({ account, provider, feedback, onOpenHistory, onRelogin, o
       </div>
     </div>
     <div className="overview-body">
-      <ConcentricRings account={account} />
-      <div className="overview-meters">{[...desc].reverse().map((meter) => {
-        const detail = formatQuotaDetail(meter);
-        return <div className="overview-meter" key={meter.key}><span><i className={`ring-dot ring-dot-${desc.indexOf(meter)}`} />{windowCatalog[meter.key]?.label || meter.key}</span><b>{formatAmount(meter)}</b><small className="overview-reset" title={formatResetAbsolute(meter.resetAt)}>{formatReset(meter.resetAt)}</small>{detail && <small className="overview-quota-detail">{detail}</small>}</div>;
-      })}</div>
+      <ConcentricRings account={agyPoolGroupRows(account.windows).length ? { ...account, windows: agyPoolRingWindows(account.windows) } : account} />
+      {(() => {
+        // Antigravity 的池分组行：与普通卡片同构（环左、读数右），一池两行（池名 + 5h/7d
+        // 读数片），字号缩小保证 138px 读数列放得下、卡片高度与普通卡一致
+        const agyRows = agyPoolGroupRows(account.windows);
+        if (agyRows.length) return <div className="overview-meters">{agyRows.map((row, index) => (
+          <div className="overview-meter overview-pool" key={row.pool}>
+            <span><i className={`ring-dot ring-dot-${index}`} />{row.label}</span>
+            <div className="pool-window-chips">{row.windows.map((meter) => (
+              <small className="pool-chip" key={meter.key} title={`${row.label} · ${agyCycleShort(meter)} · 剩余 ${formatAmount(meter)} · ${formatResetAbsolute(meter.resetAt)}`}>
+                <em>{agyCycleShort(meter)}</em><b>{formatAmount(meter)}</b><span>{formatResetCompact(meter.resetAt)}</span>
+              </small>
+            ))}</div>
+          </div>
+        ))}</div>;
+        return <div className="overview-meters">{[...desc].reverse().map((meter) => {
+          const detail = formatQuotaDetail(meter);
+          return <div className="overview-meter" key={meter.key}><span><i className={`ring-dot ring-dot-${desc.indexOf(meter)}`} />{windowLabel(meter)}</span><b>{formatAmount(meter)}</b><small className="overview-reset" title={formatResetAbsolute(meter.resetAt)}>{formatReset(meter.resetAt)}</small>{detail && <small className="overview-quota-detail">{detail}</small>}{meter.models?.length ? <small className="overview-models" title={`池内模型：${meter.models.join('、')}`}>{meter.models.join('、')}</small> : null}</div>;
+        })}</div>;
+      })()}
     </div>
   </div>;
 }
@@ -2313,11 +2374,14 @@ function UpcomingRefreshTrack({ items, providers, onOpenHistory, labelId, showCy
         {items.length === 0 && <span className="refresh-queue-empty">—</span>}
         {items.map(({ account, meter }) => {
           const provider = providers.find((item) => item.id === account.providerId);
-          const label = windowCatalog[meter.key]?.label || meter.key;
+          const label = windowLabel(meter);
           const tone = refreshChipTone(account, meter);
           const percent = meter.unit === '%' && Number.isFinite(Number(meter.remaining)) ? `${Math.round(meter.remaining)}%` : '';
+          // 周期队列默认隐藏窗口名（队列头已标周期）；Antigravity 的池窗口例外：
+          // 同一账号的多条池记录并排，没有池标记就无法区分（Gem 5h / C·G 5h / Argon 7d）
+          const chipTag = showCycle ? label : (meter.key.startsWith('agy_') ? agyPoolShortTag(meter) : '');
           return <button type="button" className="refresh-chip" key={`${account.id}-${meter.key}`} title={`${account.name} · ${label}${percent ? ` · 剩余 ${percent}` : ''} · ${formatResetAbsolute(meter.resetAt)}`} aria-label={`${account.name} · ${label}${percent ? ` · 剩余 ${percent}` : ''} · ${formatReset(meter.resetAt)}`} onClick={(event) => onOpenHistory?.(account, event.currentTarget)}>
-            <Logo provider={provider} size="xs" interactive={false} /><span>{account.name}</span>{showCycle && <em>{label}</em>}{percent && <b className={tone}>{percent}</b>}<small>{formatResetCompact(meter.resetAt)}</small>
+            <Logo provider={provider} size="xs" interactive={false} /><span>{account.name}</span>{chipTag && <em>{chipTag}</em>}{percent && <b className={tone}>{percent}</b>}<small>{formatResetCompact(meter.resetAt)}</small>
           </button>;
         })}
       </div>
@@ -3386,6 +3450,7 @@ const CLI_LOGIN_KINDS = [
   { kind: 'codex', name: 'Codex', providerId: 'codex', path: '~/.codex/auth.json', hint: 'ChatGPT 官方登录' },
   { kind: 'claude', name: 'Claude Code', providerId: 'claude', path: '~/.claude/.credentials.json', hint: '官方 OAuth 登录' },
   { kind: 'gemini', name: 'Gemini CLI', providerId: 'gemini', path: '~/.gemini/oauth_creds.json', hint: 'Google 账号登录' },
+  { kind: 'antigravity', name: 'Antigravity', providerId: 'antigravity', path: '凭据管理器 gemini:antigravity', hint: 'Google 账号登录（Antigravity 桌面版）' },
   { kind: 'grok', name: 'Grok CLI', providerId: 'grok', path: '~/.grok/auth.json', hint: 'xAI 官方登录' },
   { kind: 'grokbot', name: 'Grok Bot', providerId: 'grokbot', path: 'Grok Bot 桌面客户端', hint: 'Grok Bot 客户端登录' },
 ];

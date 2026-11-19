@@ -65,7 +65,7 @@ DeepSeek、Z.ai、Codex 和 MiniMax 支持逐日用量视图，包括近一年�
 | 多账号总览 | 每个账号一张卡片，用同心圆同时展示多个额度窗口；卡片支持拖动排序 |
 | 界面切换 | 从「···」菜单直接打开看板、额度浪费或本机用量 |
 | 重置倒计时 | 显示每个额度周期距离重置的时间，悬停可查看具体时刻 |
-| 优先级排序 | 分别调整短周期和长周期中“剩余额度 / 距重置时间”的权重 |
+| 周期明细排序 | 固定按距重置时间从近到远排列，不可用的额度窗口置后 |
 | 桌面浮窗 | 常驻桌面顶层，滚轮切换账号，双击打开主窗口，支持大小与长度调节 |
 | 防浪费提醒 | 按“刷新前多少分钟”和“至少剩余多少”发送桌面通知 |
 | 历史、用量与浪费 | 从实时额度继续追踪趋势、官方逐日用量、本机 CLI 用量和周期浪费 |
@@ -100,6 +100,7 @@ DeepSeek、Z.ai、Codex 和 MiniMax 支持逐日用量视图，包括近一年�
 | Claude Code | 5 小时、7 天 | 导入本机 Claude Code 登录 |
 | OpenAI Codex | 5 小时、7 天、1 个月 | 导入本机 Codex CLI 登录 |
 | Gemini CLI | Gemini Pro、Flash、Flash Lite | 导入本机 Gemini CLI 登录 |
+| Antigravity | Gemini 池 5h/7d、Claude/GPT 池 5h/7d、Gemini 4 Argon 周池 | 导入本机 Antigravity 登录（桌面版运行时经本地守护进程取付费档全量视图） |
 | GitHub Copilot | 每月 Premium requests | GitHub 设备码授权 |
 | New API 兼容站点 | 由站点接口决定 | 自定义服务商中的 New API 模板 |
 

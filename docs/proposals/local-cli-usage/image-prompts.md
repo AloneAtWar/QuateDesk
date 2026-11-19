@@ -2,6 +2,8 @@
 
 生成方式：Codex 内置 `imagegen`，以现有 `usage-dark.png`、`overview-dark.png` 为视觉参考。图片用于产品方案展示，不是最终实现截图。
 
+> 规范治理（2026-11-09，本轮用户确认）：本文件及全部图稿均为历史生成记录，原提示词按当时内容保留。提示词中的标题栏第四个本机用量图标、固定高度模型表已失效；当前入口为「···」菜单，模型表随实际行数结束、多行内部滚动，页面外框保持稳定。现行规则见根目录 [DESIGN.md](../../../DESIGN.md)，不以旧图稿或提示词覆盖。
+
 ## aggregate-dashboard.png
 
 ```text
@@ -83,13 +85,13 @@ Reverse the two upper-right header controls: show “热力图 / 模型拆分”
 Match the revised header order: “热力图 / 模型拆分” first with model breakdown active, then “全部渠道” at the far right. Add an enabled “合并同名模型” switch next to the time-range selector. Demonstrate merged cross-CLI model rows with summed Token totals and contributing CLI names. Preserve the fixed-height vertically scrolling model table and Token-composition rails. Do not show summary cards or a view-all action.
 ```
 
-## aggregate-heatmap-v6.png（当前方案）
+## aggregate-heatmap-v6.png（历史方案）
 
 ```text
 Add a fourth top-level “本机用量” bar-chart icon to the existing global view group, immediately after the period-detail clock and before settings, and show it active. Preserve the page header order `[热力图 / 模型拆分] [全部渠道]`, the four heatmap metrics, yearly heatmap, selected-day merge toggle and horizontal model scroller.
 ```
 
-## model-breakdown-v6.png（当前方案）
+## model-breakdown-v6.png（历史方案）
 
 ```text
 Add and activate the fourth top-level “本机用量” bar-chart icon in the app title bar. In the model section toolbar, move the enabled “合并同名模型” switch to the left of the period selector, making the exact order `[合并同名模型] [7天 / 30天 / 90天 / 1年]`. Preserve merged rows, fixed vertical scrolling and the page-header order `[热力图 / 模型拆分] [全部渠道]`.

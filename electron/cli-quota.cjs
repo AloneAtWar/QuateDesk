@@ -6,6 +6,9 @@
 // - Kimi:   扫码登录的网页会话快照 → www.kimi.com GetSubscriptionStats（5小时/7天/月度，含月额度）
 // token 过期时用账号快照里的 refresh_token 自动续期（见 cli-auth.cjs），无需 CLI 在场。
 const { resolveCliAuth, refreshTokenOf, accessTokenExpiryMs, fetchWithCliAuth, claudeOauthOf } = require('./cli-auth.cjs');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const reauthRequiredError = (message) => Object.assign(new Error(message), { authStatus: 'reauth_required' });
@@ -143,6 +146,266 @@ async function queryGeminiQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS, 
   }
   if (!windows.length) throw new Error('Gemini 配额响应中没有可识别的额度桶');
   return windows;
+}
+
+// ── Antigravity（Google 的 agentic IDE，Gemini CLI 的官方继任者）──────────────
+// 额度是「池 × 周期」两层结构（对照 magpie internal/provider/google.go 与实测定稿）：
+// - retrieveUserQuotaSummary 返回分组池（"Claude and GPT models" 等），每池 5h + weekly 双桶；
+//   带版本号的「单模型组」（如 Gemini 4 Argon）只有周桶、独立于家族池 → 动态窗口 key；
+// - fetchAvailableModels 的 quotaInfo 是逐模型的 5 小时读数，同池内所有模型相同；
+//   free-tier 账号的 summary 里没有 Gemini 组，Gemini 池从逐模型读数聚类推导。
+// remainingFraction 缺失 = 已耗尽（Google 用完即省略字段，proto3 零值省略）。
+// 请求 host：loadCodeAssist 走生产 cloudcode-pa；模型与池化额度走 daily-cloudcode-pa。
+const AGY_HOST_PROD = 'https://cloudcode-pa.googleapis.com';
+const AGY_HOST_DAILY = 'https://daily-cloudcode-pa.googleapis.com';
+const AGY_USER_AGENT = `antigravity/hub/1.4.0 ${process.platform}/${process.arch}`;
+
+const AGY_POOL_KEYS = { gemini: 'agy_gemini', claudegpt: 'agy_claudegpt' };
+const AGY_POOL_LABELS = { gemini: 'Gemini 池', claudegpt: 'Claude/GPT 池' };
+
+const agyFamilyOf = (modelId) => {
+  const id = String(modelId || '');
+  if (id.startsWith('gemini-4-argon')) return 'argon';
+  if (id.startsWith('gemini')) return 'gemini';
+  if (id.startsWith('claude') || id.startsWith('gpt-')) return 'claudegpt';
+  return 'other';
+};
+
+// summary 组名 → 池 key：家族组（Gemini Models / Claude and GPT models）映射到静态
+// 窗口目录；组名带版本号（"Gemini 4 Argon"）是单模型独占池，绝不归入家族池
+//（对照 magpie：a group that says a version is its model's alone），落动态 key
+const agyPoolKeyOf = (displayName) => {
+  const name = String(displayName || '');
+  const versioned = /\d/.test(name);
+  if (!versioned && /claude|gpt/i.test(name)) return AGY_POOL_KEYS.claudegpt;
+  if (!versioned && /gemini/i.test(name)) return AGY_POOL_KEYS.gemini;
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'pool';
+  return `agy_pool_${slug}`;
+};
+
+const agyWindowOf = (bucket) => {
+  const window = String(bucket?.window || '').toLowerCase();
+  if (window === '5h') return { suffix: '_5h', label: '5 小时', order: 0 };
+  if (window === 'weekly') return { suffix: '_7d', label: '7 天', order: 1 };
+  return null;
+};
+
+// 逐模型条目：跳过内部模型（chat_/tab_ 前缀）与被 Google 置为 disabled 的模型
+const agyModelEntries = (modelsPayload) => {
+  const entries = [];
+  for (const [id, model] of Object.entries(modelsPayload?.models || {})) {
+    if (!id || id.startsWith('chat_') || id.startsWith('tab_')) continue;
+    if (model?.disabled) continue;
+    const quota = model?.quotaInfo;
+    entries.push({
+      id,
+      name: String(model?.displayName || id),
+      family: agyFamilyOf(id),
+      remaining: quota && quota.remainingFraction !== undefined && Number.isFinite(Number(quota.remainingFraction))
+        ? Math.max(0, Math.min(100, Number(quota.remainingFraction) * 100)) : null,
+      resetAt: quota?.resetTime || null,
+    });
+  }
+  return entries;
+};
+
+// 同池模型的 5h 读数相同：按 (剩余, 重置时间) 聚类，取最大簇代表该池
+const agyClusterReading = (entries) => {
+  const clusters = new Map();
+  for (const entry of entries) {
+    if (entry.remaining === null) continue;
+    const key = `${entry.remaining}|${entry.resetAt || ''}`;
+    const cluster = clusters.get(key) || { remaining: entry.remaining, resetAt: entry.resetAt, members: [] };
+    cluster.members.push(entry.name);
+    clusters.set(key, cluster);
+  }
+  let best = null;
+  for (const cluster of clusters.values()) {
+    if (!best || cluster.members.length > best.members.length) best = cluster;
+  }
+  return best;
+};
+
+// 纯解析：models + summary 两个响应 → 池窗口 meters（成员模型名单挂在 meter.models）
+function buildAntigravityWindows(modelsPayload, summaryPayload, meter) {
+  const models = agyModelEntries(modelsPayload);
+  const membersOf = (family) => {
+    const names = models.filter((entry) => entry.family === family && entry.name).map((entry) => entry.name);
+    return names.length ? [...new Set(names)] : [];
+  };
+  const meters = [];
+  for (const group of summaryPayload?.groups || []) {
+    const poolKey = agyPoolKeyOf(group?.displayName);
+    // 成员归属：静态家族池按 family；动态特例池（如 Gemini 4 Argon）按组名判 family
+    const family = poolKey === AGY_POOL_KEYS.gemini ? 'gemini'
+      : poolKey === AGY_POOL_KEYS.claudegpt ? 'claudegpt'
+        : /argon/i.test(String(group?.displayName || '')) ? 'argon' : null;
+    // 同一池的桶按 5h → weekly 排（Google 实测常把 weekly 排在前面）
+    const poolMeters = [];
+    for (const bucket of group?.buckets || []) {
+      if (bucket?.disabled) continue;
+      const window = agyWindowOf(bucket);
+      if (!window) continue;
+      const remaining = bucket.remainingFraction === undefined ? 0 : Number(bucket.remainingFraction);
+      if (!Number.isFinite(remaining)) continue;
+      const members = family ? membersOf(family) : [];
+      poolMeters.push({
+        order: window.order,
+        meter: meter(`${poolKey}${window.suffix}`, Math.max(0, Math.min(100, remaining * 100)), 100, '%', bucket.resetTime || null, {
+          // 静态家族池的 label 由 windowCatalog 提供；动态池（如 Gemini 4 Argon）把 label 随 meter 下发
+          ...(Object.values(AGY_POOL_KEYS).includes(poolKey) ? {} : { label: `${String(group?.displayName || poolKey)} · ${window.label}` }),
+          ...(members.length ? { models: members } : {}),
+        }),
+      });
+    }
+    meters.push(...poolMeters.sort((a, b) => a.order - b.order).map((item) => item.meter));
+  }
+  // summary 缺失的池（free-tier 没有 Gemini 组 / summary 整体失败）：从逐模型读数聚类推导 5h 池。
+  // Argon 只有周池、不参与推导
+  for (const family of ['gemini', 'claudegpt']) {
+    const key = `${AGY_POOL_KEYS[family]}_5h`;
+    if (meters.some((item) => item.key === key)) continue;
+    const reading = agyClusterReading(models.filter((entry) => entry.family === family));
+    if (reading) meters.push(meter(key, reading.remaining, 100, '%', reading.resetAt, { models: [...new Set(reading.members)] }));
+  }
+  if (!meters.length) throw new Error('Antigravity 配额响应中没有可识别的额度池');
+  return meters;
+}
+
+// Antigravity 凭据形态（live 凭据管理器或快照同构）：{ access_token, refresh_token, email? }。
+// 凭据由 cli-auth.cjs 的 antigravity kind 提供（Windows 凭据管理器 gemini:antigravity）。
+//
+// 额度视图挂的项目：consumer 额度挂在 CLI 的默认项目下（实测 default-cli-project，
+// 记录在 ~/.gemini/antigravity-cli/cache/default_project_id.txt）；loadCodeAssist 返回的
+// cloudaicompanionProject（aicode-consumers）只回空读数（一切恒 100%）。entitlement
+// 对导入的 consumer 凭据一律 INVALID_ARGUMENT（magpie 的 tier 协商同被拒后回落），不发。
+const AGY_DEFAULT_PROJECT = 'default-cli-project';
+const agyProjectFilePath = () => path.join(os.homedir(), '.gemini', 'antigravity-cli', 'cache', 'default_project_id.txt');
+const agyQuotaProject = () => {
+  try {
+    const stored = fs.readFileSync(agyProjectFilePath(), 'utf8').trim();
+    if (stored) return stored;
+  } catch { /* 文件缺失用常量兜底 */ }
+  return AGY_DEFAULT_PROJECT;
+};
+
+// Antigravity 桌面版运行时会在 ~/.gemini/antigravity/daemon/hub_*.json 落一个本地
+// connect-RPC 服务（httpPort + csrfToken，头 x-codeium-csrf-token）。它的
+// RetrieveUserQuotaSummary / GetAvailableModels 走 Hub 自己的会话，能看到付费档视图
+//（Gemini 池 5h+周、Claude/GPT 池、Gemini 4 Argon 独立周池）；cloudcode 直查用的
+// consumer 凭据只有免费视图。桌面版没开时 daemon 不存在，额度查询回落直查。
+const AGY_DAEMON_DIR = () => path.join(os.homedir(), '.gemini', 'antigravity', 'daemon');
+const AGY_LS_SERVICE = '/exa.language_server_pb.LanguageServerService/';
+const AGY_DAEMON_TIMEOUT_MS = 5_000;
+
+const agyDaemonFiles = () => {
+  let names;
+  try { names = fs.readdirSync(AGY_DAEMON_DIR()); } catch { return []; }
+  return names
+    .filter((name) => /^hub_.+\.json$/.test(name))
+    .map((name) => {
+      try {
+        const filePath = path.join(AGY_DAEMON_DIR(), name);
+        const info = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        const port = Number(info?.httpPort);
+        if (!Number.isFinite(port) || port <= 0) return null;
+        return { port, csrf: String(info?.csrfToken || ''), mtimeMs: fs.statSync(filePath).mtimeMs };
+      } catch { return null; }
+    })
+    .filter(Boolean)
+    // 多个桌面版实例各写一个 hub_*.json：最新启动的实例排前面
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+};
+
+const agyDaemonCall = async (daemon, endpoint, fetcher) => {
+  const response = await fetcher(`http://127.0.0.1:${daemon.port}${AGY_LS_SERVICE}${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'connect-protocol-version': '1', 'x-codeium-csrf-token': daemon.csrf },
+    body: JSON.stringify(endpoint === 'RetrieveUserQuotaSummary' ? { request: {} } : {}),
+    signal: AbortSignal.timeout(AGY_DAEMON_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`daemon ${endpoint} 返回 HTTP ${response.status}`);
+  const payload = await response.json();
+  return payload?.response && typeof payload.response === 'object' ? payload.response : payload;
+};
+
+// 优先走本地守护进程（付费档全量视图）；成员模型名单顺带取模型目录，失败不阻断
+async function queryAntigravityDaemonQuota(fetcher, meter) {
+  let lastError = null;
+  for (const daemon of agyDaemonFiles()) {
+    try {
+      const summary = await agyDaemonCall(daemon, 'RetrieveUserQuotaSummary', fetcher);
+      let modelsPayload = null;
+      try { modelsPayload = await agyDaemonCall(daemon, 'GetAvailableModels', fetcher); } catch { /* 成员名单可缺 */ }
+      return buildAntigravityWindows(modelsPayload, summary, meter);
+    } catch (error) { lastError = error; }
+  }
+  throw lastError || new Error('没有运行中的 Antigravity 桌面版守护进程');
+}
+
+async function queryAntigravityQuota(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS, ctx = {}) {
+  // 优先本地守护进程：桌面版运行时直接给付费档全量视图（含 Gemini 周池与 Argon
+  // 独立池），不需要 Google 凭据；桌面版没开（或接口异常）回落 cloudcode 直查
+  try {
+    return await queryAntigravityDaemonQuota(fetcher, meter);
+  } catch { /* 回落直查 */ }
+  const resolved = resolveCliAuth('antigravity', ctx.variables);
+  if (!resolved) throw reauthRequiredError('未检测到 Antigravity 登录。请先在 Antigravity 桌面版或 CLI 登录 Google 账号，再到「设置 → 账号与凭据」导入本机登录保存为独立账号快照');
+  const expiry = accessTokenExpiryMs('antigravity', resolved.auth);
+  if (expiry && expiry < Date.now() && !refreshTokenOf('antigravity', resolved.auth)) {
+    throw reauthRequiredError('Antigravity 访问令牌已过期且无法自动续期，请重新登录后再次导入');
+  }
+  // 各步共用同一份会随续期更新的凭据；只有第一步带 401 续期重试，避免一次轮询刷新两次
+  let effective = resolved.auth;
+  const trackAuth = async (...args) => {
+    effective = args[1];
+    if (ctx.onAuthUpdate) await ctx.onAuthUpdate(...args);
+  };
+  const authHeaders = (auth) => ({ Authorization: `Bearer ${auth.access_token}`, 'Content-Type': 'application/json', 'User-Agent': AGY_USER_AGENT });
+  const loadResponse = await fetchWithCliAuth('antigravity', {
+    auth: resolved.auth,
+    source: resolved.source,
+    fetcher,
+    timeoutMs,
+    buildRequest: (auth) => ({
+      url: `${AGY_HOST_PROD}/v1internal:loadCodeAssist`,
+      init: { method: 'POST', headers: authHeaders(auth), body: JSON.stringify({ metadata: { ideType: 'ANTIGRAVITY' } }) },
+    }),
+    onAuthUpdate: trackAuth,
+  });
+  if (loadResponse.status === 401 || loadResponse.status === 403) throw reauthRequiredError('Antigravity 凭据被拒绝（自动续期后仍无效），请重新登录该账号并更新快照');
+  if (!loadResponse.ok) throw new Error(`Antigravity loadCodeAssist 返回 HTTP ${loadResponse.status}`);
+  const loadPayload = await loadResponse.json();
+  const loadProject = loadPayload?.cloudaicompanionProject;
+  const loadProjectId = typeof loadProject === 'string' ? loadProject : (loadProject?.id || loadProject?.projectId || null);
+
+  const callDaily = (method, body) => fetcher(`${AGY_HOST_DAILY}/v1internal:${method}`, {
+    method: 'POST',
+    headers: authHeaders(effective),
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  // 逐模型 5h 读数：优先 CLI 默认项目（真实用量）；被 4xx 拒绝时回落 loadCodeAssist
+  // 的项目、再回落不带项目（跨版本兜底）
+  const projectCandidates = [...new Set([agyQuotaProject(), loadProjectId].filter(Boolean))];
+  let modelsResponse = null;
+  let modelsProject = null;
+  for (const candidate of projectCandidates) {
+    modelsResponse = await callDaily('fetchAvailableModels', { project: candidate });
+    if (modelsResponse.ok || modelsResponse.status === 401 || modelsResponse.status === 403) { modelsProject = candidate; break; }
+    modelsResponse = null;
+  }
+  if (!modelsResponse) modelsResponse = await callDaily('fetchAvailableModels', {});
+  if (modelsResponse.status === 401 || modelsResponse.status === 403) throw reauthRequiredError('Antigravity 凭据被拒绝（fetchAvailableModels 鉴权失败），请重新登录该账号并更新快照');
+  if (!modelsResponse.ok) throw new Error(`Antigravity fetchAvailableModels 返回 HTTP ${modelsResponse.status}`);
+  const modelsPayload = await modelsResponse.json();
+  // 池化视图：失败可容忍（Gemini 池可从逐模型读数推导，只是拿不到周窗口）
+  let summaryPayload = null;
+  try {
+    const summaryResponse = await callDaily('retrieveUserQuotaSummary', modelsProject ? { project: modelsProject } : {});
+    if (summaryResponse.ok) summaryPayload = await summaryResponse.json();
+  } catch { /* summary 失败不阻断逐模型读数 */ }
+  return buildAntigravityWindows(modelsPayload, summaryPayload, meter);
 }
 
 // Kimi 凭据形态（扫码登录快照）：{ accessToken, refreshToken, userId, authHost }，没有本机 live 文件。
@@ -341,4 +604,4 @@ async function queryGrokBotUsage(fetcher, meter, timeoutMs = DEFAULT_TIMEOUT_MS,
   return [meter(key, remaining, 100, '%', resetAt, { amount: remaining, limitAmount: 100 })];
 }
 
-module.exports = { queryClaudeQuota, queryCodexQuota, queryGeminiQuota, queryKimiWebQuota, queryCopilotQuota, queryGrokBotUsage, __copilot: { parseCopilotQuota, COPILOT_USER_ENDPOINT }, __grokbot: { GROKBOT_USAGE_URL, grokBotChecksum } };
+module.exports = { queryClaudeQuota, queryCodexQuota, queryGeminiQuota, queryAntigravityQuota, queryKimiWebQuota, queryCopilotQuota, queryGrokBotUsage, __copilot: { parseCopilotQuota, COPILOT_USER_ENDPOINT }, __grokbot: { GROKBOT_USAGE_URL, grokBotChecksum }, __antigravity: { buildAntigravityWindows, AGY_HOST_PROD, AGY_HOST_DAILY } };

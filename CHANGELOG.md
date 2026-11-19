@@ -2,6 +2,12 @@
 
 Quota Desk 的版本更新记录。
 
+## [未发布]
+
+### 新增
+
+- 新增 Antigravity 官方订阅额度渠道（Gemini CLI 的官方继任者）：额度按「池 × 周期」展示——Gemini 池 5 小时 + 7 天、Claude/GPT 池 5 小时 + 7 天、Gemini 4 Argon 独立周池（付费档）。卡片上一池一行、同心圆一池一环（环显周额度），池行读数按秒轮换 5h/7d 周期（小屏不撑卡）；「即将刷新」按周期归队，芯片带池短标（Gem 5h / C·G 5h / Argon 7d）区分同账号的多条池记录。**数据优先取自运行中的 Antigravity 桌面版本地守护进程**（`~/.gemini/antigravity/daemon/hub_*.json` 的 connect-RPC 接口，`RetrieveUserQuotaSummary` + `GetAvailableModels`，CSRF 头 `x-codeium-csrf-token`）——它走 Hub 自己的会话、能看到付费档全量视图（Argon 周池只有这里有）；桌面版没开时回落 cloudcode 直查（consumer 凭据只有免费视图：Gemini 池 5h 从逐模型读数聚类推导 + Claude/GPT 池两窗）。直查路径：额度视图挂 CLI 默认项目（读 `~/.gemini/antigravity-cli/cache/default_project_id.txt`，常量 `default-cli-project` 兜底；`loadCodeAssist` 返回的 `aicode-consumers` 只回空读数），凭据复用桌面版登录态（Windows 凭据管理器 `gemini:antigravity`，只读不写回），「导入本机登录」收录为独立账号快照；续期走 Antigravity 专属 OAuth client（Gemini CLI 的令牌对 daily-cloudcode-pa 一律 403；entitlement 对 consumer 凭据一律 INVALID_ARGUMENT，不发送）。额度耗尽时 Google 省略 `remainingFraction`，按 0 处理。
+
 ## [0.9.3] - 2026-11-19
 
 ### 新增

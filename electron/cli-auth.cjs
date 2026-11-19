@@ -29,7 +29,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 
-const CLI_KINDS = ['claude', 'codex', 'gemini', 'kimi', 'grok', 'copilot', 'grokbot'];
+const CLI_KINDS = ['claude', 'codex', 'gemini', 'kimi', 'grok', 'copilot', 'grokbot', 'antigravity'];
 // 快照在加密凭据 variables 里的键名；只在主进程读写，不进渲染进程
 const SNAPSHOT_KEY = 'cliAuthTokenBundle';
 // access token 剩余寿命低于该值时先刷新再用（cc-switch 为 60s，这里留足一次轮询的余量）
@@ -46,6 +46,16 @@ const CLAUDE_TOKEN_URL = 'https://console.anthropic.com/v1/oauth/token';
 const GEMINI_CLIENT_ID = ['681255809395-oo8ft2oprdrnp9e3aqf6', 'av3hmdib135j.apps.googleusercon', 'tent.com'].join('');
 const GEMINI_CLIENT_SECRET = ['GOCSPX-4uHgMPm-', '1o7Sk-geV6', 'Cu5clXFsxl'].join('');
 const GEMINI_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+
+// Antigravity（Google 的 agentic IDE，Gemini CLI 的官方继任者）桌面版把登录态写在
+// Windows 凭据管理器的普通凭据 gemini:antigravity 里（blob 为 { token, auth_method,
+// id_token_email, writer_id }）。token 隶属 Antigravity 自己的 OAuth client，scope 比
+// Gemini CLI 多 aicode / cclog / experimentsandconfigs——额度端点（fetchAvailableModels /
+// retrieveUserQuotaSummary）只认这套凭据，Gemini CLI 的 oauth_creds.json 一律 403。
+const ANTIGRAVITY_CLIENT_ID = ['1071006060591-tmhssin2h21lcre', '235vtolojh4g403ep.apps.googleuser', 'content.com'].join('');
+const ANTIGRAVITY_CLIENT_SECRET = ['GOCSPX-K58FWR486LdL', 'J1mLB8sXC4z6', 'qDAf'].join('');
+const ANTIGRAVITY_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+const ANTIGRAVITY_CRED_TARGET = 'gemini:antigravity';
 // Kimi 网页会话（account.gateway.v1.AuthService，connect-rpc + JSON）。国内 kimi.com / 海外 kimi.ai；
 // 实际使用的 host 记在快照的 authHost 里，刷新时优先按快照记录的区域走
 const KIMI_AUTH_HOST = 'https://auth.kimi.com';
@@ -332,6 +342,45 @@ const readGeminiWindowsCredential = () => {
   return geminiAuthFromKeytarShape(parseCredentialBlobJson(blob));
 };
 
+// Antigravity 桌面版登录态：凭据管理器普通凭据 gemini:antigravity（与 gemini 的
+// keytar 条目同一读取通道），blob 归一化为扁平 { access_token, refresh_token, email }。
+// 该条目是 Antigravity 的私有存储，只读不写回（与 Grok Bot 同策略）。
+const antigravityAuthFromBlob = (payload) => {
+  const token = payload && typeof payload === 'object' && payload.token && typeof payload.token === 'object'
+    ? payload.token : null;
+  if (!token || (!token.access_token && !token.refresh_token)) return null;
+  const auth = {};
+  if (token.access_token) auth.access_token = token.access_token;
+  if (token.refresh_token) auth.refresh_token = token.refresh_token;
+  const email = String(payload?.id_token_email || '').trim().toLowerCase();
+  if (email) auth.email = email;
+  return auth;
+};
+
+const readAntigravityWindowsCredential = () => {
+  if (process.platform !== 'win32') return null;
+  let blob;
+  try {
+    const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_CRED_READ_SCRIPT], {
+      input: ANTIGRAVITY_CRED_TARGET,
+      timeout: 10_000,
+    });
+    const base64 = String(output).trim();
+    if (!base64) return null;
+    blob = Buffer.from(base64, 'base64');
+  } catch { return null; }
+  return antigravityAuthFromBlob(parseCredentialBlobJson(blob));
+};
+
+// 与 gemini 密钥库同款 TTL 缓存：凭据管理器要走 PowerShell 子进程，轮询每次都读会反复起进程
+const ANTIGRAVITY_SECURE_TTL_MS = 60_000;
+let antigravitySecureCache = { at: 0, value: null };
+const readAntigravityLiveAuth = () => {
+  if (Date.now() - antigravitySecureCache.at < ANTIGRAVITY_SECURE_TTL_MS) return antigravitySecureCache.value;
+  antigravitySecureCache = { at: Date.now(), value: readAntigravityWindowsCredential() };
+  return antigravitySecureCache.value;
+};
+
 // 密钥库 / 加密文件的读取带 TTL 缓存：凭据管理器要走 PowerShell 子进程，
 // 额度轮询每次都读会反复起进程；缓存也保证一次检测内的结果一致
 let geminiSecureCache = { at: 0, value: null };
@@ -361,6 +410,7 @@ const readLiveAuth = (kind) => {
   if (kind === 'grokbot') return readGrokBotLiveAuth();
   if (kind === 'gemini') return readGeminiLiveAuth();
   if (kind === 'claude') return readClaudeLiveAuth();
+  if (kind === 'antigravity') return readAntigravityLiveAuth();
   return readJsonFile(liveAuthPath(kind));
 };
 
@@ -507,6 +557,11 @@ const cliIdentity = (kind, auth) => {
     const claims = parseJwtClaims(auth.access_token);
     email = String(auth.email || claims?.email || '').toLowerCase();
     fingerprint = String(auth.sub || claims?.sub || '') || shaTag(auth.refresh_token || auth.access_token);
+  } else if (kind === 'antigravity') {
+    // 凭据 blob 自带 Google 账号邮箱（id_token_email），邮箱即稳定身份；
+    // 拿不到时退到 refresh_token 指纹（Google 的 refresh_token 不轮换，指纹稳定）
+    email = String(auth.email || parseJwtClaims(auth.id_token || auth.access_token)?.email || '').toLowerCase();
+    fingerprint = email || shaTag(auth.refresh_token);
   } else {
     const claims = parseJwtClaims(auth.id_token || auth.access_token);
     email = String(claims?.email || '').toLowerCase();
@@ -755,6 +810,31 @@ async function refreshGeminiAuth(auth, fetcher, timeoutMs) {
   return next;
 }
 
+// Antigravity 的 refresh_token 隶属它自己的 OAuth client：必须用 Antigravity 的
+// client id/secret 续期（用 Gemini CLI 的 client 会被 unauthorized_client 拒绝）
+async function refreshAntigravityAuth(auth, fetcher, timeoutMs) {
+  if (!auth.refresh_token) throw new CliRefreshError('Antigravity 登录快照缺少 refresh_token，无法续期', { permanent: true, authStatus: 'reauth_required' });
+  let response;
+  let payload;
+  try {
+    response = await postTokenRequest(fetcher, ANTIGRAVITY_TOKEN_URL, {
+      form: { client_id: ANTIGRAVITY_CLIENT_ID, client_secret: ANTIGRAVITY_CLIENT_SECRET, grant_type: 'refresh_token', refresh_token: auth.refresh_token },
+      timeoutMs,
+    });
+    payload = await response.json();
+  } catch (error) { throw asRefreshError('Antigravity', error); }
+  if (!response.ok) {
+    const permanent = response.status === 401 || response.status === 400 || /invalid_grant|unauthorized_client/i.test(String(payload?.error || ''));
+    throw new CliRefreshError(`Antigravity 登录续期被拒绝（HTTP ${response.status}${payload?.error ? ` · ${payload.error}` : ''}），请在 Antigravity 重新登录该账号后重新导入`, { permanent, authStatus: permanent ? 'reauth_required' : null });
+  }
+  const next = { ...auth };
+  if (payload.access_token) next.access_token = payload.access_token;
+  if (payload.id_token) next.id_token = payload.id_token;
+  if (payload.scope) next.scope = payload.scope;
+  if (payload.expires_in) next.expiry_date = Date.now() + Number(payload.expires_in) * 1000;
+  return next;
+}
+
 const kimiErrorCode = (payload) => {
   const raw = payload?.error?.code ?? payload?.error ?? payload?.code ?? payload?.status;
   const numeric = Number(raw);
@@ -967,6 +1047,7 @@ const refreshCliAuth = async (kind, auth, fetcher, timeoutMs = 15_000) => {
   if (kind === 'codex') return refreshCodexAuth(auth, fetcher, timeoutMs);
   if (kind === 'claude') return refreshClaudeAuth(auth, fetcher, timeoutMs);
   if (kind === 'gemini') return refreshGeminiAuth(auth, fetcher, timeoutMs);
+  if (kind === 'antigravity') return refreshAntigravityAuth(auth, fetcher, timeoutMs);
   if (kind === 'kimi') return refreshKimiWebAuth(auth, fetcher, timeoutMs);
   if (kind === 'grok') return refreshGrokAuth(auth, fetcher, timeoutMs);
   if (kind === 'copilot') throw new CliRefreshError('GitHub Copilot 令牌不支持自动续期，请重新设备码登录', { permanent: true, authStatus: 'reauth_required' });
@@ -1029,8 +1110,9 @@ const authVersionMatches = (kind, current, previous) => {
 // 防止把 cc-switch 刚切换进去的其它 profile 覆盖掉（原子写，避免 CLI 读到半截文件）
 const writeLiveIfCurrent = (kind, previousAuth, nextAuth) => {
   if (!nextAuth) return false;
-  // Grok Bot 客户端的 sand-secrets.json 是其私有加密存储，保持只读，续期结果只更新账号快照
-  if (kind === 'grokbot') return false;
+  // Grok Bot 客户端的 sand-secrets.json 是其私有加密存储，保持只读，续期结果只更新账号快照；
+  // Antigravity 的凭据管理器条目同理（gemini:antigravity 是桌面版的私有存储）
+  if (kind === 'grokbot' || kind === 'antigravity') return false;
   if (kind === 'grok') return writeGrokLiveIfCurrent(previousAuth, nextAuth);
   const livePath = liveAuthPath(kind);
   if (!livePath) return false;
@@ -1283,11 +1365,13 @@ module.exports = {
   __copilot: { copilotEntryOf },
   __grokbot: { oscryptDecrypt },
   __gemini: { geminiAuthFromKeytarShape, readGeminiFileKeychain, parseCredentialBlobJson, resetGeminiSecureCache: () => { geminiSecureCache = { at: 0, value: null }; } },
+  __antigravity: { antigravityAuthFromBlob, ANTIGRAVITY_CRED_TARGET, resetAntigravitySecureCache: () => { antigravitySecureCache = { at: 0, value: null }; } },
   __constants: {
     CODEX_CLIENT_ID, CODEX_TOKEN_URL, CLAUDE_CLIENT_ID, CLAUDE_TOKEN_URL,
     GEMINI_CLIENT_ID, GEMINI_CLIENT_SECRET, GEMINI_TOKEN_URL, KIMI_AUTH_HOST, KIMI_REFRESH_PATH,
     GROK_ISSUER, GROK_DISCOVERY_URL, GROK_CLIENT_ID, GROK_TOKEN_URL, GROK_SCOPE,
     COPILOT_CLIENT_ID, COPILOT_DEVICE_CODE_URL, COPILOT_TOKEN_URL, COPILOT_SCOPE,
     GROKBOT_TOKEN_URL, GROKBOT_CLIENT_ID,
+    ANTIGRAVITY_CLIENT_ID, ANTIGRAVITY_CLIENT_SECRET, ANTIGRAVITY_TOKEN_URL,
   },
 };

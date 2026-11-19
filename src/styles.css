@@ -168,7 +168,6 @@ button { cursor: pointer; }
 .settings-disclosure-tools > span { display: inline-flex; align-items: center; gap: 6px; }
 .settings-disclosure-tools .mini-add { margin-left: auto; }
 .settings-disclosure-tools .title-help { margin: 0; }
-@media (prefers-reduced-motion: reduce) { .settings-entry { transition: none; } .settings-disclosure-content { animation: none; } .settings-disclosure > .settings-entry > svg:last-child { transition: none; } }
 
 .rule-editor { display: grid; grid-template-columns: 1fr 1fr 26px; align-items: end; gap: 8px; margin: 9px 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
 .rule-editor label { display: grid; gap: 5px; min-width: 0; }
@@ -186,7 +185,9 @@ button { cursor: pointer; }
 .overview-card { padding: 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }
 .overview-card.warning { border-color: var(--warn-border); }
 .overview-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
-.overview-body { display: flex; align-items: center; gap: 10px; padding: 6px 0 4px; }
+.overview-body { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 0 4px; }
+/* 读数区有最小可用宽度：环 + 读数放不下时读数区整体换行到环下方占整行（窄卡片/手机三列） */
+.overview-body .overview-meters { flex: 1 1 118px; min-width: 0; }
 .concentric { width: 112px; height: 112px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; background: conic-gradient(var(--score) var(--score), var(--ring-track) 0); position: relative; }
 .concentric:before { content: ''; position: absolute; inset: 9px; border-radius: 50%; background: var(--surface); box-shadow: 0 0 0 7px var(--ring-track), 0 0 0 14px var(--surface-2); }
 .concentric > div { position: relative; z-index: 1; display: grid; place-items: center; }
@@ -199,6 +200,17 @@ button { cursor: pointer; }
 .overview-meter small { grid-column: 1 / -1; color: var(--ink-soft); font-size: 11px; line-height: 1.4; font-variant-numeric: tabular-nums; }
 .overview-meter .overview-quota-detail { font-size: 10px; }
 .overview-meter .overview-reset { white-space: nowrap; }
+/* Antigravity 池窗口的成员模型名单：单行省略，完整名单见 title */
+.overview-meter .overview-models { font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; opacity: 0.85; }
+/* Antigravity 池分组行：与普通卡片同构（环左、读数右），一池两行、字号缩小，
+   在 138px 读数列内放得下，卡片高度不超普通卡 */
+.overview-meter.overview-pool { grid-template-columns: 1fr; gap: 1px; }
+.overview-pool > span { font-size: 10px; }
+.overview-pool .pool-window-chips { display: flex; flex-wrap: wrap; gap: 1px 8px; min-width: 0; }
+.overview-pool .pool-chip { display: inline-flex; align-items: baseline; gap: 2px; grid-column: auto; font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.overview-pool .pool-chip em { font-style: normal; color: var(--ink-soft); font-size: 9px; }
+.overview-pool .pool-chip b { color: var(--green-deep); font-size: 10.5px; }
+.overview-pool .pool-chip span { color: var(--ink-soft); font-size: 9px; }
 .overview-title { align-items: flex-start; }
 .overview-title-right { display: flex; align-items: center; gap: 18px; }
 .concentric-rings { width: 84px; height: 84px; position: relative; flex: 0 0 auto; }
@@ -567,9 +579,6 @@ html:has(.widget-window-shell), body:has(.widget-window-shell), body:has(.widget
 .refresh-chip b.warn { color: color-mix(in srgb, var(--amber) 50%, var(--ink)); }
 .refresh-chip b.waste { color: color-mix(in srgb, var(--coral) 50%, var(--ink)); }
 .refresh-chip b.spent { color: var(--ink-soft); }
-@media (prefers-reduced-motion: reduce) {
-  .refresh-queues-toggle, .refresh-queues-toggle svg, .refresh-queues-panel { transition: none; }
-}
 .reset-timeline { overflow-x: auto; overflow-y: hidden; cursor: grab; padding: 2px 12px 8px; user-select: none; }
 .reset-timeline:active { cursor: grabbing; }
 .timeline-track { position: relative; height: 62px; }
@@ -2033,7 +2042,6 @@ body.row-resizing, body.row-resizing * { cursor: row-resize !important; user-sel
 .settings-disclosure-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .24s var(--ease-out); }
 .settings-disclosure.open > .settings-disclosure-body { grid-template-rows: 1fr; }
 .settings-disclosure-body > .settings-disclosure-content { min-height: 0; overflow: hidden; }
-@media (prefers-reduced-motion: reduce) { .settings-disclosure-body { transition: none; } }
 
 /* 悬停用中性表面，不再整行绿；按下保留一点绿色反馈 */
 .settings-entry:hover { background: var(--surface-3); }
@@ -2059,7 +2067,6 @@ body.row-resizing, body.row-resizing * { cursor: row-resize !important; user-sel
 /* 危险但低优先级的操作：轮廓按钮 + 珊瑚色文字，不再抢主操作 */
 .outline-button.danger { color: var(--coral-deep); }
 .outline-button.danger:hover { border-color: var(--warn-border); background: var(--coral-bg); }
-@media (prefers-reduced-motion: reduce) { .settings-disclosure { transition: none; } }
 .primary-button.full { width: 100%; }
 .data-transfer-actions + .outline-button.danger { margin-top: 10px; }
 
@@ -2071,7 +2078,6 @@ body.row-resizing, body.row-resizing * { cursor: row-resize !important; user-sel
 .settings-disclosure-body { transition-duration: .28s; }
 .settings-disclosure-content { animation: none; opacity: 0; transform: translateY(-6px); transition: opacity .18s ease, transform .26s var(--ease-out); }
 .settings-disclosure.open .settings-disclosure-content { opacity: 1; transform: none; }
-@media (prefers-reduced-motion: reduce) { .settings-disclosure-content { transition: none; } }
 
 /* 打开的卡片区缘线再清晰一点，并给柔和投影，卡片感更完整 */
 .settings-disclosure.open { border-color: var(--line); box-shadow: var(--shadow-card); }
@@ -2116,7 +2122,20 @@ body.row-resizing, body.row-resizing * { cursor: row-resize !important; user-sel
 /* 抽屉恢复全高（用户确认保留原有全高形态；第六轮的收底撤销） */
 .settings-drawer { bottom: 0; max-height: none; border-bottom: 0; border-radius: 0; }
 
-/* 两处动画是否播放由设置开关决定（未设置时跟随系统「动画效果」），在 JS 里判断，这里不再按 prefers-reduced-motion 关闭。
+/* 放在设置抽屉和刷新队列的过渡声明之后，避免后写的样式恢复过渡。 */
+@media (prefers-reduced-motion: reduce) {
+  .settings-disclosure,
+  .settings-entry,
+  .settings-disclosure > .settings-entry > svg:last-child,
+  .settings-disclosure-body,
+  .settings-disclosure-content,
+  .refresh-queues-toggle,
+  .refresh-queues-toggle svg,
+  .refresh-queues-panel { transition: none; }
+  .settings-disclosure-content { animation: none; }
+}
+
+/* 打开账号、历史页签切换和浮窗切换账号默认开启，由各自的设置开关控制，不跟随系统「动画效果」。
    打开账号：卡片放大成额度趋势（View Transitions，过渡名由 runAccountTransition 临时挂上）。
    外框随位置与尺寸变形并浮起，前后两张快照都按原尺寸贴左上角显示、不拉伸；账号名与图标单独接力；看板轻微后退淡出。
    曲线前段不过陡，让放大过程看得见：标准档打开约 .36s，返回约 .29s */
