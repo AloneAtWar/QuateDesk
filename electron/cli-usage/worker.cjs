@@ -17,6 +17,11 @@ const adapters = {
   openclaw: require('./adapters/openclaw.cjs'),
   hermes: require('./adapters/hermes.cjs'),
   dsh: require('./adapters/dsh.cjs'),
+  pi: require('./adapters/pi.cjs'),
+  workbuddy: require('./adapters/workbuddy.cjs'),
+  minimax: require('./adapters/minimax.cjs'),
+  cherrystudio: require('./adapters/cherrystudio.cjs'),
+  antigravity: require('./adapters/antigravity.cjs'),
 };
 
 const BATCH_SIZE = 500;

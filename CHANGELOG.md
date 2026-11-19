@@ -4,6 +4,10 @@ Quota Desk 的版本更新记录。
 
 ## [未发布]
 
+### 新增
+
+- 本机 CLI 用量新增五个渠道：Pi（`~/.pi/agent/sessions` 的会话 JSONL，逐条 assistant usage）、WorkBuddy / WorkBuddy AI（`~/.workbuddy/traces` 的工作流聚合用量，`workbuddy.db` 关联项目目录）、MiniMax Code（`~/.minimax/sqlite.db` 的 `token_usage` 表，`sessions.workspace_dir` 关联项目）、Cherry Studio（`%APPDATA%/CherryStudio/Data/cherrystudio.sqlite` 的 `ai_usage_record` 表，请求级精确、旧版聚合行标记为非精确）和 Antigravity（`~/.gemini/antigravity` 与 `~/.gemini/antigravity-cli` 两处 `brain` 下的会话转录 JSONL，优先 `transcript_full`、跳过分片副本防双计；`conversations/*.db` 为二进制 protobuf 不解析）。数据根目录分别可用 `PI_HOME`、`WORKBUDDY_HOME`、`MINIMAX_HOME`、`CHERRYSTUDIO_DATA_DIR`、`ANTIGRAVITY_HOME` 覆盖；Cherry Studio 当前没有本地用量记录时渠道显示为就绪、计数为零，之后使用即自动入库。Claude Desktop 内嵌的 Claude Code / Coworker 会话本来写入 `~/.claude`，已由 Claude Code 渠道统计，无需单独适配。
+
 ### 修复
 
 - 安卓 App 里横屏查看时：左侧不再空出一大块（挖孔避让被网页和 App 各加了一次）；看板卡片按内容撑开、同一行等高，不再按整屏高度推算而把第二行顶到「即将刷新」栏下面，读数少的卡片下方也不再留空；额度趋势页一屏放下趋势图与图例，底部的缩放提示和图例不再被裁掉；「本机」页签的热力图不被压扁；本机用量 / 额度浪费的最小画布不再被 App 覆盖，当日明细与浪费账号表可以整页滚到。

@@ -50,7 +50,7 @@ DeepSeek、Z.ai、Codex 和 MiniMax 支持逐日用量视图，包括近一年�
 
 ### 本机 CLI 用量
 
-只读解析本机 CLI 落盘的会话数据，提供近一年热力图、Token 构成（输入 / 输出 / 缓存读写）和模型拆分，不与账号额度或官方统计混算。目前支持 ZCode、Kimi Code、Claude Code、OpenAI Codex、GitHub Copilot CLI、Gemini CLI、Grok CLI、OpenCode、OpenClaw、Hermes Agent 和 DeepSeek Harness；数据根目录可通过环境变量覆盖（如 `CODEX_HOME`、`GROK_HOME`、`DSH_HOME`），解析口径与 [ccusage](https://github.com/ccusage/ccusage) 对齐。本机采集只代表当前机器；可在设置中导入其他设备的用量档案并汇总，仍不代表账号在全部渠道的官方用量。
+只读解析本机 CLI 落盘的会话数据，提供近一年热力图、Token 构成（输入 / 输出 / 缓存读写）和模型拆分，不与账号额度或官方统计混算。目前支持 ZCode、Kimi Code、Claude Code、OpenAI Codex、GitHub Copilot CLI、Gemini CLI、Grok CLI、OpenCode、OpenClaw、Hermes Agent、DeepSeek Harness、Pi、WorkBuddy、MiniMax Code、Cherry Studio 和 Antigravity（Hub 与 CLI 会话转录）；数据根目录可通过环境变量覆盖（如 `CODEX_HOME`、`GROK_HOME`、`DSH_HOME`、`MINIMAX_HOME`），解析口径与 [ccusage](https://github.com/ccusage/ccusage) 对齐。本机采集只代表当前机器；可在设置中导入其他设备的用量档案并汇总，仍不代表账号在全部渠道的官方用量。
 
 ### 周期浪费
 

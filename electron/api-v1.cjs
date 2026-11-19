@@ -18,6 +18,7 @@ const TYPICAL_PROVIDER = {
   zcode: 'zai', kimi: 'kimi-subscription', claude: 'claude', codex: 'codex',
   copilot: 'copilot', gemini: 'gemini', grok: 'grok', opencode: null,
   openclaw: null, hermes: null, dsh: 'deepseek',
+  pi: null, workbuddy: null, minimax: 'minimax', cherrystudio: null, antigravity: 'gemini',
 };
 
 const ENDPOINT_CATALOG = [

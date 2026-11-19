@@ -147,6 +147,54 @@ const detectDshRoots = () => {
   return [buildRoot(path.join(homeDir(), '.dsh'), '~/.dsh'), ...wslRootsFor('.dsh', '~/.dsh')];
 };
 
+// Pi:PI_HOME 覆盖 > ~/.pi(会话在 agent/sessions/<编码 cwd>/ 下按项目分目录)
+const detectPiRoots = () => {
+  const override = envValue('PI_HOME');
+  if (override) return splitCommaDirs(override).map((item) => buildRoot(item, '$PI_HOME'));
+  return [buildRoot(path.join(homeDir(), '.pi'), '~/.pi'), ...wslRootsFor('.pi', '~/.pi')];
+};
+
+// WorkBuddy:WORKBUDDY_HOME 覆盖 > ~/.workbuddy(用量在 traces/<pid>/,项目名在 workbuddy.db)
+const detectWorkbuddyRoots = () => {
+  const override = envValue('WORKBUDDY_HOME');
+  if (override) return splitCommaDirs(override).map((item) => buildRoot(item, '$WORKBUDDY_HOME'));
+  return [buildRoot(path.join(homeDir(), '.workbuddy'), '~/.workbuddy'), ...wslRootsFor('.workbuddy', '~/.workbuddy')];
+};
+
+// MiniMax Code:MINIMAX_HOME 覆盖 > ~/.minimax(用量在 sqlite.db 的 token_usage 表)
+const detectMinimaxRoots = () => {
+  const override = envValue('MINIMAX_HOME');
+  if (override) return splitCommaDirs(override).map((item) => buildRoot(item, '$MINIMAX_HOME'));
+  return [buildRoot(path.join(homeDir(), '.minimax'), '~/.minimax'), ...wslRootsFor('.minimax', '~/.minimax')];
+};
+
+// Cherry Studio:CHERRYSTUDIO_DATA_DIR 覆盖 > %APPDATA%/CherryStudio/Data
+// (cherrystudio.sqlite 的 ai_usage_record 表);非 Windows 落在 ~/.config 下同布局
+const detectCherrystudioRoots = () => {
+  const override = envValue('CHERRYSTUDIO_DATA_DIR');
+  if (override) return splitCommaDirs(override).map((item) => buildRoot(item, '$CHERRYSTUDIO_DATA_DIR'));
+  const roaming = envValue('APPDATA');
+  const roots = roaming
+    ? [buildRoot(path.join(roaming, 'CherryStudio', 'Data'), '%APPDATA%/CherryStudio/Data')]
+    : [buildRoot(path.join(homeDir(), '.config', 'CherryStudio', 'Data'), '~/.config/CherryStudio/Data')];
+  if (roaming) roots.push(...wslRootsFor('.config/CherryStudio/Data', '~/.config/CherryStudio/Data'));
+  return roots;
+};
+
+// Antigravity:ANTIGRAVITY_HOME 覆盖(逗号可多根)> Hub 的 ~/.gemini/antigravity 与
+// CLI(agy) 的 ~/.gemini/antigravity-cli,两者 brain/<uuid>/.system_generated/logs
+// 下是同一套会话转录;conversations/*.db 为二进制 protobuf 不解析
+const detectAntigravityRoots = () => {
+  const override = envValue('ANTIGRAVITY_HOME');
+  if (override) return splitCommaDirs(override).map((item) => buildRoot(item, '$ANTIGRAVITY_HOME'));
+  return [
+    buildRoot(path.join(homeDir(), '.gemini', 'antigravity'), '~/.gemini/antigravity'),
+    buildRoot(path.join(homeDir(), '.gemini', 'antigravity-cli'), '~/.gemini/antigravity-cli'),
+    ...wslRootsFor('.gemini/antigravity', '~/.gemini/antigravity'),
+    ...wslRootsFor('.gemini/antigravity-cli', '~/.gemini/antigravity-cli'),
+  ];
+};
+
 module.exports = {
   homeDir,
   envValue,
@@ -164,4 +212,9 @@ module.exports = {
   detectGeminiRoots,
   detectGrokRoots,
   detectDshRoots,
+  detectPiRoots,
+  detectWorkbuddyRoots,
+  detectMinimaxRoots,
+  detectCherrystudioRoots,
+  detectAntigravityRoots,
 };

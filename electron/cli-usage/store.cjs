@@ -12,7 +12,7 @@ const {
 
 const SCHEMA_VERSION = '4';
 
-const AGENT_ORDER = ['zcode', 'kimi', 'claude', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'openclaw', 'hermes', 'dsh'];
+const AGENT_ORDER = ['zcode', 'kimi', 'claude', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'openclaw', 'hermes', 'dsh', 'pi', 'workbuddy', 'minimax', 'cherrystudio', 'antigravity'];
 
 const HOUR_BUCKET_FORMATTER_CACHE = new Map();
 

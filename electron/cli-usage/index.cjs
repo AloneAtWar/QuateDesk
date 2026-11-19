@@ -6,7 +6,7 @@ const {
   isValidTimeZone, isValidDateString, localDateString, normalizeModelRules,
 } = require('./normalize.cjs');
 
-const AGENT_IDS = ['zcode', 'kimi', 'claude', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'openclaw', 'hermes', 'dsh'];
+const AGENT_IDS = ['zcode', 'kimi', 'claude', 'codex', 'copilot', 'gemini', 'grok', 'opencode', 'openclaw', 'hermes', 'dsh', 'pi', 'workbuddy', 'minimax', 'cherrystudio', 'antigravity'];
 const RANGE_DAYS = [1, 7, 30, 90, 365];
 // days = 0 表示"全部",不按周期截断
 const QUERY_TIMEOUT_MS = 30_000;

@@ -31,7 +31,7 @@ worker.on('message', (message) => {
   for (const source of sources) {
     console.log(`${source.agent.padEnd(9)} ${String(source.status).padEnd(6)} records=${String(source.records).padStart(6)} files=${String(source.files).padStart(4)} ${source.warning || ''}`);
   }
-  for (const agent of ['grok', 'gemini', 'openclaw', 'opencode', 'copilot', 'hermes', 'dsh']) {
+  for (const agent of ['grok', 'gemini', 'openclaw', 'opencode', 'copilot', 'hermes', 'dsh', 'pi', 'workbuddy', 'minimax', 'cherrystudio', 'antigravity']) {
     const summary = await call('summary', { agent, timezone: 'Asia/Shanghai', days: 365 });
     const models = await call('models', { agent, mergeSameModels: false, scope: { kind: 'range', days: 365 }, timezone: 'Asia/Shanghai' });
     console.log(`\n== ${agent}: total=${summary.summary.totalTokens} sessions=${summary.summary.sessions} days(active)=${summary.summary.activeDays} in=${summary.summary.inputTokens} cr=${summary.summary.cacheReadTokens} cw=${summary.summary.cacheWriteTokens} out=${summary.summary.outputTokens}`);
