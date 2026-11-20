@@ -9,7 +9,10 @@ const RELIABLE_FACTOR = 2;          // 最后观测距重置 ≤ 2×轮询中位
 const FALLBACK_POLL_MS = 5 * 60_000;
 const REFILL_EPS = 5;               // 剩余率回升 ≥5 个百分点视为额度回补（重置的必要证据）
 const MERGE_TOL_MS = 6 * 60 * 60_000; // 归档合并时「同一周期」的结束时间容差：不同批次扫描的锚点会差几分钟
-const REFILL_CYCLE_KEYS = ['weekly', 'monthly']; // 回补判定仅限周期型窗口：滑动窗口剩余率回升是正常滚动
+// Antigravity 的池窗口（含单模型特例池的动态 key）：带 _7d 后缀的都是 7 天周期额度
+const AGY_POOL_7D_RE = /^agy_.+_7d$/;
+// 周期型窗口（有自然到期边界、可归档浪费）：周 / 月 + Antigravity 的 7 天池
+const isCycleWindowKey = (key) => key === 'weekly' || key === 'monthly' || AGY_POOL_7D_RE.test(key);
 
 // 兼容数值/纯数字字符串的 epoch 时间戳（如 Z.ai 直接返回毫秒数）：≥1e12 按毫秒，否则按秒
 const ts = (value) => {
@@ -77,11 +80,11 @@ const buildCycleRecord = (windowKey, prev, fromMs, close, medianMs) => {
   };
 };
 
-// 自然到期周期的起点：按窗口标称周期从结束时刻倒推（周=7天，月=一个日历月）。
-// 不用链式推算（上个周期的 end / 首次观测时间）：首条记录、观测跨过整个周期的跳跃
-// 都会让链式起点偏早，出现「21 天的周周期」这类错误区间
+// 自然到期周期的起点：按窗口标称周期从结束时刻倒推（周=7天，月=一个日历月，
+// Antigravity 的 7 天池与周同长）。不用链式推算（上个周期的 end / 首次观测时间）：
+// 首条记录、观测跨过整个周期的跳跃都会让链式起点偏早，出现「21 天的周周期」这类错误区间
 const naturalCycleStartMs = (windowKey, endMs) => {
-  if (windowKey === 'weekly') return endMs - 7 * 86_400_000;
+  if (windowKey === 'weekly' || AGY_POOL_7D_RE.test(windowKey)) return endMs - 7 * 86_400_000;
   if (windowKey === 'monthly') {
     const date = new Date(endMs);
     date.setUTCMonth(date.getUTCMonth() - 1);
@@ -175,7 +178,7 @@ const extractCycles = (points, windowKeys) => {
       }
       sawMissing = false;
       // 回补候选：resetAt 没变但剩余率突升 ≥REFILL_EPS；仅周期型窗口（滑动窗口的回升是正常滚动）
-      if (!pendingRefill && REFILL_CYCLE_KEYS.includes(key)
+      if (!pendingRefill && isCycleWindowKey(key)
         && Math.abs(ts(sample.resetAt) - ts(prev.sample.resetAt)) <= RESET_JITTER_MS
         && Number.isFinite(Number(prev.sample.remaining)) && Number.isFinite(Number(sample.remaining))
         && Number(sample.remaining) - Number(prev.sample.remaining) >= REFILL_EPS) {
@@ -289,10 +292,20 @@ const computeWasteStats = (cycles, windowKey) => {
   };
 };
 
-// 厂商可统计窗口：预设了 wasteWindows 用预设；否则默认取周期类型的 weekly/monthly
-const resolveWasteWindows = (requestConfig) => {
+// 统计口径匹配：weekly 过滤档把所有 7 天池周期一并计入（它们本质是周额度），
+// monthly 精确匹配。渲染端 src/waste-statistics.js 的同名函数保持一致
+const matchesWasteWindowKey = (cycleWindow, filterKey) => (filterKey === 'weekly'
+  ? cycleWindow === 'weekly' || AGY_POOL_7D_RE.test(cycleWindow)
+  : cycleWindow === filterKey);
+
+// 厂商可统计窗口：预设了 wasteWindows 用预设（用户显式选择，含空数组=不做统计）；
+// 否则默认取周期类型的窗口 = 配置窗口 ∪ 账号实际出现的周期键。trackedKeys 让
+// Antigravity 的动态特例池（agy_pool_*_7d，不在静态配置里）也自动纳入统计
+const resolveWasteWindows = (requestConfig, trackedKeys = null) => {
   if (Array.isArray(requestConfig?.wasteWindows)) return requestConfig.wasteWindows;
-  return (requestConfig?.windows || []).filter((key) => ['weekly', 'monthly'].includes(key));
+  const configured = (requestConfig?.windows || []).filter(isCycleWindowKey);
+  const tracked = (trackedKeys || []).filter(isCycleWindowKey);
+  return [...new Set([...configured, ...tracked])];
 };
 
 // v0.6.18–0.7.0 的一次性修复（纯逻辑）：当时的 mergeCycles 把越过降采样线（30 天）的
@@ -324,4 +337,4 @@ const repairDowngradedCycles = (current, backups) => {
   return { cycles: next, repaired };
 };
 
-module.exports = { medianGapMs, detectCycleClose, extractCycles, mergeCycles, dedupeCycles, purgeGhostCycles, computeWasteStats, resolveWasteWindows, naturalCycleStartMs, repairDowngradedCycles, RESET_JITTER_MS, RELIABLE_FACTOR, REFILL_EPS, MERGE_TOL_MS };
+module.exports = { medianGapMs, detectCycleClose, extractCycles, mergeCycles, dedupeCycles, purgeGhostCycles, computeWasteStats, resolveWasteWindows, matchesWasteWindowKey, naturalCycleStartMs, repairDowngradedCycles, isCycleWindowKey, AGY_POOL_7D_RE, RESET_JITTER_MS, RELIABLE_FACTOR, REFILL_EPS, MERGE_TOL_MS };

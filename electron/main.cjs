@@ -597,11 +597,24 @@ const migrateProvider = (provider) => {
   const seededVariables = !builtin && builtinConfig?.adapterMode === 'script' && !provider.requestConfig?.variables?.some((item) => item.key === 'endpoint')
     ? { ...provider, requestConfig: { ...provider.requestConfig, variables: builtinConfig.variables } }
     : provider;
+  // Antigravity 浪费统计改版：池的 7 天额度本质上也是周期额度，参与浪费统计。
+  // 旧内置预设写死的 wasteWindows: []（当时编辑表单没有可勾选的周期窗口，不可能是
+  // 用户手选）一次性撤销，回落自动判定（配置窗口 ∪ 账号实际出现的 7 天池，含动态特例池）。
+  // wasteWindowsAuto 标记撤销已做过：用户此后在表单里显式保存的选择（含全不勾）不再被回滚
+  const agyWasteAuto = provider.id === 'antigravity'
+    ? (() => {
+      const config = seededVariables.requestConfig || {};
+      const legacyEmpty = !config.wasteWindowsAuto && Array.isArray(config.wasteWindows) && !config.wasteWindows.length;
+      const next = legacyEmpty ? (({ wasteWindows, ...rest }) => rest)(config) : config;
+      return next.wasteWindowsAuto ? seededVariables
+        : { ...seededVariables, requestConfig: { ...next, wasteWindowsAuto: true } };
+    })()
+    : seededVariables;
   // Kimi 双登录改造：给存量 kimi-subscription 渠道补上 API Key 用量端点
   // （API Key 表单的默认接口地址 + cc-switch 导入的域名匹配）
-  const kimiEndpointSeeded = provider.id === 'kimi-subscription' && builtinConfig?.endpoint && provider.requestConfig?.endpoint !== builtinConfig.endpoint
-    ? { ...seededVariables, requestConfig: { ...seededVariables.requestConfig, endpoint: builtinConfig.endpoint } }
-    : seededVariables;
+  const kimiEndpointSeeded = provider.id === 'kimi-subscription' && builtinConfig?.endpoint && agyWasteAuto.requestConfig?.endpoint !== builtinConfig.endpoint
+    ? { ...agyWasteAuto, requestConfig: { ...agyWasteAuto.requestConfig, endpoint: builtinConfig.endpoint } }
+    : agyWasteAuto;
   // MiMo 窗口改版：存量 state 的 requestConfig.windows 还是旧的 ['mimo_plan'] 时，
   // 刷新为内置的周期窗口（包月 monthly「1个月」/ 包年 yearly「1年」）；旧配置的
   // wasteWindows 是空数组（当时明确不做浪费统计），一并刷新为内置预设参与浪费统计
@@ -620,9 +633,10 @@ const migrateProvider = (provider) => {
     : kimiEndpointSeeded;
   const website = provider.website === undefined ? (builtinWebsites[provider.id] ?? '') : provider.website;
   const migrated = builtin ? { ...provider, website, baseUrl: undefined, domain: undefined, requestConfig: builtin, logo } : { ...refreshedWindows, website, baseUrl: undefined, domain: undefined, logo };
-  // 浪费统计预设补齐：存量 state 的 requestConfig 还没有 wasteWindows 字段时用内置预设；
+  // 浪费统计预设补齐：存量 state 的 requestConfig 还没有 wasteWindows 字段时用内置预设
+  //（内置渠道没预设 wasteWindows 的——如 Antigravity 的池窗口动态出现——保持自动判定）；
   // 用户手动设置过（包括空数组 = 明确不做浪费统计）则保留不动
-  const seededWaste = builtinConfig && migrated.requestConfig && !Array.isArray(migrated.requestConfig.wasteWindows)
+  const seededWaste = builtinConfig && Array.isArray(builtinConfig.wasteWindows) && migrated.requestConfig && !Array.isArray(migrated.requestConfig.wasteWindows)
     ? { ...migrated, requestConfig: { ...migrated.requestConfig, wasteWindows: builtinConfig.wasteWindows } }
     : migrated;
   // API 厂商的官方账号登录只是增强能力，不能替代基础 API Key。同步修正旧 state
@@ -1524,8 +1538,9 @@ async function pollState(accountIds = null) {
       const identityPatch = cliIdentityPatch(account, provider.requestConfig?.adapterMode, store.getSecrets(account.id));
       const updated = { ...account, ...(identityPatch || {}), windows, status: 'active', authStatus: null, lastError: null, lastChecked: checkedAt, lastTestAt: checkedAt };
       store.appendHistory(account.id, windows, historyRetentionDays());
-      // 周期浪费归档：从该账号历史中提取已结束的周期（周/月等厂商预设窗口），永久保存
-      store.archiveCycles(account.id, resolveWasteWindows(provider.requestConfig));
+      // 周期浪费归档：从该账号历史中提取已结束的周期（周/月等厂商预设窗口 +
+      // 账号实际出现的周期键——Antigravity 的动态特例池），永久保存
+      store.archiveCycles(account.id, resolveWasteWindows(provider.requestConfig, windows.map((item) => item.key)));
       notifyWaste(current, updated, provider);
       return updated;
     } catch (error) {

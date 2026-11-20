@@ -1,9 +1,30 @@
+import { windowCatalog } from './data.js';
+
 export const WASTE_RANGES = [
   { months: 1, label: '最近 1 个月' },
   { months: 3, label: '最近 3 个月' },
   { months: 6, label: '最近半年' },
   { months: 12, label: '最近一年' },
 ];
+
+// 参与浪费统计的周期型窗口键：周 / 月 + Antigravity 的 7 天池（含单模型特例池的
+// 动态 key agy_pool_*_7d）。池的 7d 额度本质是周期额度；与主进程 electron/waste.cjs
+// 的 isCycleWindowKey 保持一致
+export const AGY_POOL_7D_RE = /^agy_.+_7d$/;
+export const isCycleWindowKey = (key) => key === 'weekly' || key === 'monthly' || AGY_POOL_7D_RE.test(key);
+
+// 统计口径匹配：weekly 过滤档把所有 7 天池周期一并计入（它们本质是周额度），
+// monthly 精确匹配
+export const matchesWasteWindowKey = (cycleWindow, filterKey) => (filterKey === 'weekly'
+  ? cycleWindow === 'weekly' || AGY_POOL_7D_RE.test(cycleWindow)
+  : cycleWindow === filterKey);
+
+// 周期窗口名：目录条目优先；Antigravity 的动态特例池从 key 还原（agy_pool_gemini-4-argon_7d
+// → Gemini 4 Argon 7d）
+const prettifyAgyPoolName = (key) => key.replace(/^agy_pool_/, '').replace(/_7d$/, '')
+  .split('-').map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1) : part)).join(' ');
+export const wasteWindowLabel = (key) => windowCatalog[key]?.label
+  ?? (AGY_POOL_7D_RE.test(key) ? `${prettifyAgyPoolName(key)} 7d` : key);
 
 const startOfDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
 const addDays = (date, days) => new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
@@ -68,10 +89,18 @@ export function createWasteRange(months = 1, now = new Date()) {
 export function accountWasteWindows(account, provider) {
   const configured = Array.isArray(account.wasteWindows) ? account.wasteWindows
     : Array.isArray(provider?.requestConfig?.wasteWindows) ? provider.requestConfig.wasteWindows
-      : (provider?.requestConfig?.windows || []).filter((key) => ['weekly', 'monthly'].includes(key));
-  const tracked = account.windowKeys?.length ? account.windowKeys
-    : account.windows?.length ? account.windows.map((meter) => meter.key) : null;
-  return configured.filter((key) => ['weekly', 'monthly'].includes(key) && (!tracked || tracked.includes(key)));
+      : null;
+  // 账号实际追踪的键：用户选过窗口用 windowKeys，并上接口实时返回的窗口——CLI 专属
+  // 适配不受 windowKeys 过滤，Antigravity 的动态特例池只出现在实时窗口里
+  const tracked = new Set([
+    ...(Array.isArray(account.windowKeys) ? account.windowKeys : []),
+    ...(Array.isArray(account.windows) ? account.windows.map((meter) => meter.key) : []),
+  ]);
+  if (configured) return configured.filter((key) => isCycleWindowKey(key) && (tracked.size === 0 || tracked.has(key)));
+  // 自动判定：配置窗口 ∪ 实时窗口里的周期键（与主进程 resolveWasteWindows 口径一致）
+  const configuredWindows = (provider?.requestConfig?.windows || []).filter(isCycleWindowKey);
+  const live = [...tracked].filter(isCycleWindowKey);
+  return [...new Set([...configuredWindows, ...live])];
 }
 
 const summarize = (records) => {
@@ -97,10 +126,11 @@ export function buildWasteReport({ accounts, providers, archives, windowKey, ran
   const records = [];
   for (const account of accounts) {
     const provider = providers.find((item) => item.id === account.providerId);
-    if (!accountWasteWindows(account, provider).includes(windowKey)) continue;
+    // weekly 口径把 7 天池周期一并计入（每个池的周期各记 1 份）
+    if (!accountWasteWindows(account, provider).some((key) => matchesWasteWindowKey(key, windowKey))) continue;
     const seen = new Set();
     for (const cycle of archives[account.id] || []) {
-      if (cycle.window !== windowKey) continue;
+      if (!matchesWasteWindowKey(cycle.window, windowKey)) continue;
       const end = Date.parse(cycle.end);
       if (!Number.isFinite(end) || end < range.start || end >= range.endExclusive) continue;
       const identity = `${cycle.window}:${cycle.kind}:${end}`;

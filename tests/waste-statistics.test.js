@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { accountWasteWindows, buildWasteReport, createWasteRange, loadWasteArchives } from '../src/waste-statistics.js';
+import { accountWasteWindows, buildWasteReport, createWasteRange, loadWasteArchives, wasteWindowLabel } from '../src/waste-statistics.js';
 
 const now = new Date(2026, 9, 8, 12, 40);
 const range = createWasteRange(1, now);
@@ -100,6 +100,36 @@ test('weekly and monthly dimensions stay separate and honor tracked/configured w
   assert.equal(reportFor(archives, { providers: [{ ...providers[0], requestConfig: { wasteWindows: [] } }] }).total, null);
 });
 
+test('Antigravity pool windows join the weekly dimension automatically, one share per pool cycle', () => {
+  const agyProvider = { id: 'antigravity', requestConfig: { windows: ['agy_gemini_5h', 'agy_gemini_7d', 'agy_claudegpt_5h', 'agy_claudegpt_7d'] } };
+  // CLI 专属适配不受 windowKeys 过滤：动态特例池只出现在实时窗口里，也要自动纳入
+  const agyAccount = {
+    id: 'agy', providerId: 'antigravity',
+    windowKeys: ['agy_gemini_5h', 'agy_gemini_7d', 'agy_claudegpt_5h', 'agy_claudegpt_7d'],
+    windows: [
+      { key: 'agy_gemini_5h' }, { key: 'agy_gemini_7d' }, { key: 'agy_claudegpt_5h' },
+      { key: 'agy_claudegpt_7d' }, { key: 'agy_pool_gemini-4-argon_7d' },
+    ],
+  };
+  // 自动判定 = 配置窗口 ∪ 实时窗口里的周期键；5h 池不参与
+  assert.deepEqual(accountWasteWindows(agyAccount, agyProvider), ['agy_gemini_7d', 'agy_claudegpt_7d', 'agy_pool_gemini-4-argon_7d']);
+  // 免费档没有 Gemini 周池：静态配置键仍在候选（升级出池后无需改配置），
+  // 动态特例池不会凭空出现；没有周期数据的候选不会产生任何统计
+  const freeAccount = { ...agyAccount, windows: [{ key: 'agy_claudegpt_5h' }, { key: 'agy_claudegpt_7d' }, { key: 'agy_gemini_5h' }] };
+  assert.deepEqual(accountWasteWindows(freeAccount, agyProvider), ['agy_gemini_7d', 'agy_claudegpt_7d']);
+  // 显式预设只统计勾选的池
+  assert.deepEqual(accountWasteWindows({ ...agyAccount, wasteWindows: ['agy_gemini_7d'] }, agyProvider), ['agy_gemini_7d']);
+
+  const archives = { agy: [cycle(10, 40, { window: 'agy_gemini_7d' }), cycle(12, 30, { window: 'agy_pool_gemini-4-argon_7d' }), cycle(23, 20, { window: 'agy_claudegpt_7d' })] };
+  // weekly 口径把池周期并入：每个池的周期各记 1 份
+  const report = buildWasteReport({ accounts: [agyAccount], providers: [agyProvider], archives, windowKey: 'weekly', range });
+  assert.equal(report.count, 3);
+  assert.equal(report.total, .9);
+  assert.equal(report.accounts[0].count, 3);
+  // monthly 口径不含池周期
+  assert.equal(buildWasteReport({ accounts: [agyAccount], providers: [agyProvider], archives, windowKey: 'monthly', range }).count, 0);
+});
+
 test('out-of-range, future, malformed and duplicate cycles never inflate totals', () => {
   const valid = cycle(10, 40);
   const report = reportFor({ main: [valid, { ...valid }, cycle(1, 100), cycle(10, 100, { end: new Date(now.getTime() + 1).toISOString() }), cycle(11, 100, { end: 'invalid' }), cycle(12, 1000)] });
@@ -121,6 +151,15 @@ test('the selected bucket has account details without changing the global summar
 test('a refresh within the same day preserves bucket selection identifiers', () => {
   const later = createWasteRange(1, new Date(2026, 9, 8, 23, 59));
   assert.deepEqual(later.buckets.map((bucket) => bucket.id), range.buckets.map((bucket) => bucket.id));
+});
+
+test('wasteWindowLabel resolves catalog entries first and prettifies dynamic pool keys', () => {
+  assert.equal(wasteWindowLabel('weekly'), '7 天');
+  assert.equal(wasteWindowLabel('agy_gemini_7d'), 'Gemini 池 7d');
+  assert.equal(wasteWindowLabel('agy_claudegpt_7d'), 'Claude/GPT 7d');
+  // 动态特例池不在目录里：从 key 还原可读名
+  assert.equal(wasteWindowLabel('agy_pool_gemini-4-argon_7d'), 'Gemini 4 Argon 7d');
+  assert.equal(wasteWindowLabel('other'), 'other');
 });
 
 test('loading archives fails as a whole when one account cannot be read', async () => {

@@ -226,7 +226,8 @@ const agyClusterReading = (entries) => {
   return best;
 };
 
-// 纯解析：models + summary 两个响应 → 池窗口 meters（成员模型名单挂在 meter.models）
+// 纯解析：models + summary 两个响应 → 池窗口 meters（成员模型名单挂在 meter.models）。
+// 同一池键只留第一个桶组（重复组 / 撞 slug 的两个特例组不会产生重复窗口键）
 function buildAntigravityWindows(modelsPayload, summaryPayload, meter) {
   const models = agyModelEntries(modelsPayload);
   const membersOf = (family) => {
@@ -234,8 +235,11 @@ function buildAntigravityWindows(modelsPayload, summaryPayload, meter) {
     return names.length ? [...new Set(names)] : [];
   };
   const meters = [];
+  const seenPools = new Set();
   for (const group of summaryPayload?.groups || []) {
     const poolKey = agyPoolKeyOf(group?.displayName);
+    if (seenPools.has(poolKey)) continue; // 同键池已入列，跳过重复组
+    seenPools.add(poolKey);
     // 成员归属：静态家族池按 family；动态特例池（如 Gemini 4 Argon）按组名判 family
     const family = poolKey === AGY_POOL_KEYS.gemini ? 'gemini'
       : poolKey === AGY_POOL_KEYS.claudegpt ? 'claudegpt'

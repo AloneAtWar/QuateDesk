@@ -9,6 +9,7 @@ import { BoardPullRefreshIndicator } from './board-pull-refresh-indicator';
 import { accountRefreshFeedback, TransientToast, useTransientToast } from './transient-toast';
 import { MAIN_VIEW_ITEMS, ViewMenu } from './view-menu';
 import { initialAccounts, providerCatalog } from './data';
+import { isCycleWindowKey } from './waste-statistics';
 import './styles.css';
 import './remote.css';
 
@@ -103,7 +104,7 @@ const demoSnapshot = {
     provider: providerCatalog.find((provider) => provider.id === account.providerId)?.name || account.providerId,
     usageSupported: ['deepseek', 'zai', 'codex', 'minimax'].includes(account.providerId),
     usageStatus: account.providerId === 'zai' ? 'connected' : 'disconnected',
-    wasteWindows: (account.windows || []).map((window) => window.key).filter((key) => ['weekly', 'monthly'].includes(key)),
+    wasteWindows: (account.windows || []).map((window) => window.key).filter(isCycleWindowKey),
   })),
 };
 

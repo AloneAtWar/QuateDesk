@@ -257,16 +257,28 @@ async function bootServer() {
     providers: [
       { id: 'zai', name: 'Z.ai', requestConfig: { windows: ['five_hour', 'weekly'], wasteWindows: ['weekly'] } },
       { id: 'deepseek', name: 'DeepSeek', requestConfig: { windows: ['balance'], wasteWindows: [] } },
+      // Antigravity 不预设浪费窗口：池的 7d 额度按自动判定纳入（配置窗口 ∪ 账号实时窗口）
+      { id: 'antigravity', name: 'Antigravity', requestConfig: { windows: ['agy_gemini_5h', 'agy_gemini_7d', 'agy_claudegpt_5h', 'agy_claudegpt_7d'] } },
     ],
     accounts: [
       { id: 'a1', providerId: 'zai', name: '主号', windowKeys: ['weekly'], windows: [{ key: 'weekly', unit: '%', remaining: 62, used: 38, total: 100, resetAt: new Date(now + DAY).toISOString(), available: true }, { key: 'five_hour', unit: '%', remaining: 87, used: 13, total: 100, resetAt: 1791959656432, available: true }], usageConnection: { status: 'connected' } },
       { id: 'a2', providerId: 'deepseek', name: '备号', windowKeys: ['balance'], windows: [], status: 'warning' },
+      { id: 'a3', providerId: 'antigravity', name: 'Google 号', windowKeys: ['agy_gemini_5h', 'agy_gemini_7d', 'agy_claudegpt_5h', 'agy_claudegpt_7d'], windows: [
+        { key: 'agy_gemini_5h', unit: '%', remaining: 55, used: 45, total: 100, resetAt: new Date(now + 2 * DAY).toISOString(), available: true },
+        { key: 'agy_gemini_7d', unit: '%', remaining: 67, used: 33, total: 100, resetAt: new Date(now + 5 * DAY).toISOString(), available: true },
+        { key: 'agy_claudegpt_5h', unit: '%', remaining: 100, used: 0, total: 100, resetAt: new Date(now + DAY).toISOString(), available: true },
+        { key: 'agy_claudegpt_7d', unit: '%', remaining: 100, used: 0, total: 100, resetAt: new Date(now + 6 * DAY).toISOString(), available: true },
+        { key: 'agy_pool_gemini-4-argon_7d', unit: '%', remaining: 65, used: 35, total: 100, resetAt: new Date(now + 5 * DAY).toISOString(), available: true },
+      ] },
     ],
   });
   deskStore.saveCycles({ a1: [
     { window: 'weekly', kind: 'natural', end: new Date(now - DAY).toISOString(), from: new Date(now - 8 * DAY).toISOString(), observedAt: new Date(now - DAY - 1000).toISOString(), remaining: 40, reliable: true },
     { window: 'weekly', kind: 'early', end: new Date(now - 2 * DAY).toISOString(), from: new Date(now - 9 * DAY).toISOString(), observedAt: new Date(now - 2 * DAY - 1000).toISOString(), remaining: 90, reliable: true },
     { window: 'weekly', kind: 'natural', end: new Date(now - 40 * DAY).toISOString(), from: new Date(now - 47 * DAY).toISOString(), observedAt: new Date(now - 40 * DAY - 1000).toISOString(), remaining: 60, reliable: true },
+  ], a3: [
+    { window: 'agy_gemini_7d', kind: 'natural', end: new Date(now - DAY).toISOString(), from: new Date(now - 8 * DAY).toISOString(), observedAt: new Date(now - DAY - 1000).toISOString(), remaining: 70, reliable: true },
+    { window: 'agy_pool_gemini-4-argon_7d', kind: 'natural', end: new Date(now - DAY).toISOString(), from: new Date(now - 8 * DAY).toISOString(), observedAt: new Date(now - DAY - 1000).toISOString(), remaining: 25, reliable: true },
   ] });
   deskStore.saveRemoteAccess({ enabled: true, pairingKey: PAIRING_KEY, devices: [], port: 43187 });
 
@@ -331,7 +343,7 @@ test('服务级:quota/snapshot 与 history(必填 account、window 过滤、点�
     const token = pair.body.token;
     const snapshot = await session.call('/api/v1/quota/snapshot', { token });
     assert.equal(snapshot.status, 200);
-    assert.equal(snapshot.body.accounts.length, 2);
+    assert.equal(snapshot.body.accounts.length, 3);
     const a1 = snapshot.body.accounts.find((account) => account.id === 'a1');
     assert.equal(a1.providerName, 'Z.ai');
     assert.equal(a1.windows[0].remaining, 62);
@@ -458,9 +470,9 @@ test('服务级:waste 口径——reliable+natural 计入平均,份额=remaining
 
     const waste = await session.call('/api/v1/waste?tz=UTC', { token });
     assert.equal(waste.status, 200);
-    assert.equal(waste.body.windows.length, 1);
-    const weekly = waste.body.windows[0];
-    assert.equal(weekly.window, 'weekly');
+    // 池窗口各成一档：weekly（zai）+ Antigravity 的 Gemini 池与 Argon 特例池
+    assert.deepEqual(waste.body.windows.map((row) => row.window).sort(), ['agy_gemini_7d', 'agy_pool_gemini-4-argon_7d', 'weekly']);
+    const weekly = waste.body.windows.find((row) => row.window === 'weekly');
     assert.equal(weekly.cycles, 2); // 31 天默认区间:40 天前那条被排除
     assert.equal(weekly.countedCycles, 1); // early 结束的不计入
     assert.equal(weekly.averageRemaining, 40);
@@ -476,6 +488,28 @@ test('服务级:waste 口径——reliable+natural 计入平均,份额=remaining
     assert.equal(detailWeekly.accounts[0].cycles.every((cycle) => cycle.counted), true);
     const badWindow = await session.call('/api/v1/waste?window=daily&tz=UTC', { token });
     assert.equal(badWindow.status, 400);
+  } finally {
+    await session.close();
+  }
+});
+
+test('服务级:waste 的 weekly 口径把 Antigravity 7 天池周期一并计入,每个池各记 1 份', async () => {
+  const session = await bootServer();
+  try {
+    const pair = await session.call('/api/pair', { method: 'POST', body: { localPreview: true } });
+    const token = pair.body.token;
+    // weekly 过滤档:zai 的普通周周期 + 两个池周期,份额 = 0.4 + 0.7 + 0.25
+    const weekly = await session.call('/api/v1/waste?window=weekly&tz=UTC', { token });
+    assert.equal(weekly.status, 200);
+    assert.deepEqual(weekly.body.windows.map((row) => row.window).sort(), ['agy_gemini_7d', 'agy_pool_gemini-4-argon_7d', 'weekly']);
+    assert.equal(weekly.body.windows.reduce((sum, row) => sum + row.totalWasteShares, 0), 1.35);
+    // monthly 过滤档不含池周期
+    const monthly = await session.call('/api/v1/waste?window=monthly&tz=UTC', { token });
+    assert.equal(monthly.body.windows.length, 0);
+    // 账号明细:动态特例池照常出周期行
+    const detail = await session.call('/api/v1/waste?account=a3&window=weekly&tz=UTC', { token });
+    assert.deepEqual(detail.body.windows.map((row) => row.window).sort(), ['agy_gemini_7d', 'agy_pool_gemini-4-argon_7d']);
+    assert.equal(detail.body.windows.every((row) => row.accounts[0].cycles.length === 1), true);
   } finally {
     await session.close();
   }

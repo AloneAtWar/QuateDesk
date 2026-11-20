@@ -40,10 +40,12 @@ const summaryPayload = {
   ],
 };
 
-test('内置渠道配置：antigravity 走专属适配，池窗口不参与浪费统计', () => {
+test('内置渠道配置：antigravity 走专属适配，不预设浪费窗口（7 天池自动纳入浪费统计）', () => {
   assert.equal(builtinConfigs.antigravity.adapterMode, 'antigravity');
   assert.deepEqual(builtinConfigs.antigravity.windows, ['agy_gemini_5h', 'agy_gemini_7d', 'agy_claudegpt_5h', 'agy_claudegpt_7d']);
-  assert.deepEqual(builtinConfigs.antigravity.wasteWindows, []);
+  // 没有预设 wasteWindows：自动判定 = 配置窗口 ∪ 账号实际出现的 7 天池（含动态特例池），
+  // 免费档只有部分池、付费档多池都跟着档位走，不写死
+  assert.equal(builtinConfigs.antigravity.wasteWindows, undefined);
   assert.equal(builtinConfigs.antigravity.credentialRequired, false);
 });
 
@@ -334,4 +336,32 @@ test('刷新队列：Antigravity 池窗口按后缀归入 5 小时 / 7 天队列
   const queues = buildRefreshQueues([account]);
   assert.equal(queues.find((queue) => queue.key === 'five_hour').items.length, 1);
   assert.equal(queues.find((queue) => queue.key === 'weekly').items.length, 2);
+});
+
+test('浪费统计：池窗口自动纳入（配置窗口 ∪ 实时窗口），付费/免费档都跟着实际池走', () => {
+  const { resolveWasteWindows, matchesWasteWindowKey } = require('../electron/waste.cjs');
+  // 付费档（本地守护进程全量视图）：两个家族周池 + Argon 动态特例池都参与浪费统计
+  const paidWindows = buildAntigravityWindows(daemonModels, daemonSummary, meter);
+  assert.deepEqual(
+    resolveWasteWindows(builtinConfigs.antigravity, paidWindows.map((item) => item.key)),
+    ['agy_gemini_7d', 'agy_claudegpt_7d', 'agy_pool_gemini-4-argon_7d'],
+  );
+  // 免费档（consumer 直查视图）：配置里的静态 Gemini 周池仍在候选里（账号级再按实际
+  // 追踪过滤，见 waste-statistics.test.js），但不会凭空多出动态特例池
+  const freeWindows = buildAntigravityWindows(modelsPayload, summaryPayload, meter);
+  assert.deepEqual(resolveWasteWindows(builtinConfigs.antigravity, freeWindows.map((item) => item.key)), ['agy_gemini_7d', 'agy_claudegpt_7d']);
+  // 池周期在 weekly 口径里照常计入
+  assert.equal(matchesWasteWindowKey('agy_pool_gemini-4-argon_7d', 'weekly'), true);
+  assert.equal(matchesWasteWindowKey('agy_gemini_5h', 'weekly'), false);
+});
+
+test('池化解析：重复的同名组只留第一个，不产生重复窗口键', () => {
+  const duplicated = buildAntigravityWindows({}, {
+    groups: [
+      { displayName: 'Gemini Models', buckets: [{ window: 'weekly', remainingFraction: 0.5, resetTime: '2026-11-26T06:51:39Z' }] },
+      { displayName: 'Gemini Models', buckets: [{ window: 'weekly', remainingFraction: 0.2, resetTime: '2026-11-26T06:51:39Z' }, { window: '5h', remainingFraction: 0.1, resetTime: '2026-11-19T07:39:27Z' }] },
+    ],
+  }, meter);
+  assert.deepEqual(duplicated.map((item) => item.key), ['agy_gemini_7d']);
+  assert.equal(duplicated[0].remaining, 50);
 });

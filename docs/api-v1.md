@@ -123,7 +123,7 @@ Each row has shape `{ key, displayName, agents[], tokens{…}, requests, session
 
 | Parameter | Required | Default | Description |
 | --- | --- | --- | --- |
-| `window` | No | All waste windows | Only `weekly` / `monthly` are allowed |
+| `window` | No | All waste windows | Only `weekly` / `monthly` are allowed; `weekly` also includes 7-day pool cycles (e.g. Antigravity pools, each pool counts 1 share per cycle) |
 | `account` | No | Aggregate view | Passing it returns that account's cycle-by-cycle details |
 | Time parameters | No | `last=31d` | Filtered by cycle end time `end` |
 

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { medianGapMs, detectCycleClose, extractCycles, mergeCycles, dedupeCycles, purgeGhostCycles, computeWasteStats, resolveWasteWindows, repairDowngradedCycles } = require('../electron/waste.cjs');
+const { medianGapMs, detectCycleClose, extractCycles, mergeCycles, dedupeCycles, purgeGhostCycles, computeWasteStats, resolveWasteWindows, matchesWasteWindowKey, naturalCycleStartMs, isCycleWindowKey, repairDowngradedCycles } = require('../electron/waste.cjs');
 
 const T0 = Date.parse('2026-09-01T02:00:00Z'); // 周期重置时刻（周二 10:00 +08）
 const H = 3_600_000;
@@ -540,6 +540,61 @@ test('resolveWasteWindows：预设优先，缺省取周期类型窗口', () => {
   assert.deepEqual(resolveWasteWindows({ windows: ['five_hour', 'weekly', 'monthly'] }), ['weekly', 'monthly']);
   assert.deepEqual(resolveWasteWindows({ windows: ['balance'] }), []);
   assert.deepEqual(resolveWasteWindows(undefined), []);
+});
+
+test('resolveWasteWindows：缺省自动并入 Antigravity 的 7 天池（含动态特例池），5h 池永不参与', () => {
+  const agyConfig = { windows: ['agy_gemini_5h', 'agy_gemini_7d', 'agy_claudegpt_5h', 'agy_claudegpt_7d'] };
+  // 账号实时窗口带出动态特例池（Argon 独立周池不在静态配置里）
+  assert.deepEqual(
+    resolveWasteWindows(agyConfig, ['agy_gemini_5h', 'agy_gemini_7d', 'agy_claudegpt_5h', 'agy_claudegpt_7d', 'agy_pool_gemini-4-argon_7d']),
+    ['agy_gemini_7d', 'agy_claudegpt_7d', 'agy_pool_gemini-4-argon_7d'],
+  );
+  // 免费档只有 Claude/GPT 周池：跟着账号实际有的池走，不写死
+  assert.deepEqual(resolveWasteWindows(agyConfig, ['agy_claudegpt_5h', 'agy_claudegpt_7d', 'agy_gemini_5h']), ['agy_gemini_7d', 'agy_claudegpt_7d']);
+  // 5h 池不是周期窗口；用户显式预设（含空数组）不被 trackedKeys 稀释
+  assert.deepEqual(resolveWasteWindows(agyConfig, ['agy_gemini_5h']), ['agy_gemini_7d', 'agy_claudegpt_7d']);
+  assert.deepEqual(resolveWasteWindows({ ...agyConfig, wasteWindows: ['agy_gemini_7d'] }, ['agy_pool_x_7d']), ['agy_gemini_7d']);
+});
+
+test('isCycleWindowKey / matchesWasteWindowKey：周期键 = 周 / 月 / 7 天池，weekly 口径含池', () => {
+  assert.equal(isCycleWindowKey('weekly'), true);
+  assert.equal(isCycleWindowKey('monthly'), true);
+  assert.equal(isCycleWindowKey('agy_gemini_7d'), true);
+  assert.equal(isCycleWindowKey('agy_pool_gemini-4-argon_7d'), true);
+  assert.equal(isCycleWindowKey('agy_gemini_5h'), false);
+  assert.equal(isCycleWindowKey('five_hour'), false);
+  assert.equal(isCycleWindowKey('balance'), false);
+  // weekly 过滤档把所有 7 天池周期一并计入（本质是周额度）；monthly 精确匹配
+  assert.equal(matchesWasteWindowKey('weekly', 'weekly'), true);
+  assert.equal(matchesWasteWindowKey('agy_gemini_7d', 'weekly'), true);
+  assert.equal(matchesWasteWindowKey('agy_pool_gemini-4-argon_7d', 'weekly'), true);
+  assert.equal(matchesWasteWindowKey('monthly', 'weekly'), false);
+  assert.equal(matchesWasteWindowKey('agy_gemini_7d', 'monthly'), false);
+  assert.equal(matchesWasteWindowKey('monthly', 'monthly'), true);
+});
+
+test('naturalCycleStartMs：Antigravity 的 7 天池（含动态 key）与周窗口同为 7 天', () => {
+  assert.equal(naturalCycleStartMs('agy_gemini_7d', T0), T0 - 7 * D);
+  assert.equal(naturalCycleStartMs('agy_pool_gemini-4-argon_7d', T0), T0 - 7 * D);
+  assert.equal(naturalCycleStartMs('agy_gemini_5h', T0), null);
+});
+
+test('extractCycles：Antigravity 池窗口的重置照常归档（自然到期、from 按标称 7 天倒推）', () => {
+  const key = 'agy_gemini_7d';
+  const point = (atMs, remaining, resetAt) => ({ at: new Date(atMs).toISOString(), windows: { [key]: { remaining, amount: null, limit: null, unit: '%', resetAt } } });
+  const points = [
+    point(T0 - 6 * D, 62, '2026-09-01T02:00:00Z'),
+    point(T0 - 5 * 60_000, 60, '2026-09-01T02:00:00Z'), // 重置前最后观测
+    point(T0 + 5 * 60_000, 100, '2026-09-08T02:00:00Z'), // 重置后回到 100%、resetAt 改期
+  ];
+  const records = extractCycles(points, [key]);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].window, key);
+  assert.equal(records[0].kind, 'natural');
+  assert.equal(records[0].remaining, 60);
+  assert.equal(records[0].reliable, true);
+  assert.equal(new Date(records[0].from).getTime(), T0 - 7 * D);
+  assert.equal(new Date(records[0].end).getTime(), T0);
 });
 
 test('repairDowngradedCycles：用备份中的可靠记录替换被改写的失真记录', () => {

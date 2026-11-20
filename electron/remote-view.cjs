@@ -96,11 +96,12 @@ const publicSnapshot = (state) => {
         ? account.usageConnection.status
         : account.usageConnection?.connected === true ? 'connected' : 'disconnected',
       wasteWindows: (() => {
-        const available = resolveWasteWindows(providers.get(account.providerId)?.requestConfig);
-        const tracked = Array.isArray(account.windowKeys) && account.windowKeys.length
-          ? account.windowKeys
-          : (Array.isArray(account.windows) && account.windows.length ? account.windows.map((meter) => meter.key) : null);
-        return tracked ? available.filter((key) => tracked.includes(key)) : available;
+        // 自动判定时并入账号实时窗口（Antigravity 的动态特例池不在静态配置里）；
+        // 追踪口径 = windowKeys ∪ 实时窗口（CLI 专属适配不受 windowKeys 过滤）
+        const live = Array.isArray(account.windows) ? account.windows.map((meter) => meter.key) : [];
+        const available = resolveWasteWindows(providers.get(account.providerId)?.requestConfig, live);
+        const tracked = new Set([...(Array.isArray(account.windowKeys) ? account.windowKeys : []), ...live]);
+        return tracked.size ? available.filter((key) => tracked.has(key)) : available;
       })(),
       tags: (Array.isArray(account.tags) ? account.tags : []).slice(0, 4).map((tag) => safeText(tag, 40)),
       disabled: Boolean(account.disabled),

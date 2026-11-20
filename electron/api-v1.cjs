@@ -7,10 +7,12 @@ const {
   zoneOffsetMs, zonedDayStartUtcMs, shiftDateString,
 } = require('./cli-usage/normalize.cjs');
 const { AGENT_IDS } = require('./cli-usage/index.cjs');
+const { isCycleWindowKey, matchesWasteWindowKey, resolveWasteWindows } = require('./waste.cjs');
 
 const MAX_RANGE_DAYS = 400;
 const HOUR_MAX_SPAN_MS = 7 * 86_400_000;
 const BUCKET_CAP = 480;
+// window 过滤参数的取值（weekly 口径含 Antigravity 等渠道的 7 天池周期）
 const WASTE_WINDOW_KEYS = ['weekly', 'monthly'];
 const PROVIDER_USAGE_PROVIDERS = ['deepseek', 'zai', 'codex', 'minimax'];
 // 本机 CLI 与账号厂商的典型对应(启发式,多通道路由的 CLI 无从判断)
@@ -30,7 +32,7 @@ const ENDPOINT_CATALOG = [
   { path: '/api/v1/usage/series', summary: '用量时间序列(?granularity=hour|day)' },
   { path: '/api/v1/usage/summary', summary: '区间汇总与全量累计' },
   { path: '/api/v1/usage/breakdown', summary: '维度分组:?by=model|agent|project' },
-  { path: '/api/v1/waste', summary: '周期浪费:每个周期按自身总额度记 1 份' },
+  { path: '/api/v1/waste', summary: '周期浪费:每个周期按自身总额度记 1 份,weekly 档含 7 天池' },
 ];
 
 class ApiError extends Error {
@@ -217,12 +219,14 @@ const trackedWindowKeys = (account) => (Array.isArray(account.windowKeys) && acc
   ? account.windowKeys
   : Array.isArray(account.windows) ? account.windows.map((meter) => meter.key) : []);
 
+// 账号可统计的周期窗口：账号显式选择 > 厂商预设 > 自动判定（配置窗口 ∪ 账号实时
+// 出现的周期键——Antigravity 的动态特例池），再按账号实际追踪的键过滤
 const wasteWindowKeys = (account, provider) => {
-  const configured = Array.isArray(account.wasteWindows) ? account.wasteWindows
-    : Array.isArray(provider?.requestConfig?.wasteWindows) ? provider.requestConfig.wasteWindows
-      : (provider?.requestConfig?.windows || []).filter((key) => WASTE_WINDOW_KEYS.includes(key));
-  const tracked = trackedWindowKeys(account);
-  return configured.filter((key) => WASTE_WINDOW_KEYS.includes(key) && (!tracked.length || tracked.includes(key)));
+  const live = Array.isArray(account.windows) ? account.windows.map((meter) => meter.key) : [];
+  const base = Array.isArray(account.wasteWindows) ? account.wasteWindows
+    : resolveWasteWindows(provider?.requestConfig, live);
+  const tracked = new Set([...(Array.isArray(account.windowKeys) ? account.windowKeys : []), ...live]);
+  return base.filter((key) => isCycleWindowKey(key) && (tracked.size === 0 || tracked.has(key)));
 };
 
 const usageConnectionStatus = (account) => (['connected', 'reauth_required'].includes(account.usageConnection?.status)
@@ -700,7 +704,8 @@ async function wasteHandler({ deps, url, time }) {
   const windows = new Map();
   for (const account of accounts) {
     const provider = providers.get(account.providerId);
-    const keys = wasteWindowKeys(account, provider).filter((key) => !windowParam || key === windowParam);
+    // weekly 过滤档把 7 天池周期一并计入（每个池的周期各记 1 份）
+    const keys = wasteWindowKeys(account, provider).filter((key) => !windowParam || matchesWasteWindowKey(key, windowParam));
     if (!keys.length) continue;
     const cycles = await Promise.resolve(deps.getCycles ? deps.getCycles(account.id) : []);
     const seen = new Set();

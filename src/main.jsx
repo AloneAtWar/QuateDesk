@@ -25,6 +25,7 @@ import { useBoardPullRefresh } from './use-board-pull-refresh';
 import { BoardPullRefreshIndicator } from './board-pull-refresh-indicator';
 import { accountRefreshFeedback, TransientToast, useTransientToast } from './transient-toast';
 import { buildRefreshQueues, getUpcomingRefreshItems } from './upcoming-refresh';
+import { isCycleWindowKey, wasteWindowLabel } from './waste-statistics';
 import './styles.css';
 
 const formatReset = (resetAt) => {
@@ -124,10 +125,13 @@ const providerWindowKeys = (provider) => {
   const mapped = [...new Set(rules.flatMap((rule) => [rule.defaultWindow, ...Object.values(rule.windowMap || {})]).filter(Boolean))];
   return mapped.length ? mapped : adapterDefinitions[provider?.adapter]?.windows || ['five_hour', 'weekly', 'monthly', 'balance'];
 };
-// 厂商参与浪费统计的周期窗口：与主进程 electron/waste.cjs 的 resolveWasteWindows 保持一致
-const resolveWasteWindows = (requestConfig) => {
+// 厂商参与浪费统计的周期窗口：与主进程 electron/waste.cjs 的 resolveWasteWindows 保持一致。
+// 周期键 = 周 / 月 + Antigravity 的 7 天池；trackedKeys（账号实际窗口）让动态特例池也自动纳入
+const resolveWasteWindows = (requestConfig, trackedKeys = null) => {
   if (Array.isArray(requestConfig?.wasteWindows)) return requestConfig.wasteWindows;
-  return (requestConfig?.windows || []).filter((key) => ['weekly', 'monthly'].includes(key));
+  const configured = (requestConfig?.windows || []).filter(isCycleWindowKey);
+  const tracked = (trackedKeys || []).filter(isCycleWindowKey);
+  return [...new Set([...configured, ...tracked])];
 };
 // CLI 官方订阅（Claude / Codex / Gemini / Kimi / Grok 订阅 / GitHub Copilot / Grok Bot）：账号统一走「导入订阅登录」收录，不走普通添加表单
 const CLI_ADAPTER_MODES = ['claude', 'codex', 'gemini', 'kimi', 'grok', 'copilot', 'grokbot'];
@@ -550,13 +554,13 @@ const agyCycleShort = (meter) => (/_5h$/.test(meter.key) ? '5h' : /_7d$/.test(me
 // Antigravity 的环视图：一池一环，优先周窗口（7d）；免费视图回落没有 Gemini 周窗口时用该池 5h
 const agyPoolRingWindows = (windows) => agyPoolGroupRows(windows)
   .map((row) => row.windows.find((meter) => /_7d$/.test(meter.key)) || row.windows[0]);
-// 「即将刷新」芯片上的池短标：同账号的多条池记录会并排出现在同一条周期队列里，必须可区分
-const agyPoolShortTag = (meter) => {
-  const short = windowCatalog[meter.key]?.short;
-  if (short) return short;
-  const cycle = /_5h$/.test(meter.key) ? '5h' : /_7d$/.test(meter.key) ? '7d' : '';
-  const name = String(meter.label || '').replace(/ · (5 小时|7 天)$/, '') || '池';
-  return cycle ? `${(/argon/i.test(name) ? 'Argon' : name)} ${cycle}` : name;
+// 「即将刷新」芯片上的池名：同账号的多条池记录会并排出现在同一条周期队列里，必须可区分。
+// 展开队列里用完整池名（队列头已标周期，不再带 5h/7d 后缀）——Gemini 池 / Claude/GPT 池 /
+// Gemini 4 Argon；特例池从 meter.label 还原
+const agyPoolName = (meter) => {
+  const pool = agyPoolGroupOf(meter.key);
+  if (!pool) return '';
+  return AGY_POOL_GROUP_LABELS[pool] || String(meter.label || '').replace(/ · (5 小时|7 天)$/, '') || '池';
 };
 
 function MeterBar({ meter, compact = false }) {
@@ -821,9 +825,12 @@ function WindowsView({ accounts, providers, reminderRules, embedded = false, onO
 }
 
 // 额度历史折线图：横轴时间、纵轴剩余额度（百分比窗口取 remaining，余额窗口取 amount），每个窗口维度一条线
-const CHART_COLORS = { five_hour: 'var(--cyan)', daily: 'var(--sky)', weekly: 'var(--violet)', monthly: 'var(--coral)', yearly: 'var(--amber)', balance: 'var(--green)', mimo_plan: 'var(--coral)', gemini_pro: 'var(--sky)', gemini_flash: 'var(--cyan)', gemini_flash_lite: 'var(--green-deep)' };
+// Antigravity 池窗口的配色与窗口目录一致（Gemini 池青蓝系、Claude/GPT 池珊瑚琥珀系）
+const CHART_COLORS = { five_hour: 'var(--cyan)', daily: 'var(--sky)', weekly: 'var(--violet)', monthly: 'var(--coral)', yearly: 'var(--amber)', balance: 'var(--green)', mimo_plan: 'var(--coral)', gemini_pro: 'var(--sky)', gemini_flash: 'var(--cyan)', gemini_flash_lite: 'var(--green-deep)', agy_gemini_5h: 'var(--cyan)', agy_gemini_7d: 'var(--sky)', agy_claudegpt_5h: 'var(--coral)', agy_claudegpt_7d: 'var(--amber)' };
 const CHART_FALLBACK_COLORS = ['var(--cyan)', 'var(--violet)', 'var(--coral)', 'var(--green)', 'var(--sky)'];
 const chartColor = (key, index) => CHART_COLORS[key] || CHART_FALLBACK_COLORS[index % CHART_FALLBACK_COLORS.length];
+// 动态窗口（agy_pool_*）没有固定配色：按 key 整体哈希取兜底色，同池在浪费图/趋势图间保持稳定
+const keyColor = (key) => CHART_COLORS[key] || CHART_FALLBACK_COLORS[[...String(key)].reduce((sum, char) => sum + char.charCodeAt(0), 0) % CHART_FALLBACK_COLORS.length];
 const chartValue = (sample) => sample.unit === '%' ? sample.remaining : Number(sample.amount ?? sample.remaining);
 const formatChartValue = (sample, value) => sample.unit === '%' ? `${Math.round(value)}%` : `${sample.unit === 'CNY' ? '¥' : sample.unit}${Number(value).toFixed(2)}`;
 const formatChartNumber = (value) => Number.isInteger(value) ? String(value) : Number(value).toFixed(2);
@@ -1462,15 +1469,15 @@ function WasteView({ account, wasteWindows, onViewLocalUsage, onViewProviderUsag
       onViewTrend && { key: 'trend', label: '查看期间趋势', run: () => onViewTrend(period) },
     ].filter(Boolean);
   })();
-  const softColor = `color-mix(in srgb, ${CHART_COLORS[curWindow] || 'var(--violet)'} 30%, transparent)`;
+  const softColor = `color-mix(in srgb, ${keyColor(curWindow)} 30%, transparent)`;
   // 柱子少时每根都标完整区间；多了只标结束日期并按需抽稀，避免文字挤在一起
   const compactLabels = shown.length <= 6;
   const labelStep = Math.max(1, Math.ceil(shown.length / 12));
   return <div className="waste-view">
     <div className="waste-row">
       {wasteWindows.length >= 2
-        ? <div className="seg-control">{wasteWindows.map((key) => <button type="button" key={key} className={curWindow === key ? 'active' : ''} onClick={() => { setCurWindow(key); setSelectedKey(null); }}>{windowCatalog[key]?.label || key} 额度</button>)}</div>
-        : <span className="waste-label">{windowCatalog[curWindow]?.label || curWindow} 额度 · 浪费统计</span>}
+        ? <div className="seg-control">{wasteWindows.map((key) => <button type="button" key={key} className={curWindow === key ? 'active' : ''} onClick={() => { setCurWindow(key); setSelectedKey(null); }}>{wasteWindowLabel(key)} 额度</button>)}</div>
+        : <span className="waste-label">{wasteWindowLabel(curWindow)} 额度 · 浪费统计</span>}
       <span className="waste-stats">{windowCycles.length ? <>
         <span>{windowCycles.length} 个周期</span><span>平均浪费 <b>{avg != null ? `${avg.toFixed(0)}%` : '—'}</b>（{good.length} 可靠）</span>{good.length ? <span>累计 <b>{Math.round(total * 100) / 100}</b> 倍额度</span> : <span>累计 —</span>}
       </> : <><span>0 个周期</span><span>平均浪费 —</span><span>累计 —</span></>}</span>
@@ -1497,10 +1504,10 @@ function WasteView({ account, wasteWindows, onViewLocalUsage, onViewProviderUsag
     <div className="chart-legend waste-legend">{empty
       ? <span><i className="swatch-now" />进行中</span>
       : <>
-        <span><i style={{ background: CHART_COLORS[curWindow] }} />浪费率</span>
+        <span><i style={{ background: keyColor(curWindow) }} />浪费率</span>
         <span><i style={{ background: `repeating-linear-gradient(-45deg, ${softColor} 0 3px, transparent 3px 6px)`, border: '1px solid var(--line-strong)' }} />可能失真</span>
         <span><i className="swatch-early" />提前重置</span>
-        {windowCycles.some((cycle) => cycle.refill) && <span><i className="swatch-refill" style={{ background: CHART_COLORS[curWindow] }} />中途回满</span>}
+        {windowCycles.some((cycle) => cycle.refill) && <span><i className="swatch-refill" style={{ background: keyColor(curWindow) }} />中途回满</span>}
         <span><i className="swatch-now" />进行中</span>
         <span className="legend-right">{windowCycles.length - good.length} 个周期不计入平均</span>
       </>}</div>
@@ -1983,15 +1990,18 @@ function HistoryView({ account, provider, onBack, onProviderUsageState, settings
   const [hiddenKeys, setHiddenKeys] = useState([]);
   const [view, setView] = useState('trend');
   const [rangeKey, setRangeKey] = useState('1d');
-  // 该厂商参与浪费统计的周期窗口；为空时不提供「浪费」入口
-  // 再按账号实际追踪的窗口过滤：用户选过窗口用 windowKeys，否则用接口实时返回的窗口；
-  // 账号还没有任何窗口数据时不过滤（避免轮询失败期间入口闪烁）
+  // 该厂商参与浪费统计的周期窗口；为空时不提供「浪费」入口。
+  // 自动判定时把账号实时窗口一并并入（Antigravity 的动态特例池不在静态配置里）；
+  // 再按账号实际追踪的窗口过滤：用户选过窗口用 windowKeys，并上实时返回的窗口——
+  // CLI 专属适配不受 windowKeys 过滤；账号还没有任何窗口数据时不过滤（避免轮询失败期间入口闪烁）
   const wasteWindows = useMemo(() => {
-    const base = Array.isArray(wasteWindowsOverride) ? wasteWindowsOverride : resolveWasteWindows(provider?.requestConfig);
-    const tracked = Array.isArray(account.windowKeys) && account.windowKeys.length
-      ? account.windowKeys
-      : (account.windows?.length ? account.windows.map((item) => item.key) : null);
-    return tracked ? base.filter((key) => tracked.includes(key)) : base;
+    const base = Array.isArray(wasteWindowsOverride) ? wasteWindowsOverride
+      : resolveWasteWindows(provider?.requestConfig, (account.windows || []).map((item) => item.key));
+    const tracked = new Set([
+      ...(Array.isArray(account.windowKeys) ? account.windowKeys : []),
+      ...(account.windows || []).map((item) => item.key),
+    ]);
+    return tracked.size ? base.filter((key) => tracked.has(key)) : base;
   }, [provider, account, wasteWindowsOverride]);
   // 用量统计入口常驻：未连接时页内直接引导登录，登录过期也能在原位置重新连接。
   const showProviderUsageEntry = providerUsageSupported(account, provider, { readOnly });
@@ -2055,9 +2065,9 @@ function HistoryView({ account, provider, onBack, onProviderUsageState, settings
         : '当前环境不支持官方用量统计';
   const localUsageDisabledReason = showLocalUsageEntry ? '' : '该厂商未开启本机用量统计，可在厂商设置中开启';
   const wasteDisabledReason = wasteWindows.length > 0 ? ''
-    : (Array.isArray(wasteWindowsOverride) ? wasteWindowsOverride : resolveWasteWindows(provider?.requestConfig)).length > 0
-      ? '该账号未追踪周 / 月额度窗口，没有可统计的浪费周期'
-      : '该厂商没有周 / 月额度窗口，无法统计浪费';
+    : resolveWasteWindows(provider?.requestConfig, (account.windows || []).map((item) => item.key)).length > 0
+      ? '该账号未追踪周期额度窗口（周 / 月 / 7 天池），没有可统计的浪费周期'
+      : '该厂商没有周期额度窗口（周 / 月 / 7 天池），无法统计浪费';
   const historyTabs = [
     { key: 'trend', label: '趋势', reason: '' },
     { key: 'provider-usage', label: '用量', reason: providerUsageDisabledReason },
@@ -2378,8 +2388,8 @@ function UpcomingRefreshTrack({ items, providers, onOpenHistory, labelId, showCy
           const tone = refreshChipTone(account, meter);
           const percent = meter.unit === '%' && Number.isFinite(Number(meter.remaining)) ? `${Math.round(meter.remaining)}%` : '';
           // 周期队列默认隐藏窗口名（队列头已标周期）；Antigravity 的池窗口例外：
-          // 同一账号的多条池记录并排，没有池标记就无法区分（Gem 5h / C·G 5h / Argon 7d）
-          const chipTag = showCycle ? label : (meter.key.startsWith('agy_') ? agyPoolShortTag(meter) : '');
+          // 同一账号的多条池记录并排，芯片上给出完整池名以区分（Gemini 池 / Claude/GPT 池 / Gemini 4 Argon）
+          const chipTag = showCycle ? label : (meter.key.startsWith('agy_') ? agyPoolName(meter) : '');
           return <button type="button" className="refresh-chip" key={`${account.id}-${meter.key}`} title={`${account.name} · ${label}${percent ? ` · 剩余 ${percent}` : ''} · ${formatResetAbsolute(meter.resetAt)}`} aria-label={`${account.name} · ${label}${percent ? ` · 剩余 ${percent}` : ''} · ${formatReset(meter.resetAt)}`} onClick={(event) => onOpenHistory?.(account, event.currentTarget)}>
             <Logo provider={provider} size="xs" interactive={false} /><span>{account.name}</span>{chipTag && <em>{chipTag}</em>}{percent && <b className={tone}>{percent}</b>}<small>{formatResetCompact(meter.resetAt)}</small>
           </button>;
@@ -3238,10 +3248,11 @@ function ProviderModalV2({ provider, onClose, onSave }) {
   const [website, setWebsite] = useState(existing.website || '');
   const [localAnalysisEnabled, setLocalAnalysisEnabled] = useState(initialLocalAnalysis.enabled);
   const [modelRules, setModelRules] = useState(initialLocalAnalysis.modelRules);
-  // 浪费统计窗口：null = 未手动设置，跟随额度窗口自动判定；勾选后写死为数组（与 waste.cjs 的 resolveWasteWindows 对应）
-  const [wasteWindows, setWasteWindows] = useState(Array.isArray(config.wasteWindows) ? config.wasteWindows.filter((key) => ['weekly', 'monthly'].includes(key)) : null);
-  // 候选只限周期窗口（weekly/monthly）；没有周期窗口的厂商不显示这项配置
-  const wasteCandidates = providerWindowKeys({ adapter: existing.adapter, requestConfig: config }).filter((key) => ['weekly', 'monthly'].includes(key));
+  // 浪费统计窗口：null = 未手动设置，跟随额度窗口自动判定（Antigravity 等渠道还会并上
+  // 账号实际出现的 7 天池，含动态特例池）；勾选后写死为数组（与 waste.cjs 的 resolveWasteWindows 对应）
+  const [wasteWindows, setWasteWindows] = useState(Array.isArray(config.wasteWindows) ? config.wasteWindows.filter(isCycleWindowKey) : null);
+  // 候选只限周期窗口（周 / 月 / 7 天池）；没有周期窗口的厂商不显示这项配置
+  const wasteCandidates = providerWindowKeys({ adapter: existing.adapter, requestConfig: config }).filter(isCycleWindowKey);
   const toggleWasteWindow = (key) => setWasteWindows((old) => {
     const current = old ?? wasteCandidates;
     return current.includes(key) ? current.filter((item) => item !== key) : [...current, key];
@@ -3309,8 +3320,8 @@ function ProviderModalV2({ provider, onClose, onSave }) {
       </div>}
     </div>
     {wasteCandidates.length > 0 && <div className="adapter-config"><span className="eyebrow">浪费统计</span>
-      <div className="field"><span>统计窗口 <small>勾选参与周期末浪费归档的窗口，全部取消则该厂商不做浪费统计</small></span>
-        <div className="window-choice">{wasteCandidates.map((key) => { const on = (wasteWindows ?? wasteCandidates).includes(key); return <button type="button" key={key} className={`window-choice-item ${on ? 'selected' : ''}`} onClick={() => toggleWasteWindow(key)}><span>{on ? <Check size={14} /> : <span className="empty-check" />}</span>{windowCatalog[key]?.label || key}</button>; })}</div>
+      <div className="field"><span>统计窗口 <small>勾选参与周期末浪费归档的窗口，全部取消则该厂商不做浪费统计；未手动改动时自动纳入账号出现的全部周期窗口（含 Antigravity 动态出现的特例池）</small></span>
+        <div className="window-choice">{wasteCandidates.map((key) => { const on = (wasteWindows ?? wasteCandidates).includes(key); return <button type="button" key={key} className={`window-choice-item ${on ? 'selected' : ''}`} onClick={() => toggleWasteWindow(key)}><span>{on ? <Check size={14} /> : <span className="empty-check" />}</span>{wasteWindowLabel(key)}</button>; })}</div>
       </div></div>}
     {!cliAdapter && <div className="form-grid preset-grid"><button type="button" className="outline-button" onClick={() => { setAdvancedEnabled(true); setScript(newApiTemplateScript); setVariables([{ key: 'endpoint', label: '站点地址', defaultValue: 'https://your-newapi-site.com', required: true, secret: false, system: false }, { key: 'accessToken', label: '面板 accessToken', defaultValue: '', required: true, secret: true, system: false }, { key: 'userId', label: '面板用户 ID', defaultValue: '', required: true, secret: false, system: false }]); }}><Sparkles size={14} /> New API 站点模板</button><small className="preset-hint">一键填入 New API 系中转站的余额查询脚本</small></div>}
     {!cliAdapter && (advancedEnabled ? <><div className="adapter-config variable-editor"><div className="variable-editor-head"><span className="eyebrow">账号变量</span><button type="button" className="mini-add" onClick={() => setVariables((old) => [...old, { key: '', label: '', defaultValue: '', required: false, secret: false }])}><Plus size={13} /> 新增变量</button></div>{variables.length > 0 && <div className="variable-row variable-row-head"><span>变量名<small>脚本里用 {'{{变量名}}'} 引用</small></span><span>显示名称<small>账号表单上的标签</small></span><span>默认值<small>账号没填时使用</small></span><span>必填</span><span>敏感</span><span /></div>}{variables.length === 0 ? <div className="settings-empty">没有额外变量</div> : variables.map((item, index) => <div className="variable-row" key={`${item.key}-${index}`}><input value={item.key || ''} readOnly={item.system} onChange={(event) => setVariables((old) => old.map((entry, entryIndex) => entryIndex === index ? { ...entry, key: event.target.value } : entry))} placeholder="变量名" /><input value={item.label || ''} readOnly={item.system} onChange={(event) => setVariables((old) => old.map((entry, entryIndex) => entryIndex === index ? { ...entry, label: event.target.value } : entry))} placeholder="显示名称" /><input value={item.defaultValue ?? ''} onChange={(event) => setVariables((old) => old.map((entry, entryIndex) => entryIndex === index ? { ...entry, defaultValue: event.target.value } : entry))} placeholder="默认值" /><label title="账号必须填写"><input type="checkbox" checked={Boolean(item.required)} disabled={item.key === 'apiKey'} onChange={(event) => setVariables((old) => old.map((entry, entryIndex) => entryIndex === index ? { ...entry, required: event.target.checked } : entry))} />必填</label><label title="使用 Windows DPAPI 加密"><input type="checkbox" checked={Boolean(item.secret)} disabled={item.system} onChange={(event) => setVariables((old) => old.map((entry, entryIndex) => entryIndex === index ? { ...entry, secret: event.target.checked } : entry))} />敏感</label><span className="variable-row-tail">{item.system && <span className="variable-system-badge" title="厂商内置变量，用法和自定义变量一样，也可以删除">内置</span>}<button type="button" className="row-icon-button danger" onClick={() => setVariables((old) => old.filter((_entry, entryIndex) => entryIndex !== index))} title="删除变量" aria-label="删除变量"><Trash2 size={13} /></button></span></div>)}</div><label className="field"><span>适配脚本</span><textarea className="script-editor" required value={script} onChange={(event) => setScript(event.target.value)} placeholder="({ request: { url: '{{endpoint}}?region={{region}}', method: 'GET' }, extractor(response, variables) { return { key: 'weekly', remaining: 50, total: 100, unit: '%' }; } })" /></label></> : <>

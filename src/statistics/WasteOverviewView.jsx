@@ -1,11 +1,13 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, ChevronDown, Info, RefreshCw, Trash2 } from 'lucide-react';
-import { accountWasteWindows, buildWasteReport, createWasteRange, formatWasteAmount, formatWasteDate, formatWastePercent, loadWasteArchives, WASTE_RANGES } from '../waste-statistics';
+import { accountWasteWindows, AGY_POOL_7D_RE, buildWasteReport, createWasteRange, formatWasteAmount, formatWasteDate, formatWastePercent, loadWasteArchives, wasteWindowLabel, WASTE_RANGES } from '../waste-statistics';
 import { ResizeHandle, useResizableHeight } from '../resize-handle';
 
 const cycleDates = (cycle) => `${formatWasteDate(cycle.from, true)} → ${formatWasteDate(cycle.end, true)}`;
 const exclusionReason = (cycle) => cycle.kind !== 'natural' ? '提前结束，未计入' : cycle.remaining == null ? '额度数据缺失，未计入' : '记录不可靠，未计入';
 const cycleValue = (cycle) => `${!cycle.counted && cycle.remaining != null ? '≤ ' : ''}${formatWastePercent(cycle.remaining)}`;
+// 池窗口的周期标注来源池（每个池的 7 天额度各记 1 份，与普通周额度区分开）
+const cycleWindowNote = (cycle) => AGY_POOL_7D_RE.test(cycle.window) ? ` · ${wasteWindowLabel(cycle.window)}` : '';
 // 周期中途被厂商提前回满：浪费取回补那一刻的剩余，回补后的附赠额度到期剩多少只作附注
 const refillNote = (cycle) => cycle.refill ? `${formatWasteDate(cycle.refill.at)} 提前回满，到期剩 ${formatWastePercent(cycle.refill.remaining)}（不计入）` : '';
 
@@ -146,7 +148,7 @@ export default function WasteOverviewView({ accounts, providers, Logo, api = win
                 return <Fragment key={entry.accountId}><tr>
                   <td><button type="button" className="global-waste-account-toggle" aria-expanded={expandedId === entry.accountId} aria-label={`${account?.name || entry.accountId}，查看周期明细`} onClick={() => setExpandedId(expandedId === entry.accountId ? null : entry.accountId)}>{Logo && <Logo provider={providerFor(account)} size="sm" interactive={false} />}<strong title={account?.name}>{account?.name || entry.accountId}</strong></button></td>
                   <td>{formatWasteAmount(entry.total)} <small>份</small></td><td>{formatWastePercent(entry.share)}</td><td><button type="button" className="global-waste-expand" aria-expanded={expandedId === entry.accountId} aria-label={`${expandedId === entry.accountId ? '收起' : '展开'} ${account?.name || entry.accountId} 的周期`} onClick={() => setExpandedId(expandedId === entry.accountId ? null : entry.accountId)}><ChevronDown size={13} /></button></td>
-                </tr>{expandedId === entry.accountId && <tr><td colSpan={4} className="global-waste-cycle-cell"><div className="global-waste-cycles"><small>{entry.count} 个有效周期 · 按实际周期结束日期归入本范围</small>{entry.cycles.map((cycle) => <div key={`${cycle.kind}:${cycle.end}`} className={!cycle.counted ? 'excluded' : ''}><span title={[cycleDates(cycle), refillNote(cycle)].filter(Boolean).join('\n')}>{cycleDates(cycle)}<small>{cycle.counted ? '自然结束' : exclusionReason(cycle)}{cycle.refill ? ` · ${refillNote(cycle)}` : ''}</small></span><b>{cycleValue(cycle)}</b></div>)}</div></td></tr>}</Fragment>;
+                </tr>{expandedId === entry.accountId && <tr><td colSpan={4} className="global-waste-cycle-cell"><div className="global-waste-cycles"><small>{entry.count} 个有效周期 · 按实际周期结束日期归入本范围</small>{entry.cycles.map((cycle) => <div key={`${cycle.kind}:${cycle.end}`} className={!cycle.counted ? 'excluded' : ''}><span title={[cycleDates(cycle), refillNote(cycle)].filter(Boolean).join('\n')}>{cycleDates(cycle)}<small>{cycle.counted ? '自然结束' : exclusionReason(cycle)}{cycleWindowNote(cycle)}{cycle.refill ? ` · ${refillNote(cycle)}` : ''}</small></span><b>{cycleValue(cycle)}</b></div>)}</div></td></tr>}</Fragment>;
               })}
               {!detail.accounts.length && <tr><td colSpan={4} className="global-waste-empty">{detail.count ? '这些已结束周期没有浪费。' : '暂无可靠记录，不能确认此范围的浪费。'}</td></tr>}
             </tbody></table>
@@ -154,7 +156,7 @@ export default function WasteOverviewView({ accounts, providers, Logo, api = win
         </section>
 
         <div className="global-waste-footnote">
-          <Info size={11} /><span>仅可靠、自然结束的周期计入统计</span>
+          <Info size={11} /><span>仅可靠、自然结束的周期计入统计；周额度含 Antigravity 等渠道的 7 天池（每个池各记 1 份）</span>
           {detail.excluded.length > 0 && <details className="global-waste-excluded">
             <summary>{detail.excluded.length} 条记录未计入统计</summary>
             <div>{detail.excluded.map((cycle) => <div key={`${cycle.accountId}:${cycle.kind}:${cycle.end}`}>
